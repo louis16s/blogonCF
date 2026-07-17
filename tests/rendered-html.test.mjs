@@ -20,6 +20,7 @@ function createRateLimitDb() {
       return {
         bind(...params) { values = params; return this; },
         async first() {
+          if (sql.includes("SELECT attempt_count")) return rows.get(values[0]) || null;
           const current = rows.get(values[0]);
           const next = !current || current.window_start <= values[2]
             ? { attempt_count: 1, window_start: values[1] }
@@ -197,4 +198,33 @@ test("password endpoint rate-limits repeated failures before calling Notion agai
     assert.equal(reset.status, 401, "the rolling window resets only after ten minutes from its first failure");
     assert.equal(calls, 6);
   } finally { globalThis.fetch = originalFetch; Date.now = originalNow; }
+});
+
+test("concurrent correct passwords are never counted as failures", async () => {
+  const workerA = await loadWorker();
+  const workerB = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => String(input).includes("/children")
+    ? Response.json({ results: [], has_more: false })
+    : Response.json({ results: [{ id: "concurrent-page", properties: {
+      title: { title: [{ plain_text: "并发文章" }] }, slug: { rich_text: [{ plain_text: "concurrent" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "correct" }] },
+    } }] });
+  try {
+    const env = { ASSETS: assets, DB: createRateLimitDb(), NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
+    const responses = await Promise.all(Array.from({ length: 6 }, (_, index) => (index % 2 ? workerA : workerB).fetch(new Request("http://localhost/api/content/post/concurrent", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.77" }, body: JSON.stringify({ password: "correct" }) }), env, context)));
+    assert.deepEqual(responses.map((response) => response.status), [200, 200, 200, 200, 200, 200]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Notion failures do not consume password failure quota", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ message: "upstream unavailable" }, { status: 503 });
+  try {
+    const env = { ASSETS: assets, DB: createRateLimitDb(), NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
+    for (let index = 0; index < 6; index++) {
+      const response = await worker.fetch(new Request("http://localhost/api/content/post/upstream", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.88" }, body: JSON.stringify({ password: "wrong" }) }), env, context);
+      assert.equal(response.status, 502);
+    }
+  } finally { globalThis.fetch = originalFetch; }
 });

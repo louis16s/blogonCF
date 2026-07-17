@@ -2,7 +2,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Notion block/property unions are normalized at this gateway boundary. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import { clearPasswordAttempts, consumePasswordAttempt } from "../db/rate-limit";
+import { clearPasswordAttempts, getPasswordAttemptStatus, recordPasswordFailure } from "../db/rate-limit";
 
 interface Env {
   ASSETS: Fetcher;
@@ -59,7 +59,7 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
   const attemptKey = `${request.headers.get("cf-connecting-ip") || "unknown"}:${slug.toLocaleLowerCase()}`;
   if (request.method === "POST") {
     if (!env.DB) return error(503, "Password protection is temporarily unavailable");
-    const attempt = await consumePasswordAttempt(env.DB, attemptKey);
+    const attempt = await getPasswordAttemptStatus(env.DB, attemptKey);
     if (!attempt.allowed) return Response.json({ error: "尝试次数过多，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(attempt.retryAfter) } });
   }
   try {
@@ -75,6 +75,10 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
         supplied = typeof body.password === "string" ? body.password : "";
       }
       if (supplied !== expectedPassword) {
+        if (supplied && env.DB) {
+          const failure = await recordPasswordFailure(env.DB, attemptKey);
+          if (!failure.allowed) return Response.json({ error: "尝试次数过多，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(failure.retryAfter) } });
+        }
         return Response.json({ post: { ...post, locked: true }, locked: true, error: supplied ? "密码不正确" : undefined }, { status: supplied ? 401 : 200, headers: { ...jsonHeaders, "cache-control": "no-store" } });
       }
       if (env.DB) await clearPasswordAttempts(env.DB, attemptKey);

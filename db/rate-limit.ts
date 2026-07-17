@@ -3,7 +3,15 @@ const PASSWORD_WINDOW_MS = 10 * 60 * 1000;
 
 export type RateLimitResult = { allowed: boolean; retryAfter: number };
 
-export async function consumePasswordAttempt(db: D1Database, key: string, now = Date.now()): Promise<RateLimitResult> {
+export async function getPasswordAttemptStatus(db: D1Database, key: string, now = Date.now()): Promise<RateLimitResult> {
+  const row = await db.prepare("SELECT attempt_count, window_start FROM password_attempts WHERE key = ?1")
+    .bind(key)
+    .first<{ attempt_count: number; window_start: number }>();
+  if (!row || row.window_start <= now - PASSWORD_WINDOW_MS) return { allowed: true, retryAfter: 0 };
+  return { allowed: row.attempt_count < PASSWORD_LIMIT, retryAfter: Math.max(1, Math.ceil((row.window_start + PASSWORD_WINDOW_MS - now) / 1000)) };
+}
+
+export async function recordPasswordFailure(db: D1Database, key: string, now = Date.now()): Promise<RateLimitResult> {
   const cutoff = now - PASSWORD_WINDOW_MS;
   const row = await db.prepare(`
     INSERT INTO password_attempts (key, window_start, attempt_count)
