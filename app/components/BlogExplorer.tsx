@@ -18,7 +18,7 @@ export function BlogExplorer() {
     const refresh = () => fetch("/api/content/posts", { signal: controller.signal, cache: "no-store" })
         .then((response) => response.ok ? response.json() : Promise.reject())
         .then((data) => { if (Array.isArray(data.posts)) { setPosts(data.posts); setLive(true); setSyncState("live"); } })
-        .catch(() => setSyncState("unavailable"));
+        .catch(() => { setPosts([]); setLive(false); setSyncState("unavailable"); });
     refresh();
     const timer = window.setInterval(refresh, 60_000);
     const onVisible = () => { if (document.visibilityState === "visible") refresh(); };

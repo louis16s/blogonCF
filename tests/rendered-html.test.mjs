@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -19,14 +20,16 @@ function createRateLimitDb() {
       return {
         bind(...params) { values = params; return this; },
         async first() {
-          const current = rows.get(values[0]) || { attempt_count: 0, window_start: values[1] };
-          const next = { ...current, attempt_count: current.attempt_count + 1 };
+          const current = rows.get(values[0]);
+          const next = !current || current.window_start <= values[2]
+            ? { attempt_count: 1, window_start: values[1] }
+            : { ...current, attempt_count: current.attempt_count + 1 };
           rows.set(values[0], next);
-          return { attempt_count: next.attempt_count };
+          return next;
         },
         async run() {
           if (sql.includes("WHERE key =")) rows.delete(values[0]);
-          if (sql.includes("window_start <")) for (const [key, row] of rows) if (row.window_start < values[0]) rows.delete(key);
+          if (sql.includes("window_start <=")) for (const [key, row] of rows) if (row.window_start <= values[0] && key !== values[1]) rows.delete(key);
           return { success: true };
         },
       };
@@ -45,6 +48,15 @@ test("server-renders a safe loading state without stale Notion content", async (
   assert.doesNotMatch(html, /2026槟城/);
   assert.match(html, /https:\/\/bblog\.530555\.xyz\/og\.png/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/);
+});
+
+test("client refresh failures clear previously verified list and article content", async () => {
+  const [blog, article] = await Promise.all([
+    readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(blog, /\.catch\(\(\) => \{ setPosts\(\[\]\); setLive\(false\); setSyncState\("unavailable"\); \}\)/);
+  assert.match(article, /passwordRef\.current = ""; setPost\(undefined\); setBlocks\(\[\]\); setLocked\(false\)/);
 });
 
 test("content endpoint follows Notion pagination cursors", async () => {
@@ -162,11 +174,14 @@ test("password endpoint rate-limits repeated failures before calling Notion agai
   const workerA = await loadWorker();
   const workerB = await loadWorker();
   const originalFetch = globalThis.fetch;
+  const originalNow = Date.now;
   let calls = 0;
   globalThis.fetch = async () => { calls++; return Response.json({ results: [{ id: "limited-page", properties: {
     title: { title: [{ plain_text: "限流文章" }] }, slug: { rich_text: [{ plain_text: "limited" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "correct" }] },
   } }] }); };
   try {
+    let now = 1_000_000;
+    Date.now = () => now;
     const env = { ASSETS: assets, DB: createRateLimitDb(), NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
     for (let index = 0; index < 5; index++) {
       const worker = index % 2 ? workerA : workerB;
@@ -177,5 +192,9 @@ test("password endpoint rate-limits repeated failures before calling Notion agai
     assert.equal(blocked.status, 429);
     assert.ok(Number(blocked.headers.get("retry-after")) > 0);
     assert.equal(calls, 5);
-  } finally { globalThis.fetch = originalFetch; }
+    now += 10 * 60 * 1000 + 1;
+    const reset = await workerA.fetch(new Request("http://localhost/api/content/post/limited", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.55" }, body: JSON.stringify({ password: "wrong" }) }), env, context);
+    assert.equal(reset.status, 401, "the rolling window resets only after ten minutes from its first failure");
+    assert.equal(calls, 6);
+  } finally { globalThis.fetch = originalFetch; Date.now = originalNow; }
 });

@@ -34,7 +34,7 @@ export function ArticleClient({ slug }: { slug: string }) {
         if (!response.ok) throw new Error(data.error || "文章读取失败");
         setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []);
       })
-      .catch((reason) => { if (reason.name !== "AbortError") setError(reason.message || "文章暂时无法读取"); })
+      .catch((reason) => { if (reason.name !== "AbortError") { passwordRef.current = ""; setPost(undefined); setBlocks([]); setLocked(false); setError(reason.message || "文章不存在、已撤回或暂时无法读取"); } })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     };
     refresh();
