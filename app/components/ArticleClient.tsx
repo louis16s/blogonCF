@@ -9,7 +9,7 @@ export function ArticleClient({ slug }: { slug: string }) {
   const [locked, setLocked] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const protectedRef = useRef(false);
+  const passwordRef = useRef("");
 
   const load = (password?: string) => {
     setLoading(true); setError("");
@@ -17,7 +17,7 @@ export function ArticleClient({ slug }: { slug: string }) {
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
-        protectedRef.current = Boolean(data.post?.locked);
+        if (password && !data.locked) passwordRef.current = password;
         setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []);
       })
       .catch((reason) => setError(reason.message || "文章暂时无法读取"))
@@ -26,7 +26,9 @@ export function ArticleClient({ slug }: { slug: string }) {
 
   useEffect(() => {
     const controller = new AbortController();
-    const refresh = () => fetch(`/api/content/post/${encodeURIComponent(slug)}`, { signal: controller.signal, cache: "no-store" })
+    const refresh = () => {
+      const password = passwordRef.current;
+      return fetch(`/api/content/post/${encodeURIComponent(slug)}`, password ? { method: "POST", signal: controller.signal, cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) } : { signal: controller.signal, cache: "no-store" })
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
@@ -34,9 +36,10 @@ export function ArticleClient({ slug }: { slug: string }) {
       })
       .catch((reason) => { if (reason.name !== "AbortError") setError(reason.message || "文章暂时无法读取"); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    };
     refresh();
-    const timer = window.setInterval(() => { if (!protectedRef.current) refresh(); }, 60_000);
-    const onVisible = () => { if (document.visibilityState === "visible" && !protectedRef.current) refresh(); };
+    const timer = window.setInterval(refresh, 60_000);
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [slug]);

@@ -11,6 +11,29 @@ async function loadWorker() {
 const assets = { fetch: async () => new Response("Not found", { status: 404 }) };
 const context = { waitUntil() {}, passThroughOnException() {} };
 
+function createRateLimitDb() {
+  const rows = new Map();
+  return {
+    prepare(sql) {
+      let values = [];
+      return {
+        bind(...params) { values = params; return this; },
+        async first() {
+          const current = rows.get(values[0]) || { attempt_count: 0, window_start: values[1] };
+          const next = { ...current, attempt_count: current.attempt_count + 1 };
+          rows.set(values[0], next);
+          return { attempt_count: next.attempt_count };
+        },
+        async run() {
+          if (sql.includes("WHERE key =")) rows.delete(values[0]);
+          if (sql.includes("window_start <")) for (const [key, row] of rows) if (row.window_start < values[0]) rows.delete(key);
+          return { success: true };
+        },
+      };
+    },
+  };
+}
+
 test("server-renders a safe loading state without stale Notion content", async () => {
   const worker = await loadWorker();
   const response = await worker.fetch(new Request("http://localhost/", { headers: { accept: "text/html" } }), { ASSETS: assets }, context);
@@ -41,6 +64,26 @@ test("content endpoint follows Notion pagination cursors", async () => {
     assert.deepEqual(payload.posts.map((post) => post.slug), ["a", "b"]);
     assert.equal(bodies[0].start_cursor, undefined);
     assert.equal(bodies[1].start_cursor, "cursor-2");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("sitemap is generated from current Published posts and safely degrades", async () => {
+  const worker = await loadWorker();
+  const safe = await worker.fetch(new Request("http://localhost/sitemap.xml"), { ASSETS: assets }, context);
+  const safeXml = await safe.text();
+  assert.match(safeXml, /https:\/\/bblog\.530555\.xyz\/<\/loc>/);
+  assert.doesNotMatch(safeXml, /\/blog\//);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ results: [{ id: "sitemap-page", properties: {
+    title: { title: [{ plain_text: "站点文章" }] }, slug: { rich_text: [{ plain_text: "a & b" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: { start: "2026-03-04" } }, password: { rich_text: [] },
+  } }], has_more: false });
+  try {
+    const response = await worker.fetch(new Request("http://localhost/sitemap.xml"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    const xml = await response.text();
+    assert.match(xml, /\/blog\/a%20%26%20b<\/loc>/);
+    assert.match(xml, /<lastmod>2026-03-04<\/lastmod>/);
+    assert.equal(response.headers.get("cache-control"), "no-store");
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -86,7 +129,7 @@ test("password-protected articles never return blocks before successful unlock",
     } }] });
   };
   try {
-    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
+    const env = { ASSETS: assets, DB: createRateLimitDb(), NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
     const locked = await worker.fetch(new Request("http://localhost/api/content/post/private"), env, context);
     assert.equal(locked.status, 200);
     assert.deepEqual(await locked.json(), { post: { id: "private-page", title: "私密文章", slug: "private", summary: "", category: "心情随笔", tags: [], date: "2026-01-01", icon: "", locked: true }, locked: true });
@@ -107,7 +150,7 @@ test("correct password unlocks normalized content", async () => {
       title: { title: [{ plain_text: "可解锁文章" }] }, slug: { rich_text: [{ plain_text: "unlock" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "correct" }] },
     } }] });
   try {
-    const response = await worker.fetch(new Request("http://localhost/api/content/post/unlock", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.1" }, body: JSON.stringify({ password: "correct" }) }), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    const response = await worker.fetch(new Request("http://localhost/api/content/post/unlock", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.1" }, body: JSON.stringify({ password: "correct" }) }), { ASSETS: assets, DB: createRateLimitDb(), NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     assert.equal(response.status, 200);
     const payload = await response.json();
     assert.equal(payload.locked, false);
@@ -116,19 +159,21 @@ test("correct password unlocks normalized content", async () => {
 });
 
 test("password endpoint rate-limits repeated failures before calling Notion again", async () => {
-  const worker = await loadWorker();
+  const workerA = await loadWorker();
+  const workerB = await loadWorker();
   const originalFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = async () => { calls++; return Response.json({ results: [{ id: "limited-page", properties: {
     title: { title: [{ plain_text: "限流文章" }] }, slug: { rich_text: [{ plain_text: "limited" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "correct" }] },
   } }] }); };
   try {
-    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
+    const env = { ASSETS: assets, DB: createRateLimitDb(), NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
     for (let index = 0; index < 5; index++) {
+      const worker = index % 2 ? workerA : workerB;
       const response = await worker.fetch(new Request("http://localhost/api/content/post/limited", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.55" }, body: JSON.stringify({ password: "wrong" }) }), env, context);
       assert.equal(response.status, 401);
     }
-    const blocked = await worker.fetch(new Request("http://localhost/api/content/post/limited", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.55" }, body: JSON.stringify({ password: "wrong" }) }), env, context);
+    const blocked = await workerB.fetch(new Request("http://localhost/api/content/post/limited", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.55" }, body: JSON.stringify({ password: "wrong" }) }), env, context);
     assert.equal(blocked.status, 429);
     assert.ok(Number(blocked.headers.get("retry-after")) > 0);
     assert.equal(calls, 5);

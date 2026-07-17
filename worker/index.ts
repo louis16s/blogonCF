@@ -2,9 +2,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Notion block/property unions are normalized at this gateway boundary. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { clearPasswordAttempts, consumePasswordAttempt } from "../db/rate-limit";
 
 interface Env {
   ASSETS: Fetcher;
+  DB?: D1Database;
   NOTION_TOKEN?: string;
   NOTION_DATA_SOURCE_ID?: string;
   IMAGES: {
@@ -16,13 +18,11 @@ interface ExecutionContext { waitUntil(promise: Promise<unknown>): void; passThr
 const DEFAULT_DATA_SOURCE_ID = "fffad771-48f4-81f5-be17-000b319f85ad";
 const NOTION_VERSION = "2026-03-11";
 const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
-const passwordFailures = new Map<string, { count: number; resetAt: number }>();
-const PASSWORD_LIMIT = 5;
-const PASSWORD_WINDOW_MS = 10 * 60 * 1000;
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === "/sitemap.xml" && request.method === "GET") return notionSitemap(env);
     if (url.pathname === "/api/content/posts" && request.method === "GET") return notionPosts(env);
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
       const slug = decodeURIComponent(url.pathname.slice("/api/content/post/".length));
@@ -58,10 +58,9 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
   if (!slug || slug.length > 180) return error(400, "Invalid article slug");
   const attemptKey = `${request.headers.get("cf-connecting-ip") || "unknown"}:${slug.toLocaleLowerCase()}`;
   if (request.method === "POST") {
-    const attempt = passwordFailures.get(attemptKey);
-    if (attempt && attempt.resetAt > Date.now() && attempt.count >= PASSWORD_LIMIT) {
-      return Response.json({ error: "尝试次数过多，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(Math.ceil((attempt.resetAt - Date.now()) / 1000)) } });
-    }
+    if (!env.DB) return error(503, "Password protection is temporarily unavailable");
+    const attempt = await consumePasswordAttempt(env.DB, attemptKey);
+    if (!attempt.allowed) return Response.json({ error: "尝试次数过多，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(attempt.retryAfter) } });
   }
   try {
     const pages = await queryPosts(env, slug, 1);
@@ -76,15 +75,25 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
         supplied = typeof body.password === "string" ? body.password : "";
       }
       if (supplied !== expectedPassword) {
-        if (supplied) recordPasswordFailure(attemptKey);
         return Response.json({ post: { ...post, locked: true }, locked: true, error: supplied ? "密码不正确" : undefined }, { status: supplied ? 401 : 200, headers: { ...jsonHeaders, "cache-control": "no-store" } });
       }
-      passwordFailures.delete(attemptKey);
+      if (env.DB) await clearPasswordAttempts(env.DB, attemptKey);
     }
     const budget = { remaining: 600 };
     const blocks = await getBlockChildren(env, page.id, budget, 0);
     return Response.json({ post: { ...post, locked: Boolean(expectedPassword) }, locked: false, blocks }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
+}
+
+async function notionSitemap(env: Env): Promise<Response> {
+  const base = "https://bblog.530555.xyz";
+  let posts: ReturnType<typeof toPost>[] = [];
+  if (env.NOTION_TOKEN) {
+    try { posts = (await queryPosts(env, undefined, 100)).map(toPost).filter((post) => post.slug); }
+    catch (reason) { console.error(reason instanceof Error ? reason.message : "Sitemap Notion request failed"); }
+  }
+  const urls = [`<url><loc>${base}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`, ...posts.map((post) => `<url><loc>${base}/blog/${encodeURIComponent(post.slug)}</loc>${post.date ? `<lastmod>${escapeXml(post.date)}</lastmod>` : ""}<changefreq>weekly</changefreq><priority>0.7</priority></url>`)].join("");
+  return new Response(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>`, { headers: { "content-type": "application/xml; charset=utf-8", "cache-control": env.NOTION_TOKEN ? "no-store" : "public, max-age=60" } });
 }
 
 async function queryPosts(env: Env, slug?: string, pageSize = 100): Promise<any[]> {
@@ -183,12 +192,7 @@ function normalizeBlock(raw: any): any | null {
   }
 }
 
-function recordPasswordFailure(key: string) {
-  const now = Date.now();
-  const current = passwordFailures.get(key);
-  if (!current || current.resetAt <= now) passwordFailures.set(key, { count: 1, resetAt: now + PASSWORD_WINDOW_MS });
-  else passwordFailures.set(key, { ...current, count: current.count + 1 });
-}
+function escapeXml(value: string) { return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[char] || char)); }
 
 function error(status: number, message: string) { return Response.json({ error: message }, { status, headers: { ...jsonHeaders, "cache-control": "no-store" } }); }
 function notionError(reason: unknown) {
