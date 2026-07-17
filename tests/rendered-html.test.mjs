@@ -11,16 +11,37 @@ async function loadWorker() {
 const assets = { fetch: async () => new Response("Not found", { status: 404 }) };
 const context = { waitUntil() {}, passThroughOnException() {} };
 
-test("server-renders the finished blog with fallback content and production metadata", async () => {
+test("server-renders a safe loading state without stale Notion content", async () => {
   const worker = await loadWorker();
   const response = await worker.fetch(new Request("http://localhost/", { headers: { accept: "text/html" } }), { ASSETS: assets }, context);
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /<title>louis16s&#x27; blog<\/title>/);
   assert.match(html, /把经过的地方/);
-  assert.match(html, /2026槟城/);
+  assert.match(html, /正在从 Notion 读取文章/);
+  assert.doesNotMatch(html, /2026槟城/);
   assert.match(html, /https:\/\/bblog\.530555\.xyz\/og\.png/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/);
+});
+
+test("content endpoint follows Notion pagination cursors", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const bodies = [];
+  const page = (id, slug) => ({ id, created_time: "2026-01-01T00:00:00Z", properties: {
+    title: { title: [{ plain_text: slug }] }, slug: { rich_text: [{ plain_text: slug }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
+  } });
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(init.body); bodies.push(body);
+    return bodies.length === 1 ? Response.json({ results: [page("a", "a")], has_more: true, next_cursor: "cursor-2" }) : Response.json({ results: [page("b", "b")], has_more: false });
+  };
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/posts"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    const payload = await response.json();
+    assert.deepEqual(payload.posts.map((post) => post.slug), ["a", "b"]);
+    assert.equal(bodies[0].start_cursor, undefined);
+    assert.equal(bodies[1].start_cursor, "cursor-2");
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("health endpoint reports missing Notion configuration without leaking secrets", async () => {
@@ -74,5 +95,42 @@ test("password-protected articles never return blocks before successful unlock",
     const wrong = await worker.fetch(new Request("http://localhost/api/content/post/private", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "wrong" }) }), env, context);
     assert.equal(wrong.status, 401);
     assert.equal((await wrong.json()).error, "密码不正确");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("correct password unlocks normalized content", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => String(input).includes("/children")
+    ? Response.json({ results: [{ id: "block-1", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: "正文内容", annotations: {} }] } }], has_more: false })
+    : Response.json({ results: [{ id: "unlock-page", properties: {
+      title: { title: [{ plain_text: "可解锁文章" }] }, slug: { rich_text: [{ plain_text: "unlock" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "correct" }] },
+    } }] });
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/post/unlock", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.1" }, body: JSON.stringify({ password: "correct" }) }), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.locked, false);
+    assert.equal(payload.blocks[0].richText[0].text, "正文内容");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("password endpoint rate-limits repeated failures before calling Notion again", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return Response.json({ results: [{ id: "limited-page", properties: {
+    title: { title: [{ plain_text: "限流文章" }] }, slug: { rich_text: [{ plain_text: "limited" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "correct" }] },
+  } }] }); };
+  try {
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
+    for (let index = 0; index < 5; index++) {
+      const response = await worker.fetch(new Request("http://localhost/api/content/post/limited", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.55" }, body: JSON.stringify({ password: "wrong" }) }), env, context);
+      assert.equal(response.status, 401);
+    }
+    const blocked = await worker.fetch(new Request("http://localhost/api/content/post/limited", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.55" }, body: JSON.stringify({ password: "wrong" }) }), env, context);
+    assert.equal(blocked.status, 429);
+    assert.ok(Number(blocked.headers.get("retry-after")) > 0);
+    assert.equal(calls, 5);
   } finally { globalThis.fetch = originalFetch; }
 });

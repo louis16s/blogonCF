@@ -1,14 +1,15 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import type { ContentBlock, Post } from "../data/types";
 
-export function ArticleClient({ slug, fallback }: { slug: string; fallback?: Post }) {
-  const [post, setPost] = useState<Post | undefined>(fallback);
+export function ArticleClient({ slug }: { slug: string }) {
+  const [post, setPost] = useState<Post | undefined>();
   const [blocks, setBlocks] = useState<ContentBlock[]>([]);
   const [locked, setLocked] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const protectedRef = useRef(false);
 
   const load = (password?: string) => {
     setLoading(true); setError("");
@@ -16,6 +17,7 @@ export function ArticleClient({ slug, fallback }: { slug: string; fallback?: Pos
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
+        protectedRef.current = Boolean(data.post?.locked);
         setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []);
       })
       .catch((reason) => setError(reason.message || "文章暂时无法读取"))
@@ -24,7 +26,7 @@ export function ArticleClient({ slug, fallback }: { slug: string; fallback?: Pos
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`/api/content/post/${encodeURIComponent(slug)}`, { signal: controller.signal, cache: "no-store" })
+    const refresh = () => fetch(`/api/content/post/${encodeURIComponent(slug)}`, { signal: controller.signal, cache: "no-store" })
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
@@ -32,7 +34,11 @@ export function ArticleClient({ slug, fallback }: { slug: string; fallback?: Pos
       })
       .catch((reason) => { if (reason.name !== "AbortError") setError(reason.message || "文章暂时无法读取"); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
+    refresh();
+    const timer = window.setInterval(() => { if (!protectedRef.current) refresh(); }, 60_000);
+    const onVisible = () => { if (document.visibilityState === "visible" && !protectedRef.current) refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [slug]);
 
   if (loading && !post) return <p className="article-state">正在从 Notion 读取文章…</p>;
@@ -83,8 +89,13 @@ function Block({ block }: { block: ContentBlock }) {
     // eslint-disable-next-line @next/next/no-img-element
     case "image": return block.url ? <figure><img src={block.url} alt={block.caption || "文章图片"} loading="lazy" /><figcaption>{block.caption}</figcaption></figure> : null;
     case "bookmark": case "embed": return block.url ? <a className="bookmark" href={block.url} target="_blank" rel="noreferrer">{block.caption || block.url} ↗</a> : null;
+    case "file": case "pdf": case "audio": return block.url ? <a className="bookmark" href={block.url} target="_blank" rel="noreferrer">{block.caption || (block.type === "pdf" ? "查看 PDF" : "下载附件")} ↗</a> : null;
+    case "equation": return <div className="equation" aria-label="数学公式">{block.caption}</div>;
+    case "table": return <div className="notion-table" role="table">{children}</div>;
+    case "table_row": return <div className="notion-table-row" role="row">{block.children?.map((cell, index) => <div role="cell" key={`${block.id}-${index}`}><Rich value={cell.richText} /></div>)}</div>;
     case "column_list": return <div className="columns">{children}</div>;
     case "column": return <div className="column">{children}</div>;
-    default: return children ? <div>{children}</div> : null;
+    case "unsupported": return <aside className="unsupported">此内容块暂不支持显示。</aside>;
+    default: return children ? <div>{children}</div> : <aside className="unsupported">未识别的内容块：{block.type}</aside>;
   }
 }

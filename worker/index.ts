@@ -16,6 +16,9 @@ interface ExecutionContext { waitUntil(promise: Promise<unknown>): void; passThr
 const DEFAULT_DATA_SOURCE_ID = "fffad771-48f4-81f5-be17-000b319f85ad";
 const NOTION_VERSION = "2026-03-11";
 const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
+const passwordFailures = new Map<string, { count: number; resetAt: number }>();
+const PASSWORD_LIMIT = 5;
+const PASSWORD_WINDOW_MS = 10 * 60 * 1000;
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -53,6 +56,13 @@ async function notionPosts(env: Env): Promise<Response> {
 async function notionPost(env: Env, slug: string, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   if (!slug || slug.length > 180) return error(400, "Invalid article slug");
+  const attemptKey = `${request.headers.get("cf-connecting-ip") || "unknown"}:${slug.toLocaleLowerCase()}`;
+  if (request.method === "POST") {
+    const attempt = passwordFailures.get(attemptKey);
+    if (attempt && attempt.resetAt > Date.now() && attempt.count >= PASSWORD_LIMIT) {
+      return Response.json({ error: "尝试次数过多，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(Math.ceil((attempt.resetAt - Date.now()) / 1000)) } });
+    }
+  }
   try {
     const pages = await queryPosts(env, slug, 1);
     const page = pages[0];
@@ -66,8 +76,10 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
         supplied = typeof body.password === "string" ? body.password : "";
       }
       if (supplied !== expectedPassword) {
+        if (supplied) recordPasswordFailure(attemptKey);
         return Response.json({ post: { ...post, locked: true }, locked: true, error: supplied ? "密码不正确" : undefined }, { status: supplied ? 401 : 200, headers: { ...jsonHeaders, "cache-control": "no-store" } });
       }
+      passwordFailures.delete(attemptKey);
     }
     const budget = { remaining: 600 };
     const blocks = await getBlockChildren(env, page.id, budget, 0);
@@ -81,11 +93,17 @@ async function queryPosts(env: Env, slug?: string, pageSize = 100): Promise<any[
     { property: "status", select: { equals: "Published" } },
   ];
   if (slug) filters.push({ property: "slug", rich_text: { equals: slug } });
-  const payload = await notionFetch(env, `/data_sources/${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID}/query`, {
-    method: "POST",
-    body: JSON.stringify({ filter: { and: filters }, sorts: [{ property: "date", direction: "descending" }], page_size: pageSize }),
-  });
-  return Array.isArray(payload.results) ? payload.results : [];
+  const results: any[] = [];
+  let cursor: string | undefined;
+  do {
+    const payload = await notionFetch(env, `/data_sources/${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID}/query`, {
+      method: "POST",
+      body: JSON.stringify({ filter: { and: filters }, sorts: [{ property: "date", direction: "descending" }], page_size: pageSize, ...(cursor ? { start_cursor: cursor } : {}) }),
+    });
+    if (Array.isArray(payload.results)) results.push(...payload.results);
+    cursor = !slug && payload.has_more && typeof payload.next_cursor === "string" ? payload.next_cursor : undefined;
+  } while (cursor);
+  return results;
 }
 
 async function getBlockChildren(env: Env, id: string, budget: { remaining: number }, depth: number): Promise<any[]> {
@@ -145,7 +163,7 @@ function normalizeBlock(raw: any): any | null {
   const base: any = { id: raw.id, type };
   if (Array.isArray(value.rich_text)) base.richText = normalizeRichText(value.rich_text);
   switch (type) {
-    case "paragraph": case "heading_1": case "heading_2": case "heading_3": case "bulleted_list_item": case "numbered_list_item": case "quote": case "toggle": case "column": case "column_list": case "synced_block": return base;
+    case "paragraph": case "heading_1": case "heading_2": case "heading_3": case "bulleted_list_item": case "numbered_list_item": case "quote": case "toggle": case "column": case "column_list": case "synced_block": case "table": return base;
     case "to_do": return { ...base, checked: Boolean(value.checked) };
     case "callout": return { ...base, icon: value.icon?.emoji || "i" };
     case "code": return { ...base, language: value.language || "plain text" };
@@ -154,12 +172,22 @@ function normalizeBlock(raw: any): any | null {
       const url = value.type === "external" ? value.external?.url : value.file?.url;
       return { ...base, url, caption: richText(value.caption) };
     }
-    case "bookmark": case "embed": case "video": case "file": case "pdf": {
+    case "bookmark": case "embed": case "video": case "file": case "pdf": case "audio": {
       const url = value.url || value.external?.url || value.file?.url;
       return { ...base, type: type === "video" ? "embed" : type, url, caption: richText(value.caption) };
     }
-    default: return raw.has_children ? base : null;
+    case "equation": return { ...base, caption: value.expression || "" };
+    case "table_row": return { ...base, children: (value.cells || []).map((cell: any[], index: number) => ({ id: `${raw.id}-cell-${index}`, type: "table_cell", richText: normalizeRichText(cell) })) };
+    case "unsupported": return { ...base, type: "unsupported" };
+    default: return raw.has_children ? base : { ...base, type: "unsupported" };
   }
+}
+
+function recordPasswordFailure(key: string) {
+  const now = Date.now();
+  const current = passwordFailures.get(key);
+  if (!current || current.resetAt <= now) passwordFailures.set(key, { count: 1, resetAt: now + PASSWORD_WINDOW_MS });
+  else passwordFailures.set(key, { ...current, count: current.count + 1 });
 }
 
 function error(status: number, message: string) { return Response.json({ error: message }, { status, headers: { ...jsonHeaders, "cache-control": "no-store" } }); }

@@ -6,8 +6,9 @@ import type { Post } from "../data/types";
 
 const ALL = "全部";
 
-export function BlogExplorer({ initialPosts }: { initialPosts: Post[] }) {
-  const [posts, setPosts] = useState(initialPosts);
+export function BlogExplorer() {
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [syncState, setSyncState] = useState<"loading" | "live" | "unavailable">("loading");
   const [category, setCategory] = useState(ALL);
   const [query, setQuery] = useState("");
   const [live, setLive] = useState(false);
@@ -16,8 +17,8 @@ export function BlogExplorer({ initialPosts }: { initialPosts: Post[] }) {
     const controller = new AbortController();
     const refresh = () => fetch("/api/content/posts", { signal: controller.signal, cache: "no-store" })
         .then((response) => response.ok ? response.json() : Promise.reject())
-        .then((data) => { if (Array.isArray(data.posts)) { setPosts(data.posts); setLive(true); } })
-        .catch(() => undefined);
+        .then((data) => { if (Array.isArray(data.posts)) { setPosts(data.posts); setLive(true); setSyncState("live"); } })
+        .catch(() => setSyncState("unavailable"));
     refresh();
     const timer = window.setInterval(refresh, 60_000);
     const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
@@ -44,7 +45,7 @@ export function BlogExplorer({ initialPosts }: { initialPosts: Post[] }) {
         <p className="eyebrow">FIELD NOTES · 旅行 / 摄影 / 开发</p>
         <h1 id="hero-title">把经过的地方，<br /><em>留在这里。</em></h1>
         <p className="hero-copy">不定期记录相机、旅途、软硬件与一些很难归类的生活片段。</p>
-        <div className="hero-meta"><span>{posts.length} 篇公开文章</span><span className={live ? "source live" : "source"}>{live ? "Notion 实时同步" : "离线快照"}</span></div>
+        <div className="hero-meta"><span>{syncState === "live" ? `${posts.length} 篇公开文章` : "正在连接内容源"}</span><span className={live ? "source live" : "source"}>{syncState === "live" ? "Notion 实时同步" : syncState === "loading" ? "正在同步" : "Notion 暂时不可用"}</span></div>
       </section>
 
       <section className="writing" id="writing" aria-labelledby="writing-title">
@@ -65,7 +66,7 @@ export function BlogExplorer({ initialPosts }: { initialPosts: Post[] }) {
               <Link className="arrow" href={`/blog/${encodeURIComponent(post.slug)}`} aria-label={`阅读 ${post.title}`}>↗</Link>
             </article>
           ))}
-          {!visible.length && <p className="empty">没有找到匹配的文章。</p>}
+          {!visible.length && <p className="empty">{syncState === "loading" ? "正在从 Notion 读取文章…" : syncState === "unavailable" ? "内容源暂时不可用，请稍后刷新。" : "没有找到匹配的文章。"}</p>}
         </div>
       </section>
 
