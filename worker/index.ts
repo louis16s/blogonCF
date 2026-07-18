@@ -255,7 +255,7 @@ function normalizeBlock(raw: any): any | null {
     case "divider": return base;
     case "image": {
       const url = value.type === "external" ? value.external?.url : value.file?.url;
-      return { ...base, url: value.type === "file" && needsBrowserImageConversion(url) ? `/_notion/image?url=${encodeURIComponent(url)}` : url, caption: richText(value.caption) };
+      return { ...base, url: needsBrowserImageConversion(url) ? `/_notion/image?url=${encodeURIComponent(url)}` : url, caption: richText(value.caption) };
     }
     case "bookmark": case "embed": case "video": case "file": case "pdf": case "audio": case "link_preview": {
       const url = value.url || value.external?.url || value.file?.url;
@@ -272,7 +272,10 @@ function normalizeBlock(raw: any): any | null {
 
 function needsBrowserImageConversion(url: unknown): url is string {
   if (typeof url !== "string") return false;
-  try { return /\.(?:heic|heif)$/i.test(decodeURIComponent(new URL(url).pathname)); }
+  try {
+    const source = new URL(url);
+    return NOTION_IMAGE_HOSTS.has(source.hostname) && /\.(?:heic|heif)$/i.test(decodeURIComponent(source.pathname));
+  }
   catch { return false; }
 }
 

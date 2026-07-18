@@ -207,7 +207,10 @@ test("Notion HEIC files use the same-origin conversion endpoint", async () => {
   const originalFetch = globalThis.fetch;
   const source = "https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/photo.HEIC?signature=test";
   globalThis.fetch = async (input) => String(input).includes("/children")
-    ? Response.json({ results: [{ id: "heic", type: "image", has_children: false, image: { type: "file", file: { url: source }, caption: [] } }], has_more: false })
+    ? Response.json({ results: [
+      { id: "heic", type: "image", has_children: false, image: { type: "file_upload", file: { url: source }, caption: [] } },
+      { id: "external-heic", type: "image", has_children: false, image: { type: "external", external: { url: "https://images.example.com/photo.heic" }, caption: [] } },
+    ], has_more: false })
     : Response.json({ results: [{ id: "photo-page", properties: {
       title: { title: [{ plain_text: "照片" }] }, slug: { rich_text: [{ plain_text: "photo" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
     } }] });
@@ -216,6 +219,7 @@ test("Notion HEIC files use the same-origin conversion endpoint", async () => {
     const payload = await response.json();
     assert.match(payload.blocks[0].url, /^\/_notion\/image\?url=/);
     assert.equal(new URL(payload.blocks[0].url, "http://localhost").searchParams.get("url"), source);
+    assert.equal(payload.blocks[1].url, "https://images.example.com/photo.heic", "non-allowlisted external images must not be proxied");
   } finally { globalThis.fetch = originalFetch; }
 });
 
