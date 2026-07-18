@@ -72,7 +72,7 @@ async function notionImage(request: Request, env: Env): Promise<Response> {
   if (!upstream.ok || !upstream.body) return error(upstream.status || 502, "Image is temporarily unavailable");
   if (!upstream.headers.get("content-type")?.toLocaleLowerCase().startsWith("image/")) return error(415, "Unsupported image response");
   try {
-    const transformed = await env.IMAGES.input(upstream.body).transform({ width: 2400, fit: "scale-down" }).output({ format: "image/webp", quality: 86 });
+    const transformed = await env.IMAGES.input(upstream.body).transform({ width: 2400 }).output({ format: "image/webp", quality: 86 });
     const response = await transformed.response();
     const headers = new Headers(response.headers);
     headers.set("cache-control", "public, max-age=3600");

@@ -242,7 +242,7 @@ test("Notion image proxy converts allowlisted HEIC to WebP and rejects SSRF host
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), "image/webp");
     assert.equal(response.headers.get("cache-control"), "public, max-age=3600");
-    assert.deepEqual(transformOptions, { width: 2400, fit: "scale-down" });
+    assert.deepEqual(transformOptions, { width: 2400 });
     assert.deepEqual(outputOptions, { format: "image/webp", quality: 86 });
     assert.equal(await response.text(), "webp-binary");
 
