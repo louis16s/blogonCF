@@ -18,6 +18,7 @@ interface ExecutionContext { waitUntil(promise: Promise<unknown>): void; passThr
 
 const DEFAULT_DATA_SOURCE_ID = "fffad771-48f4-81f5-be17-000b319f85ad";
 const NOTION_VERSION = "2026-03-11";
+const NOTION_IMAGE_HOSTS = new Set(["prod-files-secure.s3.us-west-2.amazonaws.com"]);
 const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
 
 const worker = {
@@ -26,6 +27,7 @@ const worker = {
     if (url.pathname === "/sitemap.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionSitemap(env));
     if (url.pathname === "/rss.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionRss(env));
     if (url.pathname === "/api/content/posts" && request.method === "GET") return notionPosts(env);
+    if (url.pathname === "/_notion/image" && (request.method === "GET" || request.method === "HEAD")) return notionImage(request, env);
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
       const slug = decodeURIComponent(url.pathname.slice("/api/content/post/".length));
       return notionPost(env, slug, request);
@@ -59,6 +61,28 @@ const worker = {
     return handler.fetch(request, env, ctx);
   },
 };
+
+async function notionImage(request: Request, env: Env): Promise<Response> {
+  const rawUrl = new URL(request.url).searchParams.get("url");
+  let source: URL;
+  try { source = new URL(rawUrl || ""); }
+  catch { return error(400, "Invalid image URL"); }
+  if (source.protocol !== "https:" || !NOTION_IMAGE_HOSTS.has(source.hostname)) return error(400, "Image host is not allowed");
+  const upstream = await fetch(source, { redirect: "manual" });
+  if (!upstream.ok || !upstream.body) return error(upstream.status || 502, "Image is temporarily unavailable");
+  if (!upstream.headers.get("content-type")?.toLocaleLowerCase().startsWith("image/")) return error(415, "Unsupported image response");
+  try {
+    const transformed = await env.IMAGES.input(upstream.body).transform({}).output({ format: "image/webp", quality: 86 });
+    const response = await transformed.response();
+    const headers = new Headers(response.headers);
+    headers.set("cache-control", "public, max-age=3600");
+    headers.set("x-content-type-options", "nosniff");
+    return request.method === "HEAD" ? new Response(null, { status: response.status, headers }) : new Response(response.body, { status: response.status, headers });
+  } catch (reason) {
+    console.error(reason instanceof Error ? reason.message : "Notion image conversion failed");
+    return error(502, "Image conversion failed");
+  }
+}
 
 async function articlePayloadForRender(env: Env, slug: string, request: Request): Promise<ArticlePayload> {
   const response = await notionPost(env, slug, new Request(request.url, { headers: request.headers }));
@@ -231,7 +255,7 @@ function normalizeBlock(raw: any): any | null {
     case "divider": return base;
     case "image": {
       const url = value.type === "external" ? value.external?.url : value.file?.url;
-      return { ...base, url, caption: richText(value.caption) };
+      return { ...base, url: value.type === "file" && needsBrowserImageConversion(url) ? `/_notion/image?url=${encodeURIComponent(url)}` : url, caption: richText(value.caption) };
     }
     case "bookmark": case "embed": case "video": case "file": case "pdf": case "audio": case "link_preview": {
       const url = value.url || value.external?.url || value.file?.url;
@@ -244,6 +268,12 @@ function normalizeBlock(raw: any): any | null {
     case "unsupported": return { ...base, type: "unsupported" };
     default: return raw.has_children ? base : { ...base, type: "unsupported" };
   }
+}
+
+function needsBrowserImageConversion(url: unknown): url is string {
+  if (typeof url !== "string") return false;
+  try { return /\.(?:heic|heif)$/i.test(decodeURIComponent(new URL(url).pathname)); }
+  catch { return false; }
 }
 
 function escapeXml(value: string) { return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[char] || char)); }

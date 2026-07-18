@@ -202,6 +202,50 @@ test("health endpoint reports missing Notion configuration without leaking secre
   assert.equal(response.headers.get("cache-control"), "no-store");
 });
 
+test("Notion HEIC files use the same-origin conversion endpoint", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const source = "https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/photo.HEIC?signature=test";
+  globalThis.fetch = async (input) => String(input).includes("/children")
+    ? Response.json({ results: [{ id: "heic", type: "image", has_children: false, image: { type: "file", file: { url: source }, caption: [] } }], has_more: false })
+    : Response.json({ results: [{ id: "photo-page", properties: {
+      title: { title: [{ plain_text: "照片" }] }, slug: { rich_text: [{ plain_text: "photo" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
+    } }] });
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/post/photo"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    const payload = await response.json();
+    assert.match(payload.blocks[0].url, /^\/_notion\/image\?url=/);
+    assert.equal(new URL(payload.blocks[0].url, "http://localhost").searchParams.get("url"), source);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Notion image proxy converts allowlisted HEIC to WebP and rejects SSRF hosts", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  let fetches = 0;
+  let outputOptions;
+  globalThis.fetch = async (input, init) => {
+    fetches++;
+    assert.equal(new URL(String(input)).hostname, "prod-files-secure.s3.us-west-2.amazonaws.com");
+    assert.equal(init.redirect, "manual");
+    return new Response("heic-binary", { headers: { "content-type": "image/heic" } });
+  };
+  const images = { input() { return { transform() { return { async output(options) { outputOptions = options; return { async response() { return new Response("webp-binary", { headers: { "content-type": "image/webp" } }); } }; } }; } }; } };
+  try {
+    const source = encodeURIComponent("https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/photo.heic?signature=test");
+    const response = await worker.fetch(new Request(`http://localhost/_notion/image?url=${source}`), { ASSETS: assets, IMAGES: images }, context);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "image/webp");
+    assert.equal(response.headers.get("cache-control"), "public, max-age=3600");
+    assert.deepEqual(outputOptions, { format: "image/webp", quality: 86 });
+    assert.equal(await response.text(), "webp-binary");
+
+    const blocked = await worker.fetch(new Request("http://localhost/_notion/image?url=https%3A%2F%2Fexample.com%2Fprivate.heic"), { ASSETS: assets, IMAGES: images }, context);
+    assert.equal(blocked.status, 400);
+    assert.equal(fetches, 1, "blocked hosts must never be fetched");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("content endpoint maps only the filtered Notion response and disables caching", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
