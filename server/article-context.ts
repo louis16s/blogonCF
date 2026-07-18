@@ -5,6 +5,7 @@ export type ArticlePayload = {
   blocks?: ContentBlock[];
   locked?: boolean;
   error?: string;
+  status?: number;
 };
 
 const contextKey = Symbol.for("louis16s.blog.article-context");

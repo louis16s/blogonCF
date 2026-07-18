@@ -104,6 +104,28 @@ test("locked article raw HTML renders only its password gate", async () => {
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("missing article raw HTML returns a real 404", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ results: [] });
+  try {
+    const response = await worker.fetch(new Request("http://localhost/blog/missing-post", { headers: { accept: "text/html" } }), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(response.status, 404);
+    assert.match(await response.text(), /404|not found/i);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("article raw HTML preserves Notion upstream failure status", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ message: "upstream unavailable" }, { status: 503 });
+  try {
+    const response = await worker.fetch(new Request("http://localhost/blog/unavailable-post", { headers: { accept: "text/html" } }), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(response.status, 502);
+    assert.match(await response.text(), /文章暂时无法读取/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("content endpoint follows Notion pagination cursors", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;

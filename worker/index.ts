@@ -48,7 +48,12 @@ const worker = {
       const key = storeArticlePayload(payload);
       const headers = new Headers(request.headers);
       headers.set("x-blog-article-context", key);
-      try { return await handler.fetch(new Request(request, { headers }), env, ctx); }
+      try {
+        const rendered = await handler.fetch(new Request(request, { headers }), env, ctx);
+        return payload.status && payload.status >= 400 && rendered.status < 400
+          ? new Response(rendered.body, { status: payload.status, headers: rendered.headers })
+          : rendered;
+      }
       finally { clearArticlePayload(key); }
     }
     return handler.fetch(request, env, ctx);
@@ -57,7 +62,8 @@ const worker = {
 
 async function articlePayloadForRender(env: Env, slug: string, request: Request): Promise<ArticlePayload> {
   const response = await notionPost(env, slug, new Request(request.url, { headers: request.headers }));
-  return await response.json().catch(() => ({ error: "文章暂时无法读取" })) as ArticlePayload;
+  const payload = await response.json().catch(() => ({ error: "文章暂时无法读取" })) as ArticlePayload;
+  return { ...payload, status: response.status };
 }
 
 async function notionPosts(env: Env): Promise<Response> {
@@ -238,7 +244,7 @@ function error(status: number, message: string) { return Response.json({ error: 
 function notionError(reason: unknown) {
   const message = reason instanceof Error ? reason.message : "Notion request failed";
   console.error(message);
-  return error(502, "Notion content is temporarily unavailable");
+  return error(502, "文章暂时无法读取");
 }
 
 export default worker;
