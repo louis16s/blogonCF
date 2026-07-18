@@ -1,27 +1,16 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import Link from "next/link";
 import { cache } from "react";
 import { ArticleClient } from "../../components/ArticleClient";
 import { SiteSidebar } from "../../components/SiteSidebar";
-import type { ContentBlock, Post } from "../../data/types";
-
-const siteOrigin = "https://bblog.530555.xyz";
-
-type ArticlePayload = {
-  post?: Post;
-  blocks?: ContentBlock[];
-  locked?: boolean;
-  error?: string;
-};
+import { readArticlePayload, type ArticlePayload } from "../../../server/article-context";
 
 const getArticle = cache(async (slug: string): Promise<{ payload?: ArticlePayload; fetched: boolean }> => {
-  try {
-    const response = await fetch(`${siteOrigin}/api/content/post/${encodeURIComponent(slug)}`, { cache: "no-store" });
-    const payload = await response.json() as ArticlePayload;
-    return response.ok ? { payload, fetched: true } : { payload: { error: payload.error || "文章暂时无法读取" }, fetched: true };
-  } catch {
-    return { payload: { error: "文章暂时无法读取" }, fetched: true };
-  }
+  void slug;
+  const key = (await headers()).get("x-blog-article-context");
+  const payload = readArticlePayload(key);
+  return { payload: payload || { error: "文章暂时无法读取" }, fetched: true };
 });
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {

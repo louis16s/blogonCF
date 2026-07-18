@@ -3,6 +3,7 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import { clearPasswordAttempts, getPasswordAttemptStatus, recordPasswordFailure } from "../db/rate-limit";
+import { clearArticlePayload, storeArticlePayload, type ArticlePayload } from "../server/article-context";
 
 interface Env {
   ASSETS: Fetcher;
@@ -41,9 +42,23 @@ const worker = {
         },
       }, allowedWidths);
     }
+    if (request.method === "GET" && url.pathname.startsWith("/blog/")) {
+      const slug = decodeURIComponent(url.pathname.slice("/blog/".length));
+      const payload = await articlePayloadForRender(env, slug, request);
+      const key = storeArticlePayload(payload);
+      const headers = new Headers(request.headers);
+      headers.set("x-blog-article-context", key);
+      try { return await handler.fetch(new Request(request, { headers }), env, ctx); }
+      finally { clearArticlePayload(key); }
+    }
     return handler.fetch(request, env, ctx);
   },
 };
+
+async function articlePayloadForRender(env: Env, slug: string, request: Request): Promise<ArticlePayload> {
+  const response = await notionPost(env, slug, new Request(request.url, { headers: request.headers }));
+  return await response.json().catch(() => ({ error: "文章暂时无法读取" })) as ArticlePayload;
+}
 
 async function notionPosts(env: Env): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");

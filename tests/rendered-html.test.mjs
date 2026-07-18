@@ -71,16 +71,13 @@ test("overview limits each category to one card row without limiting search or c
 test("article raw HTML contains live title, summary, and public Notion content", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input) => {
-    assert.match(String(input), /https:\/\/bblog\.530555\.xyz\/api\/content\/post\/Penang$/);
-    return Response.json({
-      post: { id: "penang", title: "2026槟城", slug: "Penang", summary: "南洋旧梦", category: "旅行游记", tags: ["旅行"], date: "2026-07-12", locked: false },
-      locked: false,
-      blocks: [{ id: "paragraph", type: "paragraph", richText: [{ text: "服务端正文内容" }] }],
-    });
-  };
+  globalThis.fetch = async (input) => String(input).includes("/children")
+    ? Response.json({ results: [{ id: "paragraph", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: "服务端正文内容", annotations: {} }] } }], has_more: false })
+    : Response.json({ results: [{ id: "penang", properties: {
+      title: { title: [{ plain_text: "2026槟城" }] }, slug: { rich_text: [{ plain_text: "Penang" }] }, summary: { rich_text: [{ plain_text: "南洋旧梦" }] }, category: { select: { name: "旅行游记" } }, tags: { multi_select: [{ name: "旅行" }] }, date: { date: { start: "2026-07-12" } }, password: { rich_text: [] },
+    } }] });
   try {
-    const response = await worker.fetch(new Request("http://localhost/blog/Penang", { headers: { accept: "text/html" } }), { ASSETS: assets }, context);
+    const response = await worker.fetch(new Request("http://localhost/blog/Penang", { headers: { accept: "text/html" } }), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     const html = await response.text();
     assert.match(html, /<title>2026槟城 · louis16s&#x27; blog<\/title>/);
     assert.match(html, /<meta name="description" content="南洋旧梦"/);
@@ -93,17 +90,17 @@ test("article raw HTML contains live title, summary, and public Notion content",
 test("locked article raw HTML renders only its password gate", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => Response.json({
-    post: { id: "locked", title: "私密文章", slug: "private", summary: "公开摘要", category: "输入密码", tags: [], date: "2026-01-01", locked: true },
-    locked: true,
-    blocks: [{ id: "secret", type: "paragraph", richText: [{ text: "绝密正文不得泄露" }] }],
-  });
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return Response.json({ results: [{ id: "locked", properties: {
+    title: { title: [{ plain_text: "私密文章" }] }, slug: { rich_text: [{ plain_text: "private" }] }, summary: { rich_text: [{ plain_text: "公开摘要" }] }, category: { select: { name: "输入密码" } }, tags: { multi_select: [] }, date: { date: { start: "2026-01-01" } }, password: { rich_text: [{ plain_text: "secret" }] },
+  } }] }); };
   try {
-    const response = await worker.fetch(new Request("http://localhost/blog/private", { headers: { accept: "text/html" } }), { ASSETS: assets }, context);
+    const response = await worker.fetch(new Request("http://localhost/blog/private", { headers: { accept: "text/html" } }), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     const html = await response.text();
     assert.match(html, /<title>私密文章 · louis16s&#x27; blog<\/title>/);
     assert.match(html, /这篇文章需要密码/);
     assert.doesNotMatch(html, /绝密正文不得泄露/);
+    assert.equal(calls, 1, "locked SSR must not fetch block children");
   } finally { globalThis.fetch = originalFetch; }
 });
 
