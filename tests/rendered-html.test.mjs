@@ -227,6 +227,7 @@ test("Notion image proxy converts allowlisted HEIC to WebP and rejects SSRF host
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
   let fetches = 0;
+  let transformOptions;
   let outputOptions;
   globalThis.fetch = async (input, init) => {
     fetches++;
@@ -234,13 +235,14 @@ test("Notion image proxy converts allowlisted HEIC to WebP and rejects SSRF host
     assert.equal(init.redirect, "manual");
     return new Response("heic-binary", { headers: { "content-type": "image/heic" } });
   };
-  const images = { input() { return { transform() { return { async output(options) { outputOptions = options; return { async response() { return new Response("webp-binary", { headers: { "content-type": "image/webp" } }); } }; } }; } }; } };
+  const images = { input() { return { transform(options) { transformOptions = options; return { async output(nextOptions) { outputOptions = nextOptions; return { async response() { return new Response("webp-binary", { headers: { "content-type": "image/webp" } }); } }; } }; } }; } };
   try {
     const source = encodeURIComponent("https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/photo.heic?signature=test");
     const response = await worker.fetch(new Request(`http://localhost/_notion/image?url=${source}`), { ASSETS: assets, IMAGES: images }, context);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), "image/webp");
     assert.equal(response.headers.get("cache-control"), "public, max-age=3600");
+    assert.deepEqual(transformOptions, { width: 2400, fit: "scale-down" });
     assert.deepEqual(outputOptions, { format: "image/webp", quality: 86 });
     assert.equal(await response.text(), "webp-binary");
 
