@@ -105,7 +105,7 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
       }
       if (env.DB) await clearPasswordAttempts(env.DB, attemptKey);
     }
-    const budget = { remaining: 600 };
+    const budget = { remaining: 2000 };
     const blocks = await getBlockChildren(env, page.id, budget, 0);
     return Response.json({ post: { ...post, locked: Boolean(expectedPassword) }, locked: false, blocks }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
@@ -169,7 +169,8 @@ async function getBlockChildren(env: Env, id: string, budget: { remaining: numbe
       if (--budget.remaining < 0) break;
       const block = normalizeBlock(raw);
       if (!block) continue;
-      if (raw.has_children && budget.remaining > 0) block.children = await getBlockChildren(env, raw.id, budget, depth + 1);
+      const hasInlineChildren = raw.has_children && raw.type !== "child_page" && raw.type !== "child_database";
+      if (hasInlineChildren && budget.remaining > 0) block.children = await getBlockChildren(env, raw.id, budget, depth + 1);
       output.push(block);
     }
     cursor = payload.has_more && budget.remaining > 0 ? payload.next_cursor : undefined;
@@ -205,28 +206,39 @@ function plain(property: any): string { return richText(property?.rich_text || p
 function richText(value: any): string { return Array.isArray(value) ? value.map((item) => item.plain_text || item.text?.content || "").join("") : typeof value === "string" ? value : ""; }
 
 function normalizeRichText(value: any[] = []) {
-  return value.map((item) => ({ text: item.plain_text || item.text?.content || "", href: item.href || undefined, bold: item.annotations?.bold || undefined, italic: item.annotations?.italic || undefined, code: item.annotations?.code || undefined }));
+  return value.map((item) => ({
+    text: item.plain_text || item.text?.content || "",
+    href: item.href || undefined,
+    bold: item.annotations?.bold || undefined,
+    italic: item.annotations?.italic || undefined,
+    code: item.annotations?.code || undefined,
+    strikethrough: item.annotations?.strikethrough || undefined,
+    underline: item.annotations?.underline || undefined,
+    color: item.annotations?.color && item.annotations.color !== "default" ? item.annotations.color : undefined,
+  }));
 }
 
 function normalizeBlock(raw: any): any | null {
   const type = raw.type;
   const value = raw[type] || {};
-  const base: any = { id: raw.id, type };
+  const base: any = { id: raw.id, type, color: value.color && value.color !== "default" ? value.color : undefined };
   if (Array.isArray(value.rich_text)) base.richText = normalizeRichText(value.rich_text);
   switch (type) {
-    case "paragraph": case "heading_1": case "heading_2": case "heading_3": case "bulleted_list_item": case "numbered_list_item": case "quote": case "toggle": case "column": case "column_list": case "synced_block": case "table": return base;
+    case "paragraph": case "heading_1": case "heading_2": case "heading_3": case "bulleted_list_item": case "numbered_list_item": case "quote": case "toggle": case "column": case "column_list": case "synced_block": case "table": case "table_of_contents": case "breadcrumb": case "template": return base;
     case "to_do": return { ...base, checked: Boolean(value.checked) };
     case "callout": return { ...base, icon: value.icon?.emoji || "i" };
-    case "code": return { ...base, language: value.language || "plain text" };
+    case "code": return { ...base, language: value.language || "plain text", caption: richText(value.caption) };
     case "divider": return base;
     case "image": {
       const url = value.type === "external" ? value.external?.url : value.file?.url;
       return { ...base, url, caption: richText(value.caption) };
     }
-    case "bookmark": case "embed": case "video": case "file": case "pdf": case "audio": {
+    case "bookmark": case "embed": case "video": case "file": case "pdf": case "audio": case "link_preview": {
       const url = value.url || value.external?.url || value.file?.url;
-      return { ...base, type: type === "video" ? "embed" : type, url, caption: richText(value.caption) };
+      return { ...base, type: type === "video" ? "embed" : type === "link_preview" ? "bookmark" : type, url, caption: richText(value.caption) };
     }
+    case "child_page": return { ...base, caption: value.title || "子页面", url: `https://www.notion.so/${String(raw.id).replaceAll("-", "")}` };
+    case "child_database": return { ...base, caption: value.title || "子数据库", url: `https://www.notion.so/${String(raw.id).replaceAll("-", "")}` };
     case "equation": return { ...base, caption: value.expression || "" };
     case "table_row": return { ...base, children: (value.cells || []).map((cell: any[], index: number) => ({ id: `${raw.id}-cell-${index}`, type: "table_cell", richText: normalizeRichText(cell) })) };
     case "unsupported": return { ...base, type: "unsupported" };

@@ -10,7 +10,16 @@ export type Post = {
   locked?: boolean;
 };
 
-export type RichText = { text: string; href?: string; bold?: boolean; italic?: boolean; code?: boolean };
+export type RichText = {
+  text: string;
+  href?: string;
+  bold?: boolean;
+  italic?: boolean;
+  code?: boolean;
+  strikethrough?: boolean;
+  underline?: boolean;
+  color?: string;
+};
 
 export type ContentBlock = {
   id: string;
@@ -21,5 +30,6 @@ export type ContentBlock = {
   caption?: string;
   language?: string;
   icon?: string;
+  color?: string;
   children?: ContentBlock[];
 };

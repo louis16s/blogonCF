@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import type { ContentBlock, Post } from "../data/types";
 
 type ArticleClientProps = {
@@ -69,7 +69,21 @@ function PasswordForm({ onSubmit, error }: { onSubmit: (value: string) => void; 
 }
 
 function Blocks({ blocks }: { blocks: ContentBlock[] }) {
-  return <>{blocks.map((block) => <Block key={block.id} block={block} />)}</>;
+  const output: ReactNode[] = [];
+  for (let index = 0; index < blocks.length;) {
+    const block = blocks[index];
+    const listType = block.type === "bulleted_list_item" ? "ul" : block.type === "numbered_list_item" ? "ol" : "";
+    if (!listType) {
+      output.push(<Block key={block.id} block={block} />);
+      index += 1;
+      continue;
+    }
+    const items: ContentBlock[] = [];
+    while (index < blocks.length && blocks[index].type === block.type) items.push(blocks[index++]);
+    const List = listType;
+    output.push(<List key={`${block.id}-list`} className="notion-list">{items.map((item) => <li key={item.id}><Rich value={item.richText} />{item.children?.length ? <Blocks blocks={item.children} /> : null}</li>)}</List>);
+  }
+  return <>{output}</>;
 }
 
 function Rich({ value = [] }: { value?: ContentBlock["richText"] }) {
@@ -78,35 +92,42 @@ function Rich({ value = [] }: { value?: ContentBlock["richText"] }) {
     if (item.code) node = <code>{node}</code>;
     if (item.bold) node = <strong>{node}</strong>;
     if (item.italic) node = <em>{node}</em>;
-    return item.href ? <a key={index} href={item.href} target="_blank" rel="noreferrer">{node}</a> : <span key={index}>{node}</span>;
+    if (item.strikethrough) node = <s>{node}</s>;
+    if (item.underline) node = <u>{node}</u>;
+    const className = item.color ? `notion-color-${item.color}` : undefined;
+    return item.href ? <a className={className} key={index} href={item.href} target="_blank" rel="noreferrer">{node}</a> : <span className={className} key={index}>{node}</span>;
   })}</>;
 }
 
 function Block({ block }: { block: ContentBlock }) {
   const children = block.children?.length ? <Blocks blocks={block.children} /> : null;
+  const className = block.color ? `notion-block notion-color-${block.color}` : "notion-block";
   switch (block.type) {
-    case "paragraph": return <p><Rich value={block.richText} />{children}</p>;
-    case "heading_1": return <h2><Rich value={block.richText} /></h2>;
-    case "heading_2": return <h3><Rich value={block.richText} /></h3>;
-    case "heading_3": return <h4><Rich value={block.richText} /></h4>;
-    case "bulleted_list_item": return <ul><li><Rich value={block.richText} />{children}</li></ul>;
-    case "numbered_list_item": return <ol><li><Rich value={block.richText} />{children}</li></ol>;
-    case "to_do": return <p>☑ {block.checked ? "已完成" : "待办"} · <Rich value={block.richText} /></p>;
-    case "quote": return <blockquote><Rich value={block.richText} /></blockquote>;
-    case "callout": return <aside className="callout"><span>{block.icon}</span><div><Rich value={block.richText} />{children}</div></aside>;
-    case "code": return <pre><code data-language={block.language}><Rich value={block.richText} /></code></pre>;
+    case "paragraph": return <div className={className}><p><Rich value={block.richText} /></p>{children}</div>;
+    case "heading_1": return <div className={className}><h2 id={block.id}><Rich value={block.richText} /></h2>{children}</div>;
+    case "heading_2": return <div className={className}><h3 id={block.id}><Rich value={block.richText} /></h3>{children}</div>;
+    case "heading_3": return <div className={className}><h4 id={block.id}><Rich value={block.richText} /></h4>{children}</div>;
+    case "to_do": return <div className={`${className} notion-todo`}><input type="checkbox" checked={Boolean(block.checked)} readOnly aria-label={block.checked ? "已完成" : "未完成"} /><div><Rich value={block.richText} />{children}</div></div>;
+    case "quote": return <div className={className}><blockquote><Rich value={block.richText} />{children}</blockquote></div>;
+    case "callout": return <aside className={`${className} callout`}><span>{block.icon}</span><div><Rich value={block.richText} />{children}</div></aside>;
+    case "toggle": return <details className={`${className} notion-toggle`} open><summary><Rich value={block.richText} /></summary><div>{children}</div></details>;
+    case "code": return <figure className={`${className} notion-code`}><pre><code data-language={block.language}><Rich value={block.richText} /></code></pre>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure>;
     case "divider": return <hr />;
     // Notion image URLs are signed and unknown at build time, so the Worker cannot
     // safely provide dimensions required by next/image.
     // eslint-disable-next-line @next/next/no-img-element
     case "image": return block.url ? <figure><img src={block.url} alt={block.caption || "文章图片"} loading="lazy" /><figcaption>{block.caption}</figcaption></figure> : null;
-    case "bookmark": case "embed": return block.url ? <a className="bookmark" href={block.url} target="_blank" rel="noreferrer">{block.caption || block.url} ↗</a> : null;
+    case "bookmark": case "embed": return block.url ? <a className={`${className} bookmark`} href={block.url} target="_blank" rel="noreferrer">{block.caption || block.url} ↗</a> : null;
     case "file": case "pdf": case "audio": return block.url ? <a className="bookmark" href={block.url} target="_blank" rel="noreferrer">{block.caption || (block.type === "pdf" ? "查看 PDF" : "下载附件")} ↗</a> : null;
+    case "child_page": case "child_database": return block.url ? <a className={`${className} notion-child-page`} href={block.url} target="_blank" rel="noreferrer"><span aria-hidden="true">▱</span><strong>{block.caption || (block.type === "child_page" ? "子页面" : "子数据库")}</strong><span aria-hidden="true">↗</span></a> : null;
     case "equation": return <div className="equation" aria-label="数学公式">{block.caption}</div>;
     case "table": return <div className="notion-table" role="table">{children}</div>;
     case "table_row": return <div className="notion-table-row" role="row">{block.children?.map((cell, index) => <div role="cell" key={`${block.id}-${index}`}><Rich value={cell.richText} /></div>)}</div>;
-    case "column_list": return <div className="columns">{children}</div>;
+    case "column_list": return <div className={`${className} columns`}>{children}</div>;
     case "column": return <div className="column">{children}</div>;
+    case "synced_block": case "template": return <div className={className}>{children}</div>;
+    case "table_of_contents": return <aside className={`${className} notion-toc`}>目录</aside>;
+    case "breadcrumb": return <div className={`${className} notion-breadcrumb`}>当前位置</div>;
     case "unsupported": return <aside className="unsupported">此内容块暂不支持显示。</aside>;
     default: return children ? <div>{children}</div> : <aside className="unsupported">未识别的内容块：{block.type}</aside>;
   }

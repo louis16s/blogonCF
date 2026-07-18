@@ -122,6 +122,10 @@ button, select { color: inherit; }
 .notion-content h2, .notion-content h3, .notion-content h4 { margin: 1.8em 0 .7em; color: var(--ink); font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; line-height: 1.3; letter-spacing: -.025em; }
 .notion-content h2 { font-size: 34px; }.notion-content h3 { font-size: 27px; }.notion-content h4 { font-size: 21px; }
 .notion-content p { margin: 1.05em 0; }
+.notion-block:empty { display: none; }
+.notion-list { margin: .65em 0; padding-left: 1.55em; }
+.notion-list .notion-list { margin: .2em 0; }
+.notion-list li { padding-left: .25em; }
 .notion-content a { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
 .notion-content blockquote { margin: 28px 0; padding: 4px 22px; color: var(--muted); border-left: 3px solid var(--ink); }
 .notion-content pre { overflow: auto; padding: 20px; color: #f5f5f5; background: #1d1d1d; border-radius: 10px; font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -129,7 +133,17 @@ button, select { color: inherit; }
 .notion-content img { display: block; max-width: 100%; height: auto; background: var(--surface-soft); border-radius: 10px; }
 .notion-content figcaption { margin-top: 8px; color: var(--muted); font: 11px/1.5 ui-sans-serif, sans-serif; }
 .callout { display: flex; gap: 14px; margin: 26px 0; padding: 18px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 10px; }
+.notion-toggle { margin: 10px 0; padding: 4px 0; }
+.notion-toggle>summary { cursor: pointer; color: var(--ink); font-weight: 650; list-style-position: outside; }
+.notion-toggle>div { padding-left: 20px; border-left: 1px solid var(--line); }
+.notion-todo { display: flex; align-items: flex-start; gap: 10px; margin: .8em 0; }
+.notion-todo input { margin-top: .52em; accent-color: var(--ink); }
+.notion-code { margin: 26px 0; }
+.notion-code pre { margin: 0; }
 .bookmark { display: block; margin: 20px 0; padding: 17px; border: 1px solid var(--line); border-radius: 10px; font-family: ui-sans-serif, sans-serif; }
+.notion-child-page { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 11px; margin: 8px 0; padding: 12px 14px; color: var(--ink); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 9px; font-family: ui-sans-serif, sans-serif; text-decoration: none !important; }
+.notion-child-page:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+.notion-toc, .notion-breadcrumb { margin: 18px 0; color: var(--muted); font: 13px ui-sans-serif, sans-serif; }
 .equation { overflow: auto; margin: 24px 0; padding: 20px; text-align: center; background: var(--surface-soft); border-radius: 10px; font: italic 19px Georgia, serif; }
 .notion-table { overflow: auto; margin: 28px 0; border-top: 1px solid var(--line-strong); border-left: 1px solid var(--line); }
 .notion-table-row { display: flex; min-width: 520px; }
@@ -137,6 +151,9 @@ button, select { color: inherit; }
 .unsupported { margin: 20px 0; padding: 14px; color: var(--muted); border: 1px dashed var(--line-strong); border-radius: 8px; font: 12px ui-sans-serif, sans-serif; }
 .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
 .column>*:first-child { margin-top: 0; }
+.notion-color-gray { color: #787774; }.notion-color-brown { color: #9f6b53; }.notion-color-orange { color: #d9730d; }.notion-color-yellow { color: #cb912f; }.notion-color-green { color: #448361; }.notion-color-blue { color: #337ea9; }.notion-color-purple { color: #9065b0; }.notion-color-pink { color: #c14c8a; }.notion-color-red { color: #d44c47; }
+.notion-color-gray_background { background: #f1f1ef; }.notion-color-brown_background { background: #f4eeee; }.notion-color-orange_background { background: #fbecdd; }.notion-color-yellow_background { background: #fbf3db; }.notion-color-green_background { background: #edf3ec; }.notion-color-blue_background { background: #e7f3f8; }.notion-color-purple_background { background: #f4f0f7; }.notion-color-pink_background { background: #f9eef3; }.notion-color-red_background { background: #fdebec; }
+[data-theme="dark"] .notion-color-gray_background, [data-theme="dark"] .notion-color-brown_background, [data-theme="dark"] .notion-color-orange_background, [data-theme="dark"] .notion-color-yellow_background, [data-theme="dark"] .notion-color-green_background, [data-theme="dark"] .notion-color-blue_background, [data-theme="dark"] .notion-color-purple_background, [data-theme="dark"] .notion-color-pink_background, [data-theme="dark"] .notion-color-red_background { background: color-mix(in srgb, currentColor 13%, transparent); }
 .password-card { max-width: 520px; margin: 50px auto; padding: 29px; background: var(--surface); border: 1px solid var(--line); border-radius: 13px; box-shadow: var(--shadow); }
 .password-card h2 { margin: 0 0 24px; font-size: 28px; letter-spacing: -.03em; }
 .password-card label { display: grid; gap: 8px; color: var(--muted); font-size: 13px; }

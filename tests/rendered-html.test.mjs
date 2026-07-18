@@ -266,6 +266,39 @@ test("correct password unlocks normalized content", async () => {
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("locked article keeps child-page siblings without expanding child-page bodies", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const childRequests = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/blocks/locked-index/children")) return Response.json({ results: [
+      { id: "toggle", type: "toggle", has_children: true, toggle: { rich_text: [{ plain_text: "章节", annotations: {} }], color: "blue_background" } },
+      { id: "after", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: "索引结尾", annotations: { underline: true } }] } },
+    ], has_more: false });
+    if (url.includes("/blocks/toggle/children")) return Response.json({ results: [
+      { id: "child-page", type: "child_page", has_children: true, child_page: { title: "第一章" } },
+      { id: "inside", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: "更多章节", annotations: {} }] } },
+    ], has_more: false });
+    if (url.includes("/blocks/child-page/children")) { childRequests.push(url); return Response.json({ results: [{ id: "secret-body", type: "paragraph", paragraph: { rich_text: [{ plain_text: "不应内联展开", annotations: {} }] } }] }); }
+    return Response.json({ results: [{ id: "locked-index", properties: {
+      title: { title: [{ plain_text: "目录文章" }] }, slug: { rich_text: [{ plain_text: "index" }] }, summary: { rich_text: [] }, category: { select: { name: "输入密码" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "correct" }] },
+    } }] });
+  };
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/post/index", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "correct" }) }), { ASSETS: assets, DB: createRateLimitDb(), NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.blocks.map((block) => block.id), ["toggle", "after"]);
+    assert.deepEqual(payload.blocks[0].children.map((block) => block.id), ["child-page", "inside"]);
+    assert.equal(payload.blocks[0].children[0].caption, "第一章");
+    assert.match(payload.blocks[0].children[0].url, /notion\.so\/childpage$/);
+    assert.equal(payload.blocks[0].color, "blue_background");
+    assert.equal(payload.blocks[1].richText[0].underline, true);
+    assert.deepEqual(childRequests, [], "child-page bodies must not consume the parent article block budget");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("password endpoint rate-limits repeated failures before calling Notion again", async () => {
   const workerA = await loadWorker();
   const workerB = await loadWorker();
