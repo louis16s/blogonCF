@@ -23,6 +23,7 @@ const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/sitemap.xml" && request.method === "GET") return notionSitemap(env);
+    if (url.pathname === "/rss.xml" && request.method === "GET") return notionRss(env);
     if (url.pathname === "/api/content/posts" && request.method === "GET") return notionPosts(env);
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
       const slug = decodeURIComponent(url.pathname.slice("/api/content/post/".length));
@@ -98,6 +99,22 @@ async function notionSitemap(env: Env): Promise<Response> {
   }
   const urls = [`<url><loc>${base}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`, ...posts.map((post) => `<url><loc>${base}/blog/${encodeURIComponent(post.slug)}</loc>${post.date ? `<lastmod>${escapeXml(post.date)}</lastmod>` : ""}<changefreq>weekly</changefreq><priority>0.7</priority></url>`)].join("");
   return new Response(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>`, { headers: { "content-type": "application/xml; charset=utf-8", "cache-control": env.NOTION_TOKEN ? "no-store" : "public, max-age=60" } });
+}
+
+async function notionRss(env: Env): Promise<Response> {
+  const base = "https://bblog.530555.xyz";
+  let posts: ReturnType<typeof toPost>[] = [];
+  if (env.NOTION_TOKEN) {
+    try { posts = (await queryPosts(env, undefined, 100)).map(toPost).filter((post) => post.slug); }
+    catch (reason) { console.error(reason instanceof Error ? reason.message : "RSS Notion request failed"); }
+  }
+  const items = posts.map((post) => {
+    const link = `${base}/blog/${encodeURIComponent(post.slug)}`;
+    const published = post.date ? new Date(`${post.date}T00:00:00Z`).toUTCString() : "";
+    return `<item><title>${escapeXml(post.title)}</title><link>${escapeXml(link)}</link><guid isPermaLink="true">${escapeXml(link)}</guid>${published ? `<pubDate>${published}</pubDate>` : ""}<description>${escapeXml(post.summary)}</description><category>${escapeXml(post.category)}</category></item>`;
+  }).join("");
+  const xml = `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>louis16s&apos; blog</title><link>${base}/</link><description>关于旅行、摄影、开发与生活的个人记录。</description><language>zh-CN</language><lastBuildDate>${new Date().toUTCString()}</lastBuildDate>${items}</channel></rss>`;
+  return new Response(xml, { headers: { "content-type": "application/rss+xml; charset=utf-8", "cache-control": env.NOTION_TOKEN ? "no-store" : "public, max-age=60" } });
 }
 
 async function queryPosts(env: Env, slug?: string, pageSize = 100): Promise<any[]> {

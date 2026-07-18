@@ -44,7 +44,7 @@ test("server-renders a safe loading state without stale Notion content", async (
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /<title>louis16s&#x27; blog<\/title>/);
-  assert.match(html, /把经过的地方/);
+  assert.match(html, /blog 复活啦/);
   assert.match(html, /正在从 Notion 读取文章/);
   assert.doesNotMatch(html, /2026槟城/);
   assert.match(html, /https:\/\/bblog\.530555\.xyz\/og\.png/);
@@ -56,7 +56,7 @@ test("client refresh failures clear previously verified list and article content
     readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(blog, /\.catch\(\(\) => \{ setPosts\(\[\]\); setLive\(false\); setSyncState\("unavailable"\); \}\)/);
+  assert.match(blog, /\.catch\(\(\) => \{ setPosts\(\[\]\); setSyncState\("unavailable"\); \}\)/);
   assert.match(article, /passwordRef\.current = ""; setPost\(undefined\); setBlocks\(\[\]\); setLocked\(false\)/);
 });
 
@@ -96,6 +96,27 @@ test("sitemap is generated from current Published posts and safely degrades", as
     const xml = await response.text();
     assert.match(xml, /\/blog\/a%20%26%20b<\/loc>/);
     assert.match(xml, /<lastmod>2026-03-04<\/lastmod>/);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("RSS is generated from current Published posts and safely degrades", async () => {
+  const worker = await loadWorker();
+  const safe = await worker.fetch(new Request("http://localhost/rss.xml"), { ASSETS: assets }, context);
+  assert.equal(safe.status, 200);
+  assert.match(safe.headers.get("content-type"), /application\/rss\+xml/);
+  assert.doesNotMatch(await safe.text(), /<item>/);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ results: [{ id: "rss-page", created_time: "2026-01-01T00:00:00Z", properties: {
+    title: { title: [{ plain_text: "旅行 & 开发" }] }, slug: { rich_text: [{ plain_text: "rss post" }] }, summary: { rich_text: [{ plain_text: "摘要 <测试>" }] }, category: { select: { name: "旅行游记" } }, tags: { multi_select: [] }, date: { date: { start: "2026-03-04" } }, password: { rich_text: [] },
+  } }], has_more: false });
+  try {
+    const response = await worker.fetch(new Request("http://localhost/rss.xml"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    const xml = await response.text();
+    assert.match(xml, /<title>旅行 &amp; 开发<\/title>/);
+    assert.match(xml, /\/blog\/rss%20post<\/link>/);
+    assert.match(xml, /摘要 &lt;测试&gt;/);
     assert.equal(response.headers.get("cache-control"), "no-store");
   } finally { globalThis.fetch = originalFetch; }
 });
