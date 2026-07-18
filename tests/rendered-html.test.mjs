@@ -60,6 +60,15 @@ test("client refresh failures clear previously verified list and article content
   assert.match(article, /passwordRef\.current = ""; setPost\(undefined\); setBlocks\(\[\]\); setLocked\(false\)/);
 });
 
+test("HEIC decoding survives signed URL refreshes without repeated work", async () => {
+  const article = await readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8");
+  assert.match(article, /HEIC_DECODE_CONCURRENCY = 3/);
+  assert.match(article, /sourceRef\.current = src/);
+  assert.match(article, /return `\$\{block\.id\}:\$\{source\.hostname\}\$\{source\.pathname\}`/);
+  assert.match(article, /\}, \[identity\]\)/);
+  assert.match(article, /if \(skipInitialRefresh\.current\) skipInitialRefresh\.current = false/);
+});
+
 test("overview limits each category to one card row without limiting search or category results", async () => {
   const blog = await readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8");
   assert.match(blog, /category === ALL && !query\.trim\(\) \? items\.slice\(0, 4\) : items/);

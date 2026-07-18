@@ -3,6 +3,20 @@
 import { FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import type { ContentBlock, Post } from "../data/types";
 
+const HEIC_DECODE_CONCURRENCY = 3;
+let activeHeicDecodes = 0;
+const pendingHeicDecodes: Array<() => void> = [];
+
+async function withHeicDecodeSlot<T>(task: () => Promise<T>): Promise<T> {
+  if (activeHeicDecodes >= HEIC_DECODE_CONCURRENCY) await new Promise<void>((resolve) => pendingHeicDecodes.push(resolve));
+  activeHeicDecodes += 1;
+  try { return await task(); }
+  finally {
+    activeHeicDecodes -= 1;
+    pendingHeicDecodes.shift()?.();
+  }
+}
+
 type ArticleClientProps = {
   slug: string;
   initialPost?: Post;
@@ -19,6 +33,7 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
   const [loading, setLoading] = useState(!initialFetched);
   const [error, setError] = useState(initialError);
   const passwordRef = useRef("");
+  const skipInitialRefresh = useRef(initialFetched);
 
   const load = (password?: string) => {
     setLoading(true); setError("");
@@ -46,7 +61,8 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
       .catch((reason) => { if (reason.name !== "AbortError") { passwordRef.current = ""; setPost(undefined); setBlocks([]); setLocked(false); setError(reason.message || "文章不存在、已撤回或暂时无法读取"); } })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     };
-    refresh();
+    if (skipInitialRefresh.current) skipInitialRefresh.current = false;
+    else void refresh();
     const timer = window.setInterval(refresh, 60_000);
     const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
     document.addEventListener("visibilitychange", onVisible);
@@ -99,10 +115,21 @@ function Rich({ value = [] }: { value?: ContentBlock["richText"] }) {
   })}</>;
 }
 
-function NotionHeicImage({ src, alt, caption }: { src: string; alt: string; caption?: string }) {
+function notionImageIdentity(block: ContentBlock): string {
+  try {
+    const gateway = new URL(block.url || "", "https://notion-image.local");
+    const source = new URL(gateway.searchParams.get("url") || "");
+    return `${block.id}:${source.hostname}${source.pathname}`;
+  } catch { return block.id; }
+}
+
+function NotionHeicImage({ src, identity, alt, caption }: { src: string; identity: string; alt: string; caption?: string }) {
   const figureRef = useRef<HTMLElement>(null);
+  const sourceRef = useRef(src);
   const [renderedUrl, setRenderedUrl] = useState("");
   const [failed, setFailed] = useState(false);
+
+  useEffect(() => { sourceRef.current = src; }, [src]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -111,10 +138,13 @@ function NotionHeicImage({ src, alt, caption }: { src: string; alt: string; capt
     let observer: IntersectionObserver | undefined;
     const load = async () => {
       try {
-        const response = await fetch(src, { signal: controller.signal });
-        if (!response.ok) throw new Error("Image fetch failed");
-        const { heicTo } = await import("heic-to/csp");
-        const jpeg = await heicTo({ blob: await response.blob(), type: "image/jpeg", quality: 0.86 });
+        const jpeg = await withHeicDecodeSlot(async () => {
+          controller.signal.throwIfAborted();
+          const response = await fetch(sourceRef.current, { signal: controller.signal });
+          if (!response.ok) throw new Error("Image fetch failed");
+          const { heicTo } = await import("heic-to/csp");
+          return heicTo({ blob: await response.blob(), type: "image/jpeg", quality: 0.86 });
+        });
         if (!active) return;
         objectUrl = URL.createObjectURL(jpeg);
         setRenderedUrl(objectUrl);
@@ -130,7 +160,7 @@ function NotionHeicImage({ src, alt, caption }: { src: string; alt: string; capt
       observer.observe(target);
     } else void load();
     return () => { active = false; controller.abort(); observer?.disconnect(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [src]);
+  }, [identity]);
 
   return <figure ref={figureRef} className="notion-heic-image">
     {renderedUrl
@@ -162,7 +192,7 @@ function Block({ block }: { block: ContentBlock }) {
     case "code": return <figure className={`${className} notion-code`}><pre><code data-language={block.language}><Rich value={block.richText} /></code></pre>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure>;
     case "divider": return <hr />;
     case "image": return block.url ? block.url.startsWith("/_notion/image?")
-      ? <NotionHeicImage src={block.url} alt={block.caption || "文章图片"} caption={block.caption} />
+      ? <NotionHeicImage src={block.url} identity={notionImageIdentity(block)} alt={block.caption || "文章图片"} caption={block.caption} />
       : <NotionImage src={block.url} alt={block.caption || "文章图片"} caption={block.caption} /> : null;
     case "bookmark": case "embed": return block.url ? <a className={`${className} bookmark`} href={block.url} target="_blank" rel="noreferrer">{block.caption || block.url} ↗</a> : null;
     case "file": case "pdf": case "audio": return block.url ? <a className="bookmark" href={block.url} target="_blank" rel="noreferrer">{block.caption || (block.type === "pdf" ? "查看 PDF" : "下载附件")} ↗</a> : null;
