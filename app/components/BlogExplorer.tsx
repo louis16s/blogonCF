@@ -23,6 +23,7 @@ import { SiteSidebar } from "./SiteSidebar";
 
 const ALL = "全部";
 type SortMode = "newest" | "oldest";
+const preferredCategories = ["心情随笔", "嵌入式开发", "小软件工程", "相机分享", "旅行游记", "输入密码"];
 
 const categoryIcons: Array<[RegExp, Icon]> = [
   [/心情|随笔|生活/, Heart],
@@ -65,7 +66,18 @@ export function BlogExplorer() {
     return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, []);
 
-  const categories = useMemo(() => [ALL, ...Array.from(new Set(posts.map((post) => post.category).filter(Boolean)))], [posts]);
+  const categories = useMemo(() => {
+    const found = Array.from(new Set(posts.map((post) => post.category).filter(Boolean)));
+    found.sort((a, b) => {
+      const aIndex = preferredCategories.indexOf(a);
+      const bIndex = preferredCategories.indexOf(b);
+      if (aIndex === -1 && bIndex === -1) return a.localeCompare(b, "zh-CN");
+      if (aIndex === -1) return 1;
+      if (bIndex === -1) return -1;
+      return aIndex - bIndex;
+    });
+    return [ALL, ...found];
+  }, [posts]);
   const visible = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return posts
@@ -80,8 +92,8 @@ export function BlogExplorer() {
       const key = post.category || "未分类";
       map.set(key, [...(map.get(key) || []), post]);
     });
-    return Array.from(map.entries());
-  }, [visible]);
+    return Array.from(map.entries()).sort(([a], [b]) => categories.indexOf(a) - categories.indexOf(b));
+  }, [visible, categories]);
 
   const selectCategory = (value: string) => {
     setCategory(value);
@@ -135,7 +147,7 @@ export function BlogExplorer() {
             <section className="category-section" key={name} aria-labelledby={`category-${slugify(name)}`}>
               <h2 id={`category-${slugify(name)}`}>#&nbsp; {name}</h2>
               <div className="post-grid">
-                {items.map((post, index) => <PostCard post={post} index={index} key={post.id} />)}
+                {(category === ALL && !query.trim() ? items.slice(0, 4) : items).map((post, index) => <PostCard post={post} index={index} key={post.id} />)}
               </div>
             </section>
           ))}

@@ -60,6 +60,14 @@ test("client refresh failures clear previously verified list and article content
   assert.match(article, /passwordRef\.current = ""; setPost\(undefined\); setBlocks\(\[\]\); setLocked\(false\)/);
 });
 
+test("overview limits each category to one card row without limiting search or category results", async () => {
+  const blog = await readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8");
+  assert.match(blog, /category === ALL && !query\.trim\(\) \? items\.slice\(0, 4\) : items/);
+  assert.match(blog, /const visible = useMemo/);
+  assert.match(blog, /category === ALL \|\| post\.category === category/);
+  assert.match(blog, /post\.tags/);
+});
+
 test("content endpoint follows Notion pagination cursors", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
