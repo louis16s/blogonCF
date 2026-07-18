@@ -223,7 +223,7 @@ test("Notion HEIC files use the same-origin conversion endpoint", async () => {
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("Notion image proxy converts allowlisted HEIC to WebP and rejects SSRF hosts", async () => {
+test("Notion image gateway proxies allowlisted HEIC and rejects SSRF hosts", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
   let fetches = 0;
@@ -231,16 +231,15 @@ test("Notion image proxy converts allowlisted HEIC to WebP and rejects SSRF host
     fetches++;
     assert.equal(new URL(String(input)).hostname, "prod-files-secure.s3.us-west-2.amazonaws.com");
     assert.equal(init.redirect, "manual");
-    assert.deepEqual(init.cf.image, { fit: "scale-down", format: "webp", quality: 86, width: 2400 });
-    return new Response("webp-binary", { headers: { "content-type": "image/webp" } });
+    return new Response("heic-binary", { headers: { "content-type": "image/heic" } });
   };
   try {
     const source = encodeURIComponent("https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/photo.heic?signature=test");
     const response = await worker.fetch(new Request(`http://localhost/_notion/image?url=${source}`), { ASSETS: assets }, context);
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get("content-type"), "image/webp");
+    assert.equal(response.headers.get("content-type"), "image/heic");
     assert.equal(response.headers.get("cache-control"), "public, max-age=3600, stale-while-revalidate=86400");
-    assert.equal(await response.text(), "webp-binary");
+    assert.equal(await response.text(), "heic-binary");
 
     const blocked = await worker.fetch(new Request("http://localhost/_notion/image?url=https%3A%2F%2Fexample.com%2Fprivate.heic"), { ASSETS: assets }, context);
     assert.equal(blocked.status, 400);
@@ -248,15 +247,15 @@ test("Notion image proxy converts allowlisted HEIC to WebP and rejects SSRF host
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("Notion image proxy never serves an unconverted HEIC payload", async () => {
+test("Notion image gateway rejects non-image upstream payloads", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response("heic-binary", { headers: { "content-type": "image/heic" } });
+  globalThis.fetch = async () => new Response("not-an-image", { headers: { "content-type": "text/html" } });
   try {
     const source = encodeURIComponent("https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/photo.heic?signature=test");
     const response = await worker.fetch(new Request(`http://localhost/_notion/image?url=${source}`), { ASSETS: assets }, context);
-    assert.equal(response.status, 502);
-    assert.deepEqual(await response.json(), { error: "Image conversion failed" });
+    assert.equal(response.status, 415);
+    assert.deepEqual(await response.json(), { error: "Unsupported image response" });
   } finally { globalThis.fetch = originalFetch; }
 });
 

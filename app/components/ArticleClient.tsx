@@ -99,6 +99,54 @@ function Rich({ value = [] }: { value?: ContentBlock["richText"] }) {
   })}</>;
 }
 
+function NotionHeicImage({ src, alt, caption }: { src: string; alt: string; caption?: string }) {
+  const figureRef = useRef<HTMLElement>(null);
+  const [renderedUrl, setRenderedUrl] = useState("");
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    let objectUrl = "";
+    let observer: IntersectionObserver | undefined;
+    const load = async () => {
+      try {
+        const response = await fetch(src, { signal: controller.signal });
+        if (!response.ok) throw new Error("Image fetch failed");
+        const { heicTo } = await import("heic-to/csp");
+        const jpeg = await heicTo({ blob: await response.blob(), type: "image/jpeg", quality: 0.86 });
+        if (!active) return;
+        objectUrl = URL.createObjectURL(jpeg);
+        setRenderedUrl(objectUrl);
+      } catch (reason) {
+        if (active && !(reason instanceof DOMException && reason.name === "AbortError")) setFailed(true);
+      }
+    };
+    const target = figureRef.current;
+    if (target && "IntersectionObserver" in window) {
+      observer = new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting) { observer?.disconnect(); void load(); }
+      }, { rootMargin: "800px 0px" });
+      observer.observe(target);
+    } else void load();
+    return () => { active = false; controller.abort(); observer?.disconnect(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [src]);
+
+  return <figure ref={figureRef} className="notion-heic-image">
+    {renderedUrl
+      // eslint-disable-next-line @next/next/no-img-element
+      ? <img src={renderedUrl} alt={alt} />
+      : <div className="notion-image-state" role={failed ? "alert" : "status"}>{failed ? "这张图片暂时无法显示" : "正在加载图片…"}</div>}
+    {caption ? <figcaption>{caption}</figcaption> : null}
+  </figure>;
+}
+
+function NotionImage({ src, alt, caption }: { src: string; alt: string; caption?: string }) {
+  // Signed Notion URLs do not provide dimensions required by next/image.
+  // eslint-disable-next-line @next/next/no-img-element
+  return <figure><img src={src} alt={alt} loading="lazy" />{caption ? <figcaption>{caption}</figcaption> : null}</figure>;
+}
+
 function Block({ block }: { block: ContentBlock }) {
   const children = block.children?.length ? <Blocks blocks={block.children} /> : null;
   const className = block.color ? `notion-block notion-color-${block.color}` : "notion-block";
@@ -113,10 +161,9 @@ function Block({ block }: { block: ContentBlock }) {
     case "toggle": return <details className={`${className} notion-toggle`} open><summary><Rich value={block.richText} /></summary><div>{children}</div></details>;
     case "code": return <figure className={`${className} notion-code`}><pre><code data-language={block.language}><Rich value={block.richText} /></code></pre>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure>;
     case "divider": return <hr />;
-    // Notion image URLs are signed and unknown at build time, so the Worker cannot
-    // safely provide dimensions required by next/image.
-    // eslint-disable-next-line @next/next/no-img-element
-    case "image": return block.url ? <figure><img src={block.url} alt={block.caption || "文章图片"} loading="lazy" /><figcaption>{block.caption}</figcaption></figure> : null;
+    case "image": return block.url ? block.url.startsWith("/_notion/image?")
+      ? <NotionHeicImage src={block.url} alt={block.caption || "文章图片"} caption={block.caption} />
+      : <NotionImage src={block.url} alt={block.caption || "文章图片"} caption={block.caption} /> : null;
     case "bookmark": case "embed": return block.url ? <a className={`${className} bookmark`} href={block.url} target="_blank" rel="noreferrer">{block.caption || block.url} ↗</a> : null;
     case "file": case "pdf": case "audio": return block.url ? <a className="bookmark" href={block.url} target="_blank" rel="noreferrer">{block.caption || (block.type === "pdf" ? "查看 PDF" : "下载附件")} ↗</a> : null;
     case "child_page": case "child_database": return block.url ? <a className={`${className} notion-child-page`} href={block.url} target="_blank" rel="noreferrer"><span aria-hidden="true">▱</span><strong>{block.caption || (block.type === "child_page" ? "子页面" : "子数据库")}</strong><span aria-hidden="true">↗</span></a> : null;

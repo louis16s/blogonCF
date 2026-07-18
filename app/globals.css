@@ -132,6 +132,8 @@ button, select { color: inherit; }
 .notion-content figure { margin: 34px 0; }
 .notion-content img { display: block; max-width: 100%; height: auto; background: var(--surface-soft); border-radius: 10px; }
 .notion-content figcaption { margin-top: 8px; color: var(--muted); font: 11px/1.5 ui-sans-serif, sans-serif; }
+.notion-heic-image { min-height: 220px; }
+.notion-image-state { display: grid; min-height: 220px; place-items: center; color: var(--muted); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 10px; font: 12px/1.5 ui-sans-serif, sans-serif; }
 .callout { display: flex; gap: 14px; margin: 26px 0; padding: 18px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 10px; }
 .notion-toggle { margin: 10px 0; padding: 4px 0; }
 .notion-toggle>summary { cursor: pointer; color: var(--ink); font-weight: 650; list-style-position: outside; }
