@@ -19,7 +19,12 @@ interface ExecutionContext { waitUntil(promise: Promise<unknown>): void; passThr
 const DEFAULT_DATA_SOURCE_ID = "fffad771-48f4-81f5-be17-000b319f85ad";
 const NOTION_VERSION = "2026-03-11";
 const NOTION_IMAGE_HOSTS = new Set(["prod-files-secure.s3.us-west-2.amazonaws.com"]);
+const BROWSER_IMAGE_TYPES = new Set(["image/avif", "image/jpeg", "image/png", "image/webp"]);
 const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
+
+type CloudflareImageFetchInit = RequestInit & {
+  cf: { image: { fit: "scale-down"; format: "webp"; quality: number; width: number } };
+};
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -27,7 +32,7 @@ const worker = {
     if (url.pathname === "/sitemap.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionSitemap(env));
     if (url.pathname === "/rss.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionRss(env));
     if (url.pathname === "/api/content/posts" && request.method === "GET") return notionPosts(env);
-    if (url.pathname === "/_notion/image" && (request.method === "GET" || request.method === "HEAD")) return notionImage(request, env);
+    if (url.pathname === "/_notion/image" && (request.method === "GET" || request.method === "HEAD")) return notionImage(request);
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
       const slug = decodeURIComponent(url.pathname.slice("/api/content/post/".length));
       return notionPost(env, slug, request);
@@ -62,26 +67,27 @@ const worker = {
   },
 };
 
-async function notionImage(request: Request, env: Env): Promise<Response> {
+async function notionImage(request: Request): Promise<Response> {
   const rawUrl = new URL(request.url).searchParams.get("url");
   let source: URL;
   try { source = new URL(rawUrl || ""); }
   catch { return error(400, "Invalid image URL"); }
   if (source.protocol !== "https:" || !NOTION_IMAGE_HOSTS.has(source.hostname)) return error(400, "Image host is not allowed");
-  const upstream = await fetch(source, { redirect: "manual" });
-  if (!upstream.ok || !upstream.body) return error(upstream.status || 502, "Image is temporarily unavailable");
-  if (!upstream.headers.get("content-type")?.toLocaleLowerCase().startsWith("image/")) return error(415, "Unsupported image response");
   try {
-    const transformed = await env.IMAGES.input(upstream.body).transform({ width: 2400 }).output({ format: "image/webp", quality: 86 });
-    const response = await transformed.response();
+    const response = await fetch(source, {
+      redirect: "manual",
+      cf: { image: { fit: "scale-down", format: "webp", quality: 86, width: 2400 } },
+    } as CloudflareImageFetchInit);
+    if (!response.ok || !response.body) return error(response.status || 502, "Image is temporarily unavailable");
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0].toLocaleLowerCase();
+    if (!contentType || !BROWSER_IMAGE_TYPES.has(contentType)) return error(502, "Image conversion failed");
     const headers = new Headers(response.headers);
-    headers.set("cache-control", "public, max-age=3600");
+    headers.set("cache-control", "public, max-age=3600, stale-while-revalidate=86400");
     headers.set("x-content-type-options", "nosniff");
     return request.method === "HEAD" ? new Response(null, { status: response.status, headers }) : new Response(response.body, { status: response.status, headers });
   } catch (reason) {
-    const detail = reason instanceof Error ? reason.message : "Notion image conversion failed";
-    console.error(detail);
-    return Response.json({ error: "Image conversion failed", detail: detail.replace(/https?:\/\/\S+/g, "[url]").slice(0, 180) }, { status: 502, headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    console.error(reason instanceof Error ? reason.message : "Notion image conversion failed");
+    return error(502, "Image conversion failed");
   }
 }
 
