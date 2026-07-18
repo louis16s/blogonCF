@@ -79,8 +79,9 @@ async function notionImage(request: Request, env: Env): Promise<Response> {
     headers.set("x-content-type-options", "nosniff");
     return request.method === "HEAD" ? new Response(null, { status: response.status, headers }) : new Response(response.body, { status: response.status, headers });
   } catch (reason) {
-    console.error(reason instanceof Error ? reason.message : "Notion image conversion failed");
-    return error(502, "Image conversion failed");
+    const detail = reason instanceof Error ? reason.message : "Notion image conversion failed";
+    console.error(detail);
+    return Response.json({ error: "Image conversion failed", detail: detail.replace(/https?:\/\/\S+/g, "[url]").slice(0, 180) }, { status: 502, headers: { ...jsonHeaders, "cache-control": "no-store" } });
   }
 }
 
