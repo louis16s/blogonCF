@@ -3,12 +3,21 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import type { ContentBlock, Post } from "../data/types";
 
-export function ArticleClient({ slug }: { slug: string }) {
-  const [post, setPost] = useState<Post | undefined>();
-  const [blocks, setBlocks] = useState<ContentBlock[]>([]);
-  const [locked, setLocked] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+type ArticleClientProps = {
+  slug: string;
+  initialPost?: Post;
+  initialBlocks?: ContentBlock[];
+  initialLocked?: boolean;
+  initialFetched?: boolean;
+  initialError?: string;
+};
+
+export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLocked = false, initialFetched = false, initialError = "" }: ArticleClientProps) {
+  const [post, setPost] = useState<Post | undefined>(initialPost);
+  const [blocks, setBlocks] = useState<ContentBlock[]>(initialBlocks);
+  const [locked, setLocked] = useState(initialLocked);
+  const [loading, setLoading] = useState(!initialFetched);
+  const [error, setError] = useState(initialError);
   const passwordRef = useRef("");
 
   const load = (password?: string) => {

@@ -22,8 +22,8 @@ const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-cont
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/sitemap.xml" && request.method === "GET") return notionSitemap(env);
-    if (url.pathname === "/rss.xml" && request.method === "GET") return notionRss(env);
+    if (url.pathname === "/sitemap.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionSitemap(env));
+    if (url.pathname === "/rss.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionRss(env));
     if (url.pathname === "/api/content/posts" && request.method === "GET") return notionPosts(env);
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
       const slug = decodeURIComponent(url.pathname.slice("/api/content/post/".length));
@@ -214,6 +214,10 @@ function normalizeBlock(raw: any): any | null {
 }
 
 function escapeXml(value: string) { return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[char] || char)); }
+
+function withHead(request: Request, response: Response) {
+  return request.method === "HEAD" ? new Response(null, { status: response.status, headers: response.headers }) : response;
+}
 
 function error(status: number, message: string) { return Response.json({ error: message }, { status, headers: { ...jsonHeaders, "cache-control": "no-store" } }); }
 function notionError(reason: unknown) {

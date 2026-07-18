@@ -68,6 +68,45 @@ test("overview limits each category to one card row without limiting search or c
   assert.match(blog, /post\.tags/);
 });
 
+test("article raw HTML contains live title, summary, and public Notion content", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    assert.match(String(input), /https:\/\/bblog\.530555\.xyz\/api\/content\/post\/Penang$/);
+    return Response.json({
+      post: { id: "penang", title: "2026槟城", slug: "Penang", summary: "南洋旧梦", category: "旅行游记", tags: ["旅行"], date: "2026-07-12", locked: false },
+      locked: false,
+      blocks: [{ id: "paragraph", type: "paragraph", richText: [{ text: "服务端正文内容" }] }],
+    });
+  };
+  try {
+    const response = await worker.fetch(new Request("http://localhost/blog/Penang", { headers: { accept: "text/html" } }), { ASSETS: assets }, context);
+    const html = await response.text();
+    assert.match(html, /<title>2026槟城 · louis16s&#x27; blog<\/title>/);
+    assert.match(html, /<meta name="description" content="南洋旧梦"/);
+    assert.match(html, /<h1>2026槟城<\/h1>/);
+    assert.match(html, /服务端正文内容/);
+    assert.doesNotMatch(html, /正在从 Notion 读取文章/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("locked article raw HTML renders only its password gate", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    post: { id: "locked", title: "私密文章", slug: "private", summary: "公开摘要", category: "输入密码", tags: [], date: "2026-01-01", locked: true },
+    locked: true,
+    blocks: [{ id: "secret", type: "paragraph", richText: [{ text: "绝密正文不得泄露" }] }],
+  });
+  try {
+    const response = await worker.fetch(new Request("http://localhost/blog/private", { headers: { accept: "text/html" } }), { ASSETS: assets }, context);
+    const html = await response.text();
+    assert.match(html, /<title>私密文章 · louis16s&#x27; blog<\/title>/);
+    assert.match(html, /这篇文章需要密码/);
+    assert.doesNotMatch(html, /绝密正文不得泄露/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("content endpoint follows Notion pagination cursors", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
@@ -94,6 +133,10 @@ test("sitemap is generated from current Published posts and safely degrades", as
   const safeXml = await safe.text();
   assert.match(safeXml, /https:\/\/bblog\.530555\.xyz\/<\/loc>/);
   assert.doesNotMatch(safeXml, /\/blog\//);
+  const head = await worker.fetch(new Request("http://localhost/sitemap.xml", { method: "HEAD" }), { ASSETS: assets }, context);
+  assert.equal(head.status, 200);
+  assert.match(head.headers.get("content-type"), /application\/xml/);
+  assert.equal(await head.text(), "");
 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => Response.json({ results: [{ id: "sitemap-page", properties: {
@@ -114,6 +157,10 @@ test("RSS is generated from current Published posts and safely degrades", async 
   assert.equal(safe.status, 200);
   assert.match(safe.headers.get("content-type"), /application\/rss\+xml/);
   assert.doesNotMatch(await safe.text(), /<item>/);
+  const head = await worker.fetch(new Request("http://localhost/rss.xml", { method: "HEAD" }), { ASSETS: assets }, context);
+  assert.equal(head.status, 200);
+  assert.match(head.headers.get("content-type"), /application\/rss\+xml/);
+  assert.equal(await head.text(), "");
 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => Response.json({ results: [{ id: "rss-page", created_time: "2026-01-01T00:00:00Z", properties: {
