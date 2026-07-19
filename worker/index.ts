@@ -10,6 +10,7 @@ interface Env {
   DB?: D1Database;
   NOTION_TOKEN?: string;
   NOTION_DATA_SOURCE_ID?: string;
+  NOTION_CONFIG_DATA_SOURCE_ID?: string;
   IMAGES: {
     input(stream: ReadableStream): { transform(options: Record<string, unknown>): { output(options: { format: string; quality: number }): Promise<{ response(): Response }> } };
   };
@@ -17,6 +18,7 @@ interface Env {
 interface ExecutionContext { waitUntil(promise: Promise<unknown>): void; passThroughOnException(): void; }
 
 const DEFAULT_DATA_SOURCE_ID = "fffad771-48f4-81f5-be17-000b319f85ad";
+const DEFAULT_CONFIG_DATA_SOURCE_ID = "fffad771-48f4-8181-b48e-000b8cf60e1b";
 const NOTION_VERSION = "2026-03-11";
 const NOTION_IMAGE_HOSTS = new Set(["prod-files-secure.s3.us-west-2.amazonaws.com"]);
 const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
@@ -27,6 +29,7 @@ const worker = {
     if (url.pathname === "/sitemap.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionSitemap(env));
     if (url.pathname === "/rss.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionRss(env));
     if (url.pathname === "/api/content/posts" && request.method === "GET") return notionPosts(env);
+    if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
     if (url.pathname === "/_notion/image" && (request.method === "GET" || request.method === "HEAD")) return notionImage(request);
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
       const slug = decodeURIComponent(url.pathname.slice("/api/content/post/".length));
@@ -92,10 +95,18 @@ async function articlePayloadForRender(env: Env, slug: string, request: Request)
 async function notionPosts(env: Env): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   try {
-    const [pages, linkPages] = await Promise.all([queryPosts(env, undefined, 100), querySiteLinks(env)]);
+    const [pages, linkPages, config] = await Promise.all([queryPosts(env, undefined, 100), querySiteLinks(env), queryPublicSiteConfig(env).catch(() => defaultSiteConfig())]);
     const posts = pages.map(toPost).filter((post) => post.slug);
     const links = linkPages.map(toSiteLink).filter((link) => link.href && (link.external || link.kind === "rss"));
-    return Response.json({ posts, links, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    return Response.json({ posts, links, config, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+  } catch (reason) { return notionError(reason); }
+}
+
+async function notionSiteConfig(env: Env): Promise<Response> {
+  if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  try {
+    const config = await queryPublicSiteConfig(env);
+    return Response.json({ config, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -199,6 +210,14 @@ async function querySiteLinks(env: Env): Promise<any[]> {
   return Array.isArray(payload.results) ? payload.results : [];
 }
 
+async function queryPublicSiteConfig(env: Env) {
+  const payload = await notionFetch(env, `/data_sources/${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}/query`, {
+    method: "POST",
+    body: JSON.stringify({ page_size: 100 }),
+  });
+  return toPublicSiteConfig(Array.isArray(payload.results) ? payload.results : []);
+}
+
 async function getBlockChildren(env: Env, id: string, budget: { remaining: number }, depth: number): Promise<any[]> {
   if (depth > 5 || budget.remaining <= 0) return [];
   const output: any[] = [];
@@ -258,6 +277,21 @@ function toSiteLink(page: any) {
     external,
     kind: rss ? "rss" as const : "tool" as const,
   };
+}
+
+function defaultSiteConfig() { return { author: "louis16s", since: "2020" }; }
+
+function toPublicSiteConfig(pages: any[]) {
+  const config = defaultSiteConfig();
+  for (const page of pages) {
+    const properties = page.properties || {};
+    if (properties["启用"]?.checkbox === false) continue;
+    const key = title(properties["配置名"]).replaceAll("`", "").trim().toLocaleUpperCase();
+    const value = plain(properties["配置值"]).trim();
+    if (key === "AUTHOR" && value) config.author = value.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 80) || config.author;
+    if (key === "SINCE") config.since = value.match(/(?:19|20)\d{2}/)?.[0] || config.since;
+  }
+  return config;
 }
 
 function title(property: any): string { return richText(property?.title); }

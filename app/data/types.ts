@@ -20,6 +20,16 @@ export type SiteLink = {
   kind: "rss" | "tool";
 };
 
+export type SiteConfig = {
+  author: string;
+  since: string;
+};
+
+export const DEFAULT_SITE_CONFIG: SiteConfig = {
+  author: "louis16s",
+  since: "2020",
+};
+
 export type RichText = {
   text: string;
   href?: string;

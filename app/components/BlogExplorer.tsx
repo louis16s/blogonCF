@@ -3,10 +3,8 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
-  ArrowDown,
   ArrowSquareOut,
   Camera,
-  CaretDown,
   Code,
   FileText,
   Heart,
@@ -21,12 +19,12 @@ import {
   Wrench,
 } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
-import type { Post, SiteLink } from "../data/types";
+import { DEFAULT_SITE_CONFIG, type Post, type SiteConfig, type SiteLink } from "../data/types";
+import { ContentFooter } from "./ContentFooter";
 import { SiteSidebar } from "./SiteSidebar";
 
 const ALL = "全部";
 const RSS_LINK: SiteLink = { id: "rss", title: "RSS 订阅", href: "/rss.xml", summary: "订阅全部公开文章", external: false, kind: "rss" };
-type SortMode = "newest" | "oldest";
 const preferredCategories = ["心情随笔", "嵌入式开发", "小软件工程", "相机分享", "旅行游记", "输入密码"];
 
 const categoryIcons: Array<[RegExp, Icon]> = [
@@ -40,10 +38,10 @@ const categoryIcons: Array<[RegExp, Icon]> = [
 export function BlogExplorer() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [siteLinks, setSiteLinks] = useState<SiteLink[]>([]);
+  const [siteConfig, setSiteConfig] = useState<SiteConfig>(DEFAULT_SITE_CONFIG);
   const [syncState, setSyncState] = useState<"loading" | "live" | "unavailable">("loading");
   const [category, setCategory] = useState(ALL);
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<SortMode>("newest");
   const [dark, setDark] = useState(false);
 
   useEffect(() => {
@@ -62,8 +60,8 @@ export function BlogExplorer() {
     const controller = new AbortController();
     const refresh = () => fetch("/api/content/posts", { signal: controller.signal, cache: "no-store" })
       .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((data) => { if (Array.isArray(data.posts)) { setPosts(data.posts); setSiteLinks(Array.isArray(data.links) ? data.links : []); setSyncState("live"); } })
-      .catch(() => { setPosts([]); setSiteLinks([]); setSyncState("unavailable"); });
+      .then((data) => { if (Array.isArray(data.posts)) { setPosts(data.posts); setSiteLinks(Array.isArray(data.links) ? data.links : []); if (data.config?.author && data.config?.since) setSiteConfig(data.config); setSyncState("live"); } })
+      .catch(() => { setPosts([]); setSiteLinks([]); setSiteConfig(DEFAULT_SITE_CONFIG); setSyncState("unavailable"); });
     refresh();
     const timer = window.setInterval(refresh, 60_000);
     const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
@@ -85,11 +83,9 @@ export function BlogExplorer() {
   }, [posts]);
   const visible = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
-    return posts
-      .filter((post) => (category === ALL || post.category === category)
-        && (!needle || [post.title, post.summary, post.category, ...post.tags].join(" ").toLocaleLowerCase().includes(needle)))
-      .sort((a, b) => sort === "newest" ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date));
-  }, [posts, category, query, sort]);
+    return posts.filter((post) => (category === ALL || post.category === category)
+      && (!needle || [post.title, post.summary, post.category, ...post.tags].join(" ").toLocaleLowerCase().includes(needle)));
+  }, [posts, category, query]);
 
   const groups = useMemo(() => {
     const map = new Map<string, Post[]>();
@@ -109,7 +105,7 @@ export function BlogExplorer() {
 
   return (
     <div className="blog-frame">
-      <SiteSidebar categories={categories.slice(1)} activeCategory={category} onCategoryChange={selectCategory} />
+      <SiteSidebar categories={categories.slice(1)} activeCategory={category} onCategoryChange={selectCategory} siteConfig={siteConfig} />
 
       <main className="blog-main">
         <header className="blog-toolbar">
@@ -136,7 +132,6 @@ export function BlogExplorer() {
         <section className="resource-strip" aria-labelledby="resource-title">
           <div className="resource-heading">
             <div><p className="eyebrow">NOTION LINKS</p><h2 id="resource-title">工具与订阅</h2></div>
-            <p>同步 Notion 中的跳转菜单</p>
           </div>
           <div className="resource-list">
             {resources.map((link) => {
@@ -157,14 +152,6 @@ export function BlogExplorer() {
                 <button type="button" key={item} className={item === category ? "active" : ""} onClick={() => selectCategory(item)}>{item}</button>
               ))}
             </div>
-            <label className="sort-select">
-              <span className="sr-only">文章排序</span>
-              <select value={sort} onChange={(event) => setSort(event.target.value as SortMode)}>
-                <option value="newest">最新优先</option>
-                <option value="oldest">最早优先</option>
-              </select>
-              <CaretDown aria-hidden size={14} />
-            </label>
           </div>
 
           {groups.map(([name, items]) => (
@@ -184,10 +171,7 @@ export function BlogExplorer() {
           )}
         </section>
 
-        <footer id="about" className="content-footer">
-          <p>把经过的地方，留在这里。</p>
-          <a href="#archive">回到归档 <ArrowDown aria-hidden size={15} /></a>
-        </footer>
+        <ContentFooter id="about" siteConfig={siteConfig} />
       </main>
     </div>
   );

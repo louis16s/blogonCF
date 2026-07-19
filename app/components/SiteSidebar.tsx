@@ -8,14 +8,20 @@ import {
   Rss,
   TreeStructure,
 } from "@phosphor-icons/react";
+import type { SiteConfig } from "../data/types";
+import { useSiteConfig } from "./useSiteConfig";
 
 type SidebarProps = {
   categories?: string[];
   activeCategory?: string;
   onCategoryChange?: (category: string) => void;
+  siteConfig?: SiteConfig;
 };
 
-export function SiteSidebar({ categories = [], activeCategory, onCategoryChange }: SidebarProps) {
+export function SiteSidebar({ categories = [], activeCategory, onCategoryChange, siteConfig }: SidebarProps) {
+  const config = useSiteConfig(siteConfig);
+  const currentYear = new Date().getFullYear();
+  const years = config.since === String(currentYear) ? config.since : `${config.since}–${currentYear}`;
   return (
     <aside className="site-sidebar" aria-label="站点导航">
       <div className="sidebar-main">
@@ -54,7 +60,7 @@ export function SiteSidebar({ categories = [], activeCategory, onCategoryChange 
       </div>
 
       <div className="sidebar-footer">
-        <p>© louis16s 2020–{new Date().getFullYear()}</p>
+        <p>© {config.author} {years}</p>
         <p>Powered by <a href="https://www.notion.so" target="_blank" rel="noreferrer">Notion</a> &amp; Cloudflare</p>
       </div>
     </aside>

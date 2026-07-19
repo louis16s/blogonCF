@@ -56,7 +56,7 @@ test("client refresh failures clear previously verified list and article content
     readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(blog, /\.catch\(\(\) => \{ setPosts\(\[\]\); setSiteLinks\(\[\]\); setSyncState\("unavailable"\); \}\)/);
+  assert.match(blog, /\.catch\(\(\) => \{ setPosts\(\[\]\); setSiteLinks\(\[\]\); setSiteConfig\(DEFAULT_SITE_CONFIG\); setSyncState\("unavailable"\); \}\)/);
   assert.match(article, /passwordRef\.current = ""; setPost\(undefined\); setBlocks\(\[\]\); setLocked\(false\)/);
 });
 
@@ -77,6 +77,9 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(blog, /const visible = useMemo/);
   assert.match(blog, /category === ALL \|\| post\.category === category/);
   assert.match(blog, /post\.tags/);
+  assert.doesNotMatch(blog, /SortMode|最新优先|最早优先|sort-select/);
+  assert.doesNotMatch(blog, /同步 Notion 中的跳转菜单/);
+  assert.match(blog, /<ContentFooter id="about" siteConfig=\{siteConfig\}/);
 });
 
 test("article raw HTML contains live title, summary, and public Notion content", async () => {
@@ -144,7 +147,8 @@ test("content endpoint follows Notion pagination cursors", async () => {
   const page = (id, slug) => ({ id, created_time: "2026-01-01T00:00:00Z", properties: {
     title: { title: [{ plain_text: slug }] }, slug: { rich_text: [{ plain_text: slug }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
   } });
-  globalThis.fetch = async (_input, init) => {
+  globalThis.fetch = async (input, init) => {
+    if (String(input).includes("fffad771-48f4-8181-b48e-000b8cf60e1b")) return Response.json({ results: [], has_more: false });
     const body = JSON.parse(init.body);
     if (body.filter.and.some((item) => item.or)) return Response.json({ results: [], has_more: false });
     bodies.push(body);
@@ -277,8 +281,13 @@ test("content endpoint maps only the filtered Notion response and disables cachi
   const originalFetch = globalThis.fetch;
   let requestBody;
   globalThis.fetch = async (input, init) => {
-    assert.match(String(input), /\/v1\/data_sources\/source-id\/query$/);
     assert.equal(init.headers.authorization, "Bearer test-token");
+    if (String(input).includes("fffad771-48f4-8181-b48e-000b8cf60e1b")) return Response.json({ results: [
+      { id: "author", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "Notion 作者" }] }, "其他私密项": { rich_text: [{ plain_text: "不得输出" }] } } },
+      { id: "since", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "`SINCE`" }] }, "配置值": { rich_text: [{ plain_text: "始于 2019 年" }] } } },
+      { id: "disabled", properties: { "启用": { checkbox: false }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "禁用作者" }] } } },
+    ] });
+    assert.match(String(input), /\/v1\/data_sources\/source-id\/query$/);
     const body = JSON.parse(init.body);
     if (body.filter.and.some((item) => item.or)) return Response.json({ results: [
       { id: "rss", properties: { title: { title: [{ plain_text: "RSS" }] }, slug: { rich_text: [{ plain_text: "rss/feed.xml" }] }, summary: { rich_text: [{ plain_text: "订阅" }] }, icon: { rich_text: [] } } },
@@ -299,7 +308,28 @@ test("content endpoint maps only the filtered Notion response and disables cachi
     assert.equal(payload.posts[0].slug, "public-post");
     assert.deepEqual(payload.posts[0].tags, ["旅行"]);
     assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://hd.530555.xyz", "tool"]]);
+    assert.deepEqual(payload.config, { author: "Notion 作者", since: "2019" });
+    assert.doesNotMatch(JSON.stringify(payload), /不得输出|禁用作者/);
     assert.deepEqual(requestBody.filter.and.map((item) => item.property), ["type", "status"]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("public config endpoint exposes only the AUTHOR and SINCE allowlist", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    assert.match(String(input), /\/v1\/data_sources\/config-source\/query$/);
+    return Response.json({ results: [
+      { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "louis16s" }] } } },
+      { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "SINCE" }] }, "配置值": { rich_text: [{ plain_text: "2020" }] } } },
+      { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "SECRET" }] }, "配置值": { rich_text: [{ plain_text: "never-leak" }] } } },
+    ] });
+  };
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/config"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_CONFIG_DATA_SOURCE_ID: "config-source" }, context);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await response.json(), { config: { author: "louis16s", since: "2020" }, source: "notion" });
   } finally { globalThis.fetch = originalFetch; }
 });
 
