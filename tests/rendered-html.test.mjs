@@ -56,7 +56,7 @@ test("client refresh failures clear previously verified list and article content
     readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(blog, /\.catch\(\(\) => \{ setPosts\(\[\]\); setSyncState\("unavailable"\); \}\)/);
+  assert.match(blog, /\.catch\(\(\) => \{ setPosts\(\[\]\); setSiteLinks\(\[\]\); setSyncState\("unavailable"\); \}\)/);
   assert.match(article, /passwordRef\.current = ""; setPost\(undefined\); setBlocks\(\[\]\); setLocked\(false\)/);
 });
 
@@ -69,9 +69,11 @@ test("HEIC decoding survives signed URL refreshes without repeated work", async 
   assert.match(article, /if \(skipInitialRefresh\.current\) skipInitialRefresh\.current = false/);
 });
 
-test("overview limits each category to one card row without limiting search or category results", async () => {
+test("overview renders every article immediately while retaining search and category filters", async () => {
   const blog = await readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8");
-  assert.match(blog, /category === ALL && !query\.trim\(\) \? items\.slice\(0, 4\) : items/);
+  assert.doesNotMatch(blog, /items\.slice\(/);
+  assert.match(blog, /\{items\.map\(\(post, index\)/);
+  assert.match(blog, /工具与订阅/);
   assert.match(blog, /const visible = useMemo/);
   assert.match(blog, /category === ALL \|\| post\.category === category/);
   assert.match(blog, /post\.tags/);
@@ -143,7 +145,9 @@ test("content endpoint follows Notion pagination cursors", async () => {
     title: { title: [{ plain_text: slug }] }, slug: { rich_text: [{ plain_text: slug }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
   } });
   globalThis.fetch = async (_input, init) => {
-    const body = JSON.parse(init.body); bodies.push(body);
+    const body = JSON.parse(init.body);
+    if (body.filter.and.some((item) => item.or)) return Response.json({ results: [], has_more: false });
+    bodies.push(body);
     return bodies.length === 1 ? Response.json({ results: [page("a", "a")], has_more: true, next_cursor: "cursor-2" }) : Response.json({ results: [page("b", "b")], has_more: false });
   };
   try {
@@ -275,7 +279,13 @@ test("content endpoint maps only the filtered Notion response and disables cachi
   globalThis.fetch = async (input, init) => {
     assert.match(String(input), /\/v1\/data_sources\/source-id\/query$/);
     assert.equal(init.headers.authorization, "Bearer test-token");
-    requestBody = JSON.parse(init.body);
+    const body = JSON.parse(init.body);
+    if (body.filter.and.some((item) => item.or)) return Response.json({ results: [
+      { id: "rss", properties: { title: { title: [{ plain_text: "RSS" }] }, slug: { rich_text: [{ plain_text: "rss/feed.xml" }] }, summary: { rich_text: [{ plain_text: "订阅" }] }, icon: { rich_text: [] } } },
+      { id: "tool", icon: { type: "emoji", emoji: "👾" }, properties: { title: { title: [{ plain_text: "超焦距" }] }, slug: { rich_text: [{ plain_text: "https://hd.530555.xyz" }] }, summary: { rich_text: [{ plain_text: "跳转hd" }] }, icon: { rich_text: [] } } },
+      { id: "broken", properties: { title: { title: [{ plain_text: "资讯" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
+    ] });
+    requestBody = body;
     return Response.json({ results: [{ id: "page-1", created_time: "2026-01-01T00:00:00Z", icon: { type: "emoji", emoji: "✦" }, properties: {
       title: { title: [{ plain_text: "公开文章" }] }, slug: { rich_text: [{ plain_text: "public-post" }] }, summary: { rich_text: [{ plain_text: "摘要" }] },
       category: { select: { name: "旅行游记" } }, tags: { multi_select: [{ name: "旅行" }] }, date: { date: { start: "2026-01-02" } }, password: { rich_text: [] },
@@ -288,6 +298,7 @@ test("content endpoint maps only the filtered Notion response and disables cachi
     const payload = await response.json();
     assert.equal(payload.posts[0].slug, "public-post");
     assert.deepEqual(payload.posts[0].tags, ["旅行"]);
+    assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://hd.530555.xyz", "tool"]]);
     assert.deepEqual(requestBody.filter.and.map((item) => item.property), ["type", "status"]);
   } finally { globalThis.fetch = originalFetch; }
 });

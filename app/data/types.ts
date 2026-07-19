@@ -10,6 +10,16 @@ export type Post = {
   locked?: boolean;
 };
 
+export type SiteLink = {
+  id: string;
+  title: string;
+  href: string;
+  summary: string;
+  icon?: string;
+  external: boolean;
+  kind: "rss" | "tool";
+};
+
 export type RichText = {
   text: string;
   href?: string;

@@ -92,9 +92,10 @@ async function articlePayloadForRender(env: Env, slug: string, request: Request)
 async function notionPosts(env: Env): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   try {
-    const pages = await queryPosts(env, undefined, 100);
+    const [pages, linkPages] = await Promise.all([queryPosts(env, undefined, 100), querySiteLinks(env)]);
     const posts = pages.map(toPost).filter((post) => post.slug);
-    return Response.json({ posts, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    const links = linkPages.map(toSiteLink).filter((link) => link.href && (link.external || link.kind === "rss"));
+    return Response.json({ posts, links, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -180,6 +181,24 @@ async function queryPosts(env: Env, slug?: string, pageSize = 100): Promise<any[
   return results;
 }
 
+async function querySiteLinks(env: Env): Promise<any[]> {
+  const payload = await notionFetch(env, `/data_sources/${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID}/query`, {
+    method: "POST",
+    body: JSON.stringify({
+      filter: { and: [
+        { property: "status", select: { equals: "Published" } },
+        { or: [
+          { property: "type", select: { equals: "Menu" } },
+          { property: "type", select: { equals: "SubMenu" } },
+        ] },
+      ] },
+      sorts: [{ property: "date", direction: "descending" }],
+      page_size: 100,
+    }),
+  });
+  return Array.isArray(payload.results) ? payload.results : [];
+}
+
 async function getBlockChildren(env: Env, id: string, budget: { remaining: number }, depth: number): Promise<any[]> {
   if (depth > 5 || budget.remaining <= 0) return [];
   const output: any[] = [];
@@ -221,6 +240,23 @@ function toPost(page: any) {
     date: properties.date?.date?.start || page.created_time?.slice(0, 10) || "",
     icon: page.icon?.type === "emoji" ? page.icon.emoji : plain(properties.icon),
     locked: Boolean(plain(properties.password)),
+  };
+}
+
+function toSiteLink(page: any) {
+  const properties = page.properties || {};
+  const slug = plain(properties.slug).trim();
+  const external = /^https?:\/\//i.test(slug);
+  const rss = /^\/?rss(?:\/feed\.xml|\.xml)?\/?$/i.test(slug);
+  const href = external ? slug : rss ? "/rss.xml" : "";
+  return {
+    id: page.id,
+    title: (title(properties.title) || "未命名链接").replace(/_+$/, ""),
+    href,
+    summary: plain(properties.summary),
+    icon: page.icon?.type === "emoji" ? page.icon.emoji : plain(properties.icon),
+    external,
+    kind: rss ? "rss" as const : "tool" as const,
   };
 }
 

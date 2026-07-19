@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDown,
+  ArrowSquareOut,
   Camera,
   CaretDown,
   Code,
@@ -13,15 +14,18 @@ import {
   MagnifyingGlass,
   MapTrifold,
   Moon,
+  Rss,
   Sparkle,
   Sun,
+  Toolbox,
   Wrench,
 } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
-import type { Post } from "../data/types";
+import type { Post, SiteLink } from "../data/types";
 import { SiteSidebar } from "./SiteSidebar";
 
 const ALL = "全部";
+const RSS_LINK: SiteLink = { id: "rss", title: "RSS 订阅", href: "/rss.xml", summary: "订阅全部公开文章", external: false, kind: "rss" };
 type SortMode = "newest" | "oldest";
 const preferredCategories = ["心情随笔", "嵌入式开发", "小软件工程", "相机分享", "旅行游记", "输入密码"];
 
@@ -35,6 +39,7 @@ const categoryIcons: Array<[RegExp, Icon]> = [
 
 export function BlogExplorer() {
   const [posts, setPosts] = useState<Post[]>([]);
+  const [siteLinks, setSiteLinks] = useState<SiteLink[]>([]);
   const [syncState, setSyncState] = useState<"loading" | "live" | "unavailable">("loading");
   const [category, setCategory] = useState(ALL);
   const [query, setQuery] = useState("");
@@ -57,8 +62,8 @@ export function BlogExplorer() {
     const controller = new AbortController();
     const refresh = () => fetch("/api/content/posts", { signal: controller.signal, cache: "no-store" })
       .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((data) => { if (Array.isArray(data.posts)) { setPosts(data.posts); setSyncState("live"); } })
-      .catch(() => { setPosts([]); setSyncState("unavailable"); });
+      .then((data) => { if (Array.isArray(data.posts)) { setPosts(data.posts); setSiteLinks(Array.isArray(data.links) ? data.links : []); setSyncState("live"); } })
+      .catch(() => { setPosts([]); setSiteLinks([]); setSyncState("unavailable"); });
     refresh();
     const timer = window.setInterval(refresh, 60_000);
     const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
@@ -95,6 +100,8 @@ export function BlogExplorer() {
     return Array.from(map.entries()).sort(([a], [b]) => categories.indexOf(a) - categories.indexOf(b));
   }, [visible, categories]);
 
+  const resources = useMemo(() => [RSS_LINK, ...siteLinks.filter((link) => link.kind === "tool")], [siteLinks]);
+
   const selectCategory = (value: string) => {
     setCategory(value);
     window.requestAnimationFrame(() => document.getElementById("archive")?.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -109,7 +116,7 @@ export function BlogExplorer() {
           <div className="welcome-block">
             <p className="welcome"><Sparkle aria-hidden size={19} weight="fill" />blog 复活啦！是新的一年真好啊，绝胜烟柳满皇都！</p>
             <div className="sync-meta">
-              <span>{syncState === "live" ? `${posts.length} 篇公开文章` : syncState === "loading" ? "正在读取公开文章" : "内容源暂时不可用"}</span>
+              <span>{syncState === "live" ? `${posts.length} 篇公开文章 · 首页全部展开` : syncState === "loading" ? "正在读取公开文章" : "内容源暂时不可用"}</span>
               <span className={`source ${syncState === "live" ? "live" : ""}`}>{syncState === "live" ? "Notion 实时同步" : syncState === "loading" ? "正在同步" : "同步中断"}</span>
             </div>
           </div>
@@ -125,6 +132,23 @@ export function BlogExplorer() {
             </button>
           </div>
         </header>
+
+        <section className="resource-strip" aria-labelledby="resource-title">
+          <div className="resource-heading">
+            <div><p className="eyebrow">NOTION LINKS</p><h2 id="resource-title">工具与订阅</h2></div>
+            <p>同步 Notion 中的跳转菜单</p>
+          </div>
+          <div className="resource-list">
+            {resources.map((link) => {
+              const ResourceIcon = link.kind === "rss" ? Rss : Toolbox;
+              return <a className="resource-card" href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id}>
+                <ResourceIcon aria-hidden size={22} weight="duotone" />
+                <span><strong>{link.title}</strong><small>{link.summary || (link.kind === "rss" ? "订阅全部公开文章" : "打开外部小工具")}</small></span>
+                <ArrowSquareOut aria-hidden size={16} />
+              </a>;
+            })}
+          </div>
+        </section>
 
         <section className="archive-shell" id="archive" aria-label="文章归档">
           <div className="filter-row">
@@ -147,7 +171,7 @@ export function BlogExplorer() {
             <section className="category-section" key={name} aria-labelledby={`category-${slugify(name)}`}>
               <h2 id={`category-${slugify(name)}`}>#&nbsp; {name}</h2>
               <div className="post-grid">
-                {(category === ALL && !query.trim() ? items.slice(0, 4) : items).map((post, index) => <PostCard post={post} index={index} key={post.id} />)}
+                {items.map((post, index) => <PostCard post={post} index={index} key={post.id} />)}
               </div>
             </section>
           ))}
