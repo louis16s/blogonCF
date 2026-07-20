@@ -3,6 +3,7 @@ import type { ContentBlock, Post } from "../app/data/types";
 export type ArticlePayload = {
   post?: Post;
   blocks?: ContentBlock[];
+  truncated?: boolean;
   locked?: boolean;
   error?: string;
   status?: number;

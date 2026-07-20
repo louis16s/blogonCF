@@ -25,19 +25,22 @@ type ArticleClientProps = {
   initialLocked?: boolean;
   initialFetched?: boolean;
   initialError?: string;
+  initialTruncated?: boolean;
 };
 
-export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLocked = false, initialFetched = false, initialError = "" }: ArticleClientProps) {
+export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false }: ArticleClientProps) {
   const [post, setPost] = useState<Post | undefined>(initialPost);
   const [blocks, setBlocks] = useState<ContentBlock[]>(initialBlocks);
   const [locked, setLocked] = useState(initialLocked);
   const [loading, setLoading] = useState(!initialFetched);
   const [error, setError] = useState(initialError);
+  const [truncated, setTruncated] = useState(initialTruncated);
   const [childTrail, setChildTrail] = useState<ChildPage[]>([]);
   const [childLoading, setChildLoading] = useState(false);
   const [childError, setChildError] = useState("");
   const passwordRef = useRef("");
   const childIdRef = useRef("");
+  const childTrailRef = useRef<ChildPage[]>([]);
   const childRequestRef = useRef<AbortController | null>(null);
   const skipInitialRefresh = useRef(initialFetched);
 
@@ -50,7 +53,7 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
     fetch("/api/content/child", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ slug, pageId, password }),
+      body: JSON.stringify({ slug, pageId, password, trail: childTrailRef.current.map((item) => item.id) }),
       signal: controller.signal,
     })
       .then(async (response) => {
@@ -59,7 +62,9 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
         childIdRef.current = data.child.id;
         setChildTrail((current) => {
           const previous = current.findIndex((item) => item.id === data.child.id);
-          return previous >= 0 ? current.slice(0, previous + 1) : [...current, data.child];
+          const next = previous >= 0 ? current.slice(0, previous + 1) : [...current, data.child];
+          childTrailRef.current = next;
+          return next;
         });
         if (updateHistory) {
           const url = new URL(window.location.href);
@@ -78,7 +83,7 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
         if (password && !data.locked) passwordRef.current = password;
-        setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []);
+        setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setTruncated(Boolean(data.truncated));
       })
       .catch((reason) => setError(reason.message || "文章暂时无法读取"))
       .finally(() => setLoading(false));
@@ -92,7 +97,7 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
-        setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []);
+        setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setTruncated(Boolean(data.truncated));
       })
       .catch((reason) => { if (reason.name !== "AbortError") { passwordRef.current = ""; setPost(undefined); setBlocks([]); setLocked(false); setError(reason.message || "文章不存在、已撤回或暂时无法读取"); } })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
@@ -108,8 +113,16 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
   useEffect(() => {
     const syncChildFromUrl = () => {
       const pageId = new URL(window.location.href).searchParams.get("child");
-      if (!pageId) { childIdRef.current = ""; setChildTrail([]); setChildError(""); return; }
-      if (!locked && post && childIdRef.current !== pageId) loadChild(pageId, undefined, false);
+      if (!pageId) { childIdRef.current = ""; childTrailRef.current = []; setChildTrail([]); setChildError(""); return; }
+      if (!locked && post && childIdRef.current !== pageId) {
+        const previous = childTrailRef.current.findIndex((item) => item.id === pageId);
+        if (previous >= 0) {
+          const next = childTrailRef.current.slice(0, previous + 1);
+          childTrailRef.current = next;
+          childIdRef.current = pageId;
+          setChildTrail(next);
+        } else loadChild(pageId, undefined, false);
+      }
     };
     syncChildFromUrl();
     window.addEventListener("popstate", syncChildFromUrl);
@@ -124,6 +137,7 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
       const url = new URL(window.location.href);
       const previous = next.at(-1);
       childIdRef.current = previous?.id || "";
+      childTrailRef.current = next;
       if (previous) url.searchParams.set("child", previous.id);
       else url.searchParams.delete("child");
       window.history.replaceState(previous ? { child: previous.id } : {}, "", url);
@@ -137,7 +151,7 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
 
   return <>
     <header className="article-head"><p className="eyebrow">{post.category} · {post.date}</p><h1>{post.title}</h1><p>{post.summary}</p><div className="tags">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div></header>
-    {locked ? <PasswordForm onSubmit={load} error={error} /> : childTrail.length ? <ChildDocument child={childTrail.at(-1)!} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} loading={childLoading} error={childError} /> : blocks.length ? <div className="notion-content"><Blocks blocks={blocks} onOpenChild={loadChild} />{childLoading ? <p className="child-page-status" role="status">正在读取子页面…</p> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
+    {locked ? <PasswordForm onSubmit={load} error={error} /> : childTrail.length ? <ChildDocument child={childTrail.at(-1)!} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} loading={childLoading} error={childError} /> : blocks.length ? <div className="notion-content"><Blocks blocks={blocks} onOpenChild={loadChild} />{truncated ? <ContentLimitNotice /> : null}{childLoading ? <p className="child-page-status" role="status">正在读取子页面…</p> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
   </>;
 }
 
@@ -146,9 +160,14 @@ function ChildDocument({ child, parentTitle, onBack, onOpenChild, loading, error
     <nav className="child-document-nav" aria-label="子页面导航"><button type="button" onClick={onBack}><ArrowLeft aria-hidden size={16} />返回 {parentTitle}</button><span>Notion 子页面</span></nav>
     <header className="child-document-head"><p className="eyebrow">PRIVATE SUBPAGE</p><h2 id={`child-${child.id}`}>{child.icon ? <span aria-hidden>{child.icon}</span> : null}{child.title}</h2></header>
     <div className="notion-content"><Blocks blocks={child.blocks} onOpenChild={onOpenChild} /></div>
+    {child.truncated ? <ContentLimitNotice /> : null}
     {loading ? <p className="child-page-status" role="status">正在读取子页面…</p> : null}
     {error ? <p className="child-page-error" role="alert">{error}</p> : null}
   </section>;
+}
+
+function ContentLimitNotice() {
+  return <p className="content-limit-notice" role="status">这篇 Notion 内容超出单次同步上限，当前页面可能未完整显示。请稍后重试或拆分页面。</p>;
 }
 
 function PasswordForm({ onSubmit, error }: { onSubmit: (value: string) => void; error: string }) {
@@ -195,7 +214,7 @@ function Rich({ value = [], onOpenChild }: { value?: ContentBlock["richText"]; o
 function notionPageIdFromHref(href: string): string {
   try {
     const url = new URL(href);
-    if (!/(^|\.)notion\.(?:so|site)$/i.test(url.hostname)) return "";
+    if (!/(^|\.)notion\.(?:so|site|com)$/i.test(url.hostname)) return "";
     const match = url.pathname.replaceAll("-", "").match(/([a-f0-9]{32})(?:\/)?$/i);
     if (!match) return "";
     const id = match[1].toLocaleLowerCase();

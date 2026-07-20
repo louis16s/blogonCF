@@ -60,4 +60,5 @@ export type ChildPage = {
   title: string;
   icon?: string;
   blocks: ContentBlock[];
+  truncated?: boolean;
 };

@@ -51,6 +51,37 @@ test("server-renders a safe loading state without stale Notion content", async (
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/);
 });
 
+test("homepage raw HTML contains the live Notion article index, tools, and footer config", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    const body = String(init.body || "");
+    if (url.includes("/data_sources/config-source/query")) return Response.json({ results: [
+      { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "测试作者" }] } } },
+      { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "SINCE" }] }, "配置值": { rich_text: [{ plain_text: "2021" }] } } },
+    ] });
+    if (body.includes('"Menu"')) return Response.json({ results: [{ id: "menu", icon: { type: "emoji", emoji: "🧰" }, properties: {
+      title: { title: [{ plain_text: "测试工具" }] }, slug: { rich_text: [{ plain_text: "https://tool.example" }] }, summary: { rich_text: [{ plain_text: "外部工具" }] },
+    } }] });
+    return Response.json({ results: [
+      { id: "penang", properties: { title: { title: [{ plain_text: "2026槟城" }] }, slug: { rich_text: [{ plain_text: "Penang" }] }, summary: { rich_text: [] }, category: { select: { name: "旅行游记" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] } } },
+      { id: "locked", properties: { title: { title: [{ plain_text: "Y-1" }] }, slug: { rich_text: [{ plain_text: "Y-1" }] }, summary: { rich_text: [] }, category: { select: { name: "输入密码" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "hidden" }] } } },
+      { id: "77777777-7777-4777-8777-777777777777", properties: { title: { title: [{ plain_text: "nikon F3p" }] }, slug: { rich_text: [] }, summary: { rich_text: [] }, category: { select: { name: "相机分享" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] } } },
+    ] });
+  };
+  try {
+    const response = await worker.fetch(new Request("http://localhost/", { headers: { accept: "text/html" } }), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id", NOTION_CONFIG_DATA_SOURCE_ID: "config-source" }, context);
+    const html = await response.text();
+    assert.match(html, /2026槟城/);
+    assert.match(html, /Y-1/);
+    assert.match(html, /nikon F3p/);
+    assert.match(html, /测试工具/);
+    assert.match(html, /测试作者/);
+    assert.match(html, /2021/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("client refresh failures clear previously verified list and article content", async () => {
   const [blog, article] = await Promise.all([
     readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8"),
@@ -415,6 +446,9 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
   const childId = "11111111-1111-4111-8111-111111111111";
   const nestedId = "66666666-6666-4666-8666-666666666666";
   const intermediateId = "99999999-9999-4999-8999-999999999999";
+  const referencedId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const nestedReferenceId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const richReferenceId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
   const outsideId = "33333333-3333-4333-8333-333333333333";
   let childBlockRequests = 0;
   globalThis.fetch = async (input) => {
@@ -422,6 +456,9 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     if (url.includes(`/pages/${childId}`)) return Response.json({ id: childId, parent: { type: "page_id", page_id: parentId }, icon: { type: "emoji", emoji: "📖" }, properties: { title: { type: "title", title: [{ plain_text: "第一章" }] } } });
     if (url.includes(`/pages/${nestedId}`)) return Response.json({ id: nestedId, parent: { type: "page_id", page_id: intermediateId }, properties: { title: { type: "title", title: [{ plain_text: "嵌套章节" }] } } });
     if (url.includes(`/pages/${intermediateId}`)) return Response.json({ id: intermediateId, parent: { type: "page_id", page_id: parentId }, properties: { title: { type: "title", title: [{ plain_text: "中间章节" }] } } });
+    if (url.includes(`/pages/${referencedId}`)) return Response.json({ id: referencedId, parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "同步块引用页" }] } } });
+    if (url.includes(`/pages/${nestedReferenceId}`)) return Response.json({ id: nestedReferenceId, parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "引用页的下一级" }] } } });
+    if (url.includes(`/pages/${richReferenceId}`)) return Response.json({ id: richReferenceId, parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "富文本引用页" }] } } });
     if (url.includes(`/pages/${outsideId}`)) return Response.json({ id: outsideId, parent: { type: "page_id", page_id: "44444444-4444-4444-8444-444444444444" }, properties: { title: { type: "title", title: [{ plain_text: "不属于本文" }] } } });
     if (url.includes(`/pages/44444444-4444-4444-8444-444444444444`)) return Response.json({ id: "44444444-4444-4444-8444-444444444444", parent: { type: "workspace", workspace: true }, properties: {} });
     if (url.includes(`/blocks/${childId}/children`)) {
@@ -429,6 +466,13 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
       return Response.json({ results: [{ id: "child-paragraph", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: "站内子页面正文", annotations: {} }] } }], has_more: false });
     }
     if (url.includes(`/blocks/${nestedId}/children`)) { childBlockRequests++; return Response.json({ results: [], has_more: false }); }
+    if (url.includes(`/blocks/${parentId}/children`)) return Response.json({ results: [
+      { id: referencedId, type: "child_page", has_children: true, child_page: { title: "同步块引用页" } },
+      { id: "rich-link", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: "富文本引用", href: `https://app.notion.com/p/${richReferenceId.replaceAll("-", "")}`, annotations: {} }] } },
+    ], has_more: false });
+    if (url.includes(`/blocks/${referencedId}/children`)) { childBlockRequests++; return Response.json({ results: [{ id: nestedReferenceId, type: "child_page", has_children: true, child_page: { title: "引用页的下一级" } }], has_more: false }); }
+    if (url.includes(`/blocks/${nestedReferenceId}/children`)) { childBlockRequests++; return Response.json({ results: [], has_more: false }); }
+    if (url.includes(`/blocks/${richReferenceId}/children`)) { childBlockRequests++; return Response.json({ results: [], has_more: false }); }
     return Response.json({ results: [{ id: parentId, properties: {
       title: { title: [{ plain_text: "目录文章" }] }, slug: { rich_text: [{ plain_text: "index" }] }, summary: { rich_text: [] }, category: { select: { name: "输入密码" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "correct" }] },
     } }] });
@@ -442,7 +486,7 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     const correct = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: childId, password: "correct" }) }), env, context);
     assert.equal(correct.status, 200);
     assert.equal(correct.headers.get("cache-control"), "no-store");
-    assert.deepEqual(await correct.json(), { child: { id: childId, title: "第一章", icon: "📖", blocks: [{ id: "child-paragraph", type: "paragraph", richText: [{ text: "站内子页面正文" }] }] } });
+    assert.deepEqual(await correct.json(), { child: { id: childId, title: "第一章", icon: "📖", blocks: [{ id: "child-paragraph", type: "paragraph", richText: [{ text: "站内子页面正文" }] }], truncated: false } });
     assert.equal(childBlockRequests, 1);
 
     const nested = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: nestedId, password: "correct" }) }), env, context);
@@ -450,9 +494,43 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     assert.equal((await nested.json()).child.id, nestedId, "nested ancestry must return the requested page rather than its intermediate parent");
     assert.equal(childBlockRequests, 2);
 
+    const referenced = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: referencedId, password: "correct" }) }), env, context);
+    assert.equal(referenced.status, 200, "a page explicitly referenced by unlocked parent blocks must remain available on-site");
+    assert.equal((await referenced.json()).child.title, "同步块引用页");
+
+    const nestedReference = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: nestedReferenceId, trail: [referencedId], password: "correct" }) }), env, context);
+    assert.equal(nestedReference.status, 200, "a nested referenced page must be authorized through the verified trail");
+    assert.equal((await nestedReference.json()).child.title, "引用页的下一级");
+
+    const richReference = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: richReferenceId, password: "correct" }) }), env, context);
+    assert.equal(richReference.status, 200, "a Notion page linked from rich text must remain available on-site");
+    assert.equal((await richReference.json()).child.title, "富文本引用页");
+
     const outside = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: outsideId, password: "correct" }) }), env, context);
     assert.equal(outside.status, 404);
-    assert.equal(childBlockRequests, 2, "non-descendant pages must never expose their blocks");
+    assert.equal(childBlockRequests, 6, "non-descendant and unreferenced pages must never expose their blocks");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("deep Notion content reports truncation instead of silently pretending to be complete", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    const match = url.match(/\/blocks\/(deep-root|deep-(\d+))\/children/);
+    if (match) {
+      const depth = match[1] === "deep-root" ? 0 : Number(match[2]) + 1;
+      const id = `deep-${depth}`;
+      return Response.json({ results: [{ id, type: "paragraph", has_children: true, paragraph: { rich_text: [{ plain_text: `第${depth}层`, annotations: {} }] } }], has_more: false });
+    }
+    return Response.json({ results: [{ id: "deep-root", properties: { title: { title: [{ plain_text: "深层文章" }] }, slug: { rich_text: [{ plain_text: "deep" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] } } }] });
+  };
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/post/deep"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).truncated, true);
+    const article = await readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8");
+    assert.match(article, /当前页面可能未完整显示/);
   } finally { globalThis.fetch = originalFetch; }
 });
 

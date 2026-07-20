@@ -163,11 +163,13 @@ button, select { color: inherit; }
 .child-document { padding-top: 35px; }
 .child-document-nav { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding-bottom: 20px; color: var(--muted); border-bottom: 1px solid var(--line); font-size: 12px; }
 .child-document-nav button { display: inline-flex; align-items: center; gap: 7px; padding: 0; color: inherit; background: transparent; border: 0; cursor: pointer; }
-.child-document-nav button:hover, .child-document-nav button:focus-visible { color: var(--ink); outline: none; }
+.child-document-nav button:hover { color: var(--ink); }
+.child-document-nav button:focus-visible { color: var(--ink); outline: 2px solid var(--ink); outline-offset: 5px; border-radius: 2px; }
 .child-document-head { padding: 42px 0 10px; }
 .child-document-head h2 { display: flex; align-items: center; gap: 11px; margin: 0; font-size: clamp(32px, 4vw, 52px); line-height: 1.12; letter-spacing: -.04em; }
 .child-page-status, .child-page-error { margin: 20px 0; padding: 13px 15px; color: var(--muted); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 9px; font: 12px/1.5 ui-sans-serif, sans-serif; }
 .child-page-error { color: #b94a48; border-color: color-mix(in srgb, #b94a48 24%, var(--line)); }
+.content-limit-notice { margin: 24px 0; padding: 14px 16px; color: #8a5a14; background: color-mix(in srgb, #f2b84b 12%, var(--surface-soft)); border: 1px solid color-mix(in srgb, #c48a2c 35%, var(--line)); border-radius: 9px; font: 13px/1.6 ui-sans-serif, sans-serif; }
 .notion-toc, .notion-breadcrumb { margin: 18px 0; color: var(--muted); font: 13px ui-sans-serif, sans-serif; }
 .equation { overflow: auto; margin: 24px 0; padding: 20px; text-align: center; background: var(--surface-soft); border-radius: 10px; font: italic 19px Georgia, serif; }
 .notion-table { overflow: auto; margin: 28px 0; border-top: 1px solid var(--line-strong); border-left: 1px solid var(--line); }

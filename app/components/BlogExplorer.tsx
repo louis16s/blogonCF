@@ -35,11 +35,11 @@ const categoryIcons: Array<[RegExp, Icon]> = [
   [/旅行|游记/, MapTrifold],
 ];
 
-export function BlogExplorer() {
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [siteLinks, setSiteLinks] = useState<SiteLink[]>([]);
-  const [siteConfig, setSiteConfig] = useState<SiteConfig>(DEFAULT_SITE_CONFIG);
-  const [syncState, setSyncState] = useState<"loading" | "live" | "unavailable">("loading");
+export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConfig = DEFAULT_SITE_CONFIG }: { initialPosts?: Post[]; initialLinks?: SiteLink[]; initialConfig?: SiteConfig }) {
+  const [posts, setPosts] = useState<Post[]>(initialPosts);
+  const [siteLinks, setSiteLinks] = useState<SiteLink[]>(initialLinks);
+  const [siteConfig, setSiteConfig] = useState<SiteConfig>(initialConfig);
+  const [syncState, setSyncState] = useState<"loading" | "live" | "unavailable">(initialPosts.length ? "live" : "loading");
   const [category, setCategory] = useState(ALL);
   const [query, setQuery] = useState("");
   const [dark, setDark] = useState(false);
@@ -197,6 +197,7 @@ function PostCard({ post, index }: { post: Post; index: number }) {
 
 function formatDate(value: string) {
   const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return "日期待定";
   return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: "UTC" }).format(date).replaceAll("/", "-");
 }
 
