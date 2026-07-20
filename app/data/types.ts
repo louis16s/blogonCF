@@ -44,6 +44,7 @@ export type RichText = {
 export type ContentBlock = {
   id: string;
   type: string;
+  pageId?: string;
   richText?: RichText[];
   checked?: boolean;
   url?: string;
@@ -52,4 +53,11 @@ export type ContentBlock = {
   icon?: string;
   color?: string;
   children?: ContentBlock[];
+};
+
+export type ChildPage = {
+  id: string;
+  title: string;
+  icon?: string;
+  blocks: ContentBlock[];
 };

@@ -30,6 +30,7 @@ const worker = {
     if (url.pathname === "/rss.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionRss(env));
     if (url.pathname === "/api/content/posts" && request.method === "GET") return notionPosts(env);
     if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
+    if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
     if (url.pathname === "/_notion/image" && (request.method === "GET" || request.method === "HEAD")) return notionImage(request);
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
       const slug = decodeURIComponent(url.pathname.slice("/api/content/post/".length));
@@ -120,8 +121,7 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
     if (!attempt.allowed) return Response.json({ error: "尝试次数过多，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(attempt.retryAfter) } });
   }
   try {
-    const pages = await queryPosts(env, slug, 1);
-    const page = pages[0];
+    const page = await findPost(env, slug);
     if (!page) return error(404, "Article not found");
     const post = toPost(page);
     const expectedPassword = plain(page.properties?.password);
@@ -143,6 +143,47 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
     const budget = { remaining: 2000 };
     const blocks = await getBlockChildren(env, page.id, budget, 0);
     return Response.json({ post: { ...post, locked: Boolean(expectedPassword) }, locked: false, blocks }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+  } catch (reason) { return notionError(reason); }
+}
+
+async function notionChildPage(env: Env, request: Request): Promise<Response> {
+  if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; password?: unknown };
+  const slug = typeof body.slug === "string" ? body.slug : "";
+  const pageId = normalizeNotionId(body.pageId);
+  const supplied = typeof body.password === "string" ? body.password : "";
+  if (!slug || slug.length > 180 || !pageId) return error(400, "Invalid child page request");
+
+  try {
+    const parent = await findPost(env, slug);
+    if (!parent) return error(404, "Article not found");
+    const expectedPassword = plain(parent.properties?.password);
+    if (expectedPassword) {
+      if (!env.DB) return error(503, "Password protection is temporarily unavailable");
+      const attemptKey = `${request.headers.get("cf-connecting-ip") || "unknown"}:${slug.toLocaleLowerCase()}`;
+      const attempt = await getPasswordAttemptStatus(env.DB, attemptKey);
+      if (!attempt.allowed) return Response.json({ error: "尝试次数过多，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(attempt.retryAfter) } });
+      if (supplied !== expectedPassword) {
+        if (supplied) {
+          const failure = await recordPasswordFailure(env.DB, attemptKey);
+          if (!failure.allowed) return Response.json({ error: "尝试次数过多，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(failure.retryAfter) } });
+        }
+        return error(supplied ? 401 : 403, supplied ? "密码不正确" : "请先解锁父文章");
+      }
+      await clearPasswordAttempts(env.DB, attemptKey);
+    }
+
+    const parentId = normalizeNotionId(parent.id);
+    const childPage = await descendantPage(env, pageId, parentId);
+    if (!childPage) return error(404, "Child page not found");
+    const budget = { remaining: 2000 };
+    const blocks = await getBlockChildren(env, childPage.id, budget, 0);
+    return Response.json({ child: {
+      id: childPage.id,
+      title: notionPageTitle(childPage) || "未命名子页面",
+      icon: childPage.icon?.type === "emoji" ? childPage.icon.emoji : undefined,
+      blocks,
+    } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -190,6 +231,20 @@ async function queryPosts(env: Env, slug?: string, pageSize = 100): Promise<any[
     cursor = !slug && payload.has_more && typeof payload.next_cursor === "string" ? payload.next_cursor : undefined;
   } while (cursor);
   return results;
+}
+
+async function findPost(env: Env, slug: string): Promise<any | null> {
+  const bySlug = await queryPosts(env, slug, 1);
+  if (bySlug[0]) return bySlug[0];
+
+  const pageId = normalizeNotionId(slug);
+  if (!pageId) return null;
+  const page = await notionFetch(env, `/pages/${pageId}`);
+  const configuredSource = normalizeNotionId(env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
+  const pageSource = normalizeNotionId(page.parent?.data_source_id || page.parent?.database_id);
+  if (!configuredSource || pageSource !== configuredSource) return null;
+  if (page.properties?.type?.select?.name !== "Post" || page.properties?.status?.select?.name !== "Published") return null;
+  return page;
 }
 
 async function querySiteLinks(env: Env): Promise<any[]> {
@@ -279,6 +334,32 @@ function toSiteLink(page: any) {
   };
 }
 
+async function descendantPage(env: Env, childId: string, ancestorId: string): Promise<any | null> {
+  let currentId = childId;
+  let targetPage: any | null = null;
+  for (let depth = 0; depth < 8; depth++) {
+    const page = await notionFetch(env, `/pages/${currentId}`);
+    if (!targetPage) targetPage = page;
+    const parentId = normalizeNotionId(page.parent?.page_id);
+    if (!parentId) return null;
+    if (parentId === ancestorId) return targetPage;
+    currentId = parentId;
+  }
+  return null;
+}
+
+function normalizeNotionId(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const compact = value.replaceAll("-", "").toLocaleLowerCase();
+  if (!/^[a-f0-9]{32}$/.test(compact)) return "";
+  return `${compact.slice(0, 8)}-${compact.slice(8, 12)}-${compact.slice(12, 16)}-${compact.slice(16, 20)}-${compact.slice(20)}`;
+}
+
+function notionPageTitle(page: any): string {
+  const property = Object.values(page.properties || {}).find((value: any) => value?.type === "title" || Array.isArray(value?.title));
+  return title(property);
+}
+
 function defaultSiteConfig() { return { author: "louis16s", since: "2020" }; }
 
 function toPublicSiteConfig(pages: any[]) {
@@ -330,7 +411,7 @@ function normalizeBlock(raw: any): any | null {
       const url = value.url || value.external?.url || value.file?.url;
       return { ...base, type: type === "video" ? "embed" : type === "link_preview" ? "bookmark" : type, url, caption: richText(value.caption) };
     }
-    case "child_page": return { ...base, caption: value.title || "子页面", url: `https://www.notion.so/${String(raw.id).replaceAll("-", "")}` };
+    case "child_page": return { ...base, caption: value.title || "子页面", pageId: normalizeNotionId(raw.id) };
     case "child_database": return { ...base, caption: value.title || "子数据库", url: `https://www.notion.so/${String(raw.id).replaceAll("-", "")}` };
     case "equation": return { ...base, caption: value.expression || "" };
     case "table_row": return { ...base, children: (value.cells || []).map((cell: any[], index: number) => ({ id: `${raw.id}-cell-${index}`, type: "table_cell", richText: normalizeRichText(cell) })) };

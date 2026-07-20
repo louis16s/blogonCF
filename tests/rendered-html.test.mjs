@@ -373,10 +373,11 @@ test("correct password unlocks normalized content", async () => {
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("locked article keeps child-page siblings without expanding child-page bodies", async () => {
+test("locked article keeps child-page references without eagerly expanding their bodies", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
   const childRequests = [];
+  const childPageId = "55555555-5555-4555-8555-555555555555";
   globalThis.fetch = async (input) => {
     const url = String(input);
     if (url.includes("/blocks/locked-index/children")) return Response.json({ results: [
@@ -384,10 +385,10 @@ test("locked article keeps child-page siblings without expanding child-page bodi
       { id: "after", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: "索引结尾", annotations: { underline: true } }] } },
     ], has_more: false });
     if (url.includes("/blocks/toggle/children")) return Response.json({ results: [
-      { id: "child-page", type: "child_page", has_children: true, child_page: { title: "第一章" } },
+      { id: childPageId, type: "child_page", has_children: true, child_page: { title: "第一章" } },
       { id: "inside", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: "更多章节", annotations: {} }] } },
     ], has_more: false });
-    if (url.includes("/blocks/child-page/children")) { childRequests.push(url); return Response.json({ results: [{ id: "secret-body", type: "paragraph", paragraph: { rich_text: [{ plain_text: "不应内联展开", annotations: {} }] } }] }); }
+    if (url.includes(`/blocks/${childPageId}/children`)) { childRequests.push(url); return Response.json({ results: [{ id: "secret-body", type: "paragraph", paragraph: { rich_text: [{ plain_text: "不应内联展开", annotations: {} }] } }] }); }
     return Response.json({ results: [{ id: "locked-index", properties: {
       title: { title: [{ plain_text: "目录文章" }] }, slug: { rich_text: [{ plain_text: "index" }] }, summary: { rich_text: [] }, category: { select: { name: "输入密码" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "correct" }] },
     } }] });
@@ -397,13 +398,90 @@ test("locked article keeps child-page siblings without expanding child-page bodi
     assert.equal(response.status, 200);
     const payload = await response.json();
     assert.deepEqual(payload.blocks.map((block) => block.id), ["toggle", "after"]);
-    assert.deepEqual(payload.blocks[0].children.map((block) => block.id), ["child-page", "inside"]);
+    assert.deepEqual(payload.blocks[0].children.map((block) => block.id), [childPageId, "inside"]);
     assert.equal(payload.blocks[0].children[0].caption, "第一章");
-    assert.match(payload.blocks[0].children[0].url, /notion\.so\/childpage$/);
+    assert.equal(payload.blocks[0].children[0].pageId, childPageId);
+    assert.equal(payload.blocks[0].children[0].url, undefined);
     assert.equal(payload.blocks[0].color, "blue_background");
     assert.equal(payload.blocks[1].richText[0].underline, true);
     assert.deepEqual(childRequests, [], "child-page bodies must not consume the parent article block budget");
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("child pages stay on-site, inherit the parent password, and enforce ancestry", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const parentId = "22222222-2222-4222-8222-222222222222";
+  const childId = "11111111-1111-4111-8111-111111111111";
+  const nestedId = "66666666-6666-4666-8666-666666666666";
+  const intermediateId = "99999999-9999-4999-8999-999999999999";
+  const outsideId = "33333333-3333-4333-8333-333333333333";
+  let childBlockRequests = 0;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes(`/pages/${childId}`)) return Response.json({ id: childId, parent: { type: "page_id", page_id: parentId }, icon: { type: "emoji", emoji: "📖" }, properties: { title: { type: "title", title: [{ plain_text: "第一章" }] } } });
+    if (url.includes(`/pages/${nestedId}`)) return Response.json({ id: nestedId, parent: { type: "page_id", page_id: intermediateId }, properties: { title: { type: "title", title: [{ plain_text: "嵌套章节" }] } } });
+    if (url.includes(`/pages/${intermediateId}`)) return Response.json({ id: intermediateId, parent: { type: "page_id", page_id: parentId }, properties: { title: { type: "title", title: [{ plain_text: "中间章节" }] } } });
+    if (url.includes(`/pages/${outsideId}`)) return Response.json({ id: outsideId, parent: { type: "page_id", page_id: "44444444-4444-4444-8444-444444444444" }, properties: { title: { type: "title", title: [{ plain_text: "不属于本文" }] } } });
+    if (url.includes(`/pages/44444444-4444-4444-8444-444444444444`)) return Response.json({ id: "44444444-4444-4444-8444-444444444444", parent: { type: "workspace", workspace: true }, properties: {} });
+    if (url.includes(`/blocks/${childId}/children`)) {
+      childBlockRequests++;
+      return Response.json({ results: [{ id: "child-paragraph", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: "站内子页面正文", annotations: {} }] } }], has_more: false });
+    }
+    if (url.includes(`/blocks/${nestedId}/children`)) { childBlockRequests++; return Response.json({ results: [], has_more: false }); }
+    return Response.json({ results: [{ id: parentId, properties: {
+      title: { title: [{ plain_text: "目录文章" }] }, slug: { rich_text: [{ plain_text: "index" }] }, summary: { rich_text: [] }, category: { select: { name: "输入密码" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "correct" }] },
+    } }] });
+  };
+  const env = { ASSETS: assets, DB: createRateLimitDb(), NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
+  try {
+    const wrong = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: childId, password: "wrong" }) }), env, context);
+    assert.equal(wrong.status, 401);
+    assert.equal(childBlockRequests, 0, "a wrong parent password must never fetch child content");
+
+    const correct = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: childId, password: "correct" }) }), env, context);
+    assert.equal(correct.status, 200);
+    assert.equal(correct.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await correct.json(), { child: { id: childId, title: "第一章", icon: "📖", blocks: [{ id: "child-paragraph", type: "paragraph", richText: [{ text: "站内子页面正文" }] }] } });
+    assert.equal(childBlockRequests, 1);
+
+    const nested = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: nestedId, password: "correct" }) }), env, context);
+    assert.equal(nested.status, 200);
+    assert.equal((await nested.json()).child.id, nestedId, "nested ancestry must return the requested page rather than its intermediate parent");
+    assert.equal(childBlockRequests, 2);
+
+    const outside = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: outsideId, password: "correct" }) }), env, context);
+    assert.equal(outside.status, 404);
+    assert.equal(childBlockRequests, 2, "non-descendant pages must never expose their blocks");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("published posts without a slug remain reachable through their Notion page ID", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const pageId = "77777777-7777-4777-8777-777777777777";
+  const sourceId = "88888888-8888-4888-8888-888888888888";
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes(`/pages/${pageId}`)) return Response.json({ id: pageId, parent: { type: "data_source_id", data_source_id: sourceId }, properties: {
+      title: { title: [{ plain_text: "没有 Slug 的文章" }] }, slug: { rich_text: [] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] }, type: { select: { name: "Post" } }, status: { select: { name: "Published" } },
+    } });
+    if (url.includes(`/blocks/${pageId}/children`)) return Response.json({ results: [], has_more: false });
+    return Response.json({ results: [] });
+  };
+  try {
+    const response = await worker.fetch(new Request(`http://localhost/api/content/post/${pageId}`), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: sourceId }, context);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).post.slug, pageId);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("article renderer opens child pages internally instead of linking to Notion", async () => {
+  const article = await readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8");
+  assert.match(article, /fetch\("\/api\/content\/child"/);
+  assert.match(article, /history\.pushState/);
+  assert.match(article, /case "child_page": return block\.pageId/);
+  assert.doesNotMatch(article, /case "child_page"[^\n]+notion\.so/);
 });
 
 test("password endpoint rate-limits repeated failures before calling Notion again", async () => {
