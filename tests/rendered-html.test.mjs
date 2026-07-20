@@ -461,11 +461,16 @@ test("published posts without a slug remain reachable through their Notion page 
   const originalFetch = globalThis.fetch;
   const pageId = "77777777-7777-4777-8777-777777777777";
   const sourceId = "88888888-8888-4888-8888-888888888888";
+  let queries = 0;
   globalThis.fetch = async (input) => {
     const url = String(input);
-    if (url.includes(`/pages/${pageId}`)) return Response.json({ id: pageId, parent: { type: "data_source_id", data_source_id: sourceId }, properties: {
-      title: { title: [{ plain_text: "没有 Slug 的文章" }] }, slug: { rich_text: [] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] }, type: { select: { name: "Post" } }, status: { select: { name: "Published" } },
-    } });
+    if (url.includes(`/data_sources/${sourceId}/query`)) {
+      queries++;
+      if (queries === 1) return Response.json({ results: [] });
+      return Response.json({ results: [{ id: pageId, properties: {
+        title: { title: [{ plain_text: "没有 Slug 的文章" }] }, slug: { rich_text: [] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] }, type: { select: { name: "Post" } }, status: { select: { name: "Published" } },
+      } }] });
+    }
     if (url.includes(`/blocks/${pageId}/children`)) return Response.json({ results: [], has_more: false });
     return Response.json({ results: [] });
   };

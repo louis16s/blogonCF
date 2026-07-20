@@ -239,12 +239,8 @@ async function findPost(env: Env, slug: string): Promise<any | null> {
 
   const pageId = normalizeNotionId(slug);
   if (!pageId) return null;
-  const page = await notionFetch(env, `/pages/${pageId}`);
-  const configuredSource = normalizeNotionId(env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
-  const pageSource = normalizeNotionId(page.parent?.data_source_id || page.parent?.database_id);
-  if (!configuredSource || pageSource !== configuredSource) return null;
-  if (page.properties?.type?.select?.name !== "Post" || page.properties?.status?.select?.name !== "Published") return null;
-  return page;
+  const published = await queryPosts(env, undefined, 100);
+  return published.find((page) => normalizeNotionId(page.id) === pageId) || null;
 }
 
 async function querySiteLinks(env: Env): Promise<any[]> {
