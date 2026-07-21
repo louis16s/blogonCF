@@ -17,7 +17,7 @@ export type SiteLink = {
   summary: string;
   icon?: string;
   external: boolean;
-  kind: "rss" | "tool";
+  kind: "rss" | "tool" | "nav";
 };
 
 export type SiteConfig = {

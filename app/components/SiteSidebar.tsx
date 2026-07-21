@@ -32,7 +32,13 @@ export function SiteSidebar({ categories = [], activeCategory, onCategoryChange,
   const years = config.since === String(currentYear) ? config.since : `${config.since}–${currentYear}`;
   const resolvedLinks = siteLinks.length ? siteLinks : fetchedLinks;
   const toolLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "tool"), [resolvedLinks]);
+  const navLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "nav"), [resolvedLinks]);
   const rssLink = resolvedLinks.find((link) => link.kind === "rss");
+  const archiveLink = navLinks.find((link) => link.href.includes("#archive") || link.title.includes("归档"));
+  const aboutLink = navLinks.find((link) => link.href.includes("#about") || link.title.includes("关于"));
+  const sitemapLink = navLinks.find((link) => link.href.includes("sitemap") || link.title.includes("地图"));
+  const assignedNavIds = new Set([archiveLink?.id, aboutLink?.id, sitemapLink?.id].filter(Boolean));
+  const extraNavLinks = navLinks.filter((link) => !assignedNavIds.has(link.id));
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -64,9 +70,14 @@ export function SiteSidebar({ categories = [], activeCategory, onCategoryChange,
         </Link>
 
         <nav className="sidebar-nav" aria-label="主导航">
-          <Link href="/#archive"><Archive aria-hidden size={19} weight="regular" />历史归档</Link>
-          <Link href="/#about"><Info aria-hidden size={19} weight="regular" />关于我</Link>
-          <Link href="/sitemap.xml"><TreeStructure aria-hidden size={19} weight="regular" />站点地图</Link>
+          <Link href={archiveLink?.href || "/#archive"}><Archive aria-hidden size={19} weight="regular" />{archiveLink?.title || "历史归档"}</Link>
+          <Link href={aboutLink?.href || "/#about"}><Info aria-hidden size={19} weight="regular" />{aboutLink?.title || "关于我"}</Link>
+          <Link href={sitemapLink?.href || "/sitemap.xml"}><TreeStructure aria-hidden size={19} weight="regular" />{sitemapLink?.title || "站点地图"}</Link>
+          {extraNavLinks.map((link) => link.external ? (
+            <a href={link.href} target="_blank" rel="noreferrer" key={link.id}><ArrowSquareOut aria-hidden size={19} />{link.title}</a>
+          ) : (
+            <Link href={link.href} key={link.id}><Compass aria-hidden size={19} />{link.title}</Link>
+          ))}
         </nav>
 
         {categories.length > 0 && (

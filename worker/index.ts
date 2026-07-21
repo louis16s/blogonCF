@@ -121,7 +121,7 @@ async function notionPosts(env: Env): Promise<Response> {
   try {
     const [pages, linkPages, config] = await Promise.all([queryPosts(env, undefined, 100), querySiteLinks(env), queryPublicSiteConfig(env).catch(() => defaultSiteConfig())]);
     const posts = pages.map(toPost).filter((post) => post.slug);
-    const links = linkPages.map(toSiteLink).filter((link) => link.href && (link.external || link.kind === "rss"));
+    const links = linkPages.map(toSiteLink).filter((link) => link.href);
     return Response.json({ posts, links, config, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
@@ -360,7 +360,8 @@ function toSiteLink(page: any) {
   const internal = /^\/(?!\/)/.test(configuredTarget);
   const rss = /^\/?rss(?:\/feed\.xml|\.xml)?\/?$/i.test(configuredTarget)
     || /^rss(?:\s|$)/i.test(title(properties.title));
-  const href = rss ? "/rss.xml" : external || internal ? configuredTarget : "";
+  const href = rss ? "/rss.xml" : external || internal ? normalizeInternalNavigationTarget(configuredTarget) : "";
+  const menuType = properties.type?.select?.name;
   return {
     id: page.id,
     title: (title(properties.title) || "未命名链接").replace(/_+$/, ""),
@@ -368,7 +369,7 @@ function toSiteLink(page: any) {
     summary: plain(properties.summary),
     icon: page.icon?.type === "emoji" ? page.icon.emoji : plain(properties.icon),
     external,
-    kind: rss ? "rss" as const : "tool" as const,
+    kind: rss ? "rss" as const : menuType === "Menu" ? "nav" as const : "tool" as const,
   };
 }
 
@@ -388,6 +389,12 @@ function safeNavigationTarget(value: unknown): string {
   if (typeof value !== "string") return "";
   const target = value.trim();
   return /^https?:\/\//i.test(target) || /^\/(?!\/)/.test(target) ? target : "";
+}
+
+function normalizeInternalNavigationTarget(target: string): string {
+  if (/^\/archive\/?$/i.test(target)) return "/#archive";
+  if (/^\/about\/?$/i.test(target)) return "/#about";
+  return target;
 }
 
 async function authorizedChildPage(env: Env, rootPage: any, path: string[]): Promise<any | null> {
