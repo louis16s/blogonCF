@@ -59,6 +59,7 @@ button, select { color: inherit; }
 .sidebar-tool-list a svg { flex: 0 0 auto; color: var(--subtle); }
 .sidebar-tool-list a:hover { color: var(--ink); background: var(--surface-soft); }
 .sidebar-tool-list a:focus-visible { color: var(--ink); background: var(--surface-soft); outline: 2px solid var(--ink); outline-offset: 1px; }
+.mobile-tools { display: none; }
 .rss-link { margin-top: 10px; }
 .sidebar-footer { color: var(--muted); font-size: 11px; line-height: 1.45; }
 .sidebar-footer p { margin: 5px 0; }
@@ -198,7 +199,16 @@ button, select { color: inherit; }
   .sidebar-nav a { width: 38px; min-height: 38px; justify-content: center; }
   .sidebar-nav a { font-size: 0; }
   .sidebar-nav a svg { width: 19px; height: 19px; }
-  .quick-links, .sidebar-tools, .rss-link, .sidebar-footer { display: none; }
+  .quick-links, .sidebar-tools, .sidebar-footer { display: none; }
+  .mobile-tools { position: relative; display: block; }
+  .mobile-tools summary { width: 38px; height: 38px; display: grid; place-items: center; color: var(--muted); border-radius: 8px; cursor: pointer; list-style: none; }
+  .mobile-tools summary::-webkit-details-marker { display: none; }
+  .mobile-tools summary:hover, .mobile-tools[open] summary { color: var(--ink); background: var(--surface-soft); }
+  .mobile-tools summary:focus-visible { color: var(--ink); background: var(--surface-soft); outline: 2px solid var(--ink); outline-offset: 1px; }
+  .mobile-tool-list { position: absolute; top: calc(100% + 8px); right: 0; z-index: 30; width: 190px; display: grid; gap: 3px; padding: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
+  .mobile-tool-list a { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 9px 10px; color: var(--muted); border-radius: 7px; font-size: 13px; }
+  .mobile-tool-list a:hover, .mobile-tool-list a:focus-visible { color: var(--ink); background: var(--surface-soft); outline: 2px solid var(--ink); outline-offset: -2px; }
+  .rss-link { width: 38px; min-height: 38px; justify-content: center; margin: 0; font-size: 0; }
   .blog-main, .article-shell { margin-left: 0; padding: 27px 24px 34px; }
   .post-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

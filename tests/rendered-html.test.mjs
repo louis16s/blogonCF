@@ -109,6 +109,7 @@ test("overview renders every article immediately while retaining search and cate
   const sidebar = await readFile(new URL("../app/components/SiteSidebar.tsx", import.meta.url), "utf8");
   assert.match(sidebar, /小工具/);
   assert.match(sidebar, /link\.kind === "tool"/);
+  assert.match(sidebar, /mobile-tools/);
   assert.match(blog, /const visible = useMemo/);
   assert.match(blog, /category === ALL \|\| post\.category === category/);
   assert.match(blog, /post\.tags/);

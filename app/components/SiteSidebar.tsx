@@ -72,6 +72,19 @@ export function SiteSidebar({ categories = [], activeCategory, onCategoryChange,
           </section>
         )}
 
+        {siteLinks.some((link) => link.kind === "tool") && (
+          <details className="mobile-tools">
+            <summary aria-label="打开小工具菜单"><Wrench aria-hidden size={19} /></summary>
+            <div className="mobile-tool-list">
+              {siteLinks.filter((link) => link.kind === "tool").map((link) => (
+                <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id}>
+                  <span>{link.title}</span><ArrowSquareOut aria-hidden size={13} />
+                </a>
+              ))}
+            </div>
+          </details>
+        )}
+
         <Link className="rss-link" href="/rss.xml"><Rss aria-hidden size={20} />RSS 订阅</Link>
       </div>
 
