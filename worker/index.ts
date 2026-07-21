@@ -353,7 +353,7 @@ function toPost(page: any) {
 
 function toSiteLink(page: any) {
   const properties = page.properties || {};
-  const configuredTarget = [properties.slug, properties.url, properties.link, properties.summary, properties.title]
+  const configuredTarget = [properties.slug, ...Object.values(properties).filter((property) => property !== properties.slug)]
     .map(notionPropertyLink)
     .find(Boolean) || plain(properties.slug).trim();
   const external = /^https?:\/\//i.test(configuredTarget);

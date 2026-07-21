@@ -360,13 +360,17 @@ test("navigation endpoint returns only live Notion-configured jump links", async
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => Response.json({ results: [
     { id: "tool", icon: { type: "emoji", emoji: "🧭" }, properties: { title: { title: [{ plain_text: "导航工具" }] }, slug: { rich_text: [{ plain_text: "打开", href: "https://nav.example" }] }, summary: { rich_text: [] } } },
+    { id: "uppercase-url", properties: { type: { select: { name: "SubMenu" } }, title: { title: [{ plain_text: "URL 属性工具" }] }, slug: { rich_text: [{ plain_text: "tool" }] }, URL: { url: "https://uppercase.example/tool" }, summary: { rich_text: [] } } },
     { id: "invalid", properties: { title: { title: [{ plain_text: "无效跳转" }] }, slug: { rich_text: [{ plain_text: "javascript:alert(1)" }] }, summary: { rich_text: [] } } },
   ] });
   try {
     const response = await worker.fetch(new Request("http://localhost/api/content/navigation"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("cache-control"), "no-store");
-    assert.deepEqual(await response.json(), { links: [{ id: "tool", title: "导航工具", href: "https://nav.example", summary: "", icon: "🧭", external: true, kind: "tool" }], source: "notion" });
+    assert.deepEqual(await response.json(), { links: [
+      { id: "tool", title: "导航工具", href: "https://nav.example", summary: "", icon: "🧭", external: true, kind: "tool" },
+      { id: "uppercase-url", title: "URL 属性工具", href: "https://uppercase.example/tool", summary: "", icon: "", external: true, kind: "tool" },
+    ], source: "notion" });
   } finally { globalThis.fetch = originalFetch; }
 });
 
