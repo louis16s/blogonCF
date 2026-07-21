@@ -32,6 +32,7 @@ const worker = {
     if (url.pathname === "/sitemap.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionSitemap(env));
     if (url.pathname === "/rss.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionRss(env));
     if (url.pathname === "/api/content/posts" && request.method === "GET") return notionPosts(env);
+    if (url.pathname === "/api/content/navigation" && request.method === "GET") return notionNavigation(env);
     if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
     if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
     if (url.pathname === "/_notion/image" && (request.method === "GET" || request.method === "HEAD")) return notionImage(request);
@@ -130,6 +131,15 @@ async function notionSiteConfig(env: Env): Promise<Response> {
   try {
     const config = await queryPublicSiteConfig(env);
     return Response.json({ config, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+  } catch (reason) { return notionError(reason); }
+}
+
+async function notionNavigation(env: Env): Promise<Response> {
+  if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  try {
+    const linkPages = await querySiteLinks(env);
+    const links = linkPages.map(toSiteLink).filter((link) => link.href);
+    return Response.json({ links, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -343,10 +353,14 @@ function toPost(page: any) {
 
 function toSiteLink(page: any) {
   const properties = page.properties || {};
-  const slug = plain(properties.slug).trim();
-  const external = /^https?:\/\//i.test(slug);
-  const rss = /^\/?rss(?:\/feed\.xml|\.xml)?\/?$/i.test(slug);
-  const href = external ? slug : rss ? "/rss.xml" : "";
+  const configuredTarget = [properties.slug, properties.url, properties.link, properties.summary, properties.title]
+    .map(notionPropertyLink)
+    .find(Boolean) || plain(properties.slug).trim();
+  const external = /^https?:\/\//i.test(configuredTarget);
+  const internal = /^\/(?!\/)/.test(configuredTarget);
+  const rss = /^\/?rss(?:\/feed\.xml|\.xml)?\/?$/i.test(configuredTarget)
+    || /^rss(?:\s|$)/i.test(title(properties.title));
+  const href = rss ? "/rss.xml" : external || internal ? configuredTarget : "";
   return {
     id: page.id,
     title: (title(properties.title) || "未命名链接").replace(/_+$/, ""),
@@ -356,6 +370,24 @@ function toSiteLink(page: any) {
     external,
     kind: rss ? "rss" as const : "tool" as const,
   };
+}
+
+function notionPropertyLink(property: any): string {
+  if (typeof property?.url === "string") return safeNavigationTarget(property.url);
+  const rich = property?.rich_text || property?.title;
+  if (!Array.isArray(rich)) return "";
+  for (const item of rich) {
+    const linked = item?.href || item?.text?.link?.url || item?.mention?.link_preview?.url;
+    const safe = safeNavigationTarget(linked);
+    if (safe) return safe;
+  }
+  return "";
+}
+
+function safeNavigationTarget(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const target = value.trim();
+  return /^https?:\/\//i.test(target) || /^\/(?!\/)/.test(target) ? target : "";
 }
 
 async function authorizedChildPage(env: Env, rootPage: any, path: string[]): Promise<any | null> {

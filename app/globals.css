@@ -47,8 +47,15 @@ button, select { color: inherit; }
 .sidebar-nav a, .rss-link { display: flex; align-items: center; gap: 11px; min-height: 39px; color: #595959; font-size: 14px; border-radius: 8px; transition: background .18s ease, color .18s ease; }
 :root[data-theme="dark"] .sidebar-nav a, :root[data-theme="dark"] .rss-link { color: var(--muted); }
 .sidebar-nav a:hover, .sidebar-nav a:focus-visible, .rss-link:hover, .rss-link:focus-visible { color: var(--ink); background: var(--surface-soft); outline: none; }
+.sidebar-section>summary { display: flex; align-items: center; justify-content: space-between; color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 13px; list-style: none; }
+.sidebar-section>summary::-webkit-details-marker { display: none; }
+.sidebar-section>summary>span { display: flex; align-items: center; gap: 7px; }
+.sidebar-section>summary small { min-width: 18px; padding: 1px 5px; color: var(--subtle); background: var(--surface-soft); border-radius: 999px; text-align: center; font-size: 10px; }
+.sidebar-section>summary:hover, .sidebar-section>summary:focus-visible { color: var(--ink); outline: none; }
+.sidebar-section>summary:focus-visible { box-shadow: 0 0 0 2px var(--ink); }
+.section-caret { transition: transform .18s ease; }
+.sidebar-section:not([open]) .section-caret { transform: rotate(-90deg); }
 .quick-links { margin-top: 15px; padding: 17px 0 14px; border-block: 1px solid var(--line); }
-.quick-links-title { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 13px; }
 .quick-link-list { display: grid; gap: 2px; margin-top: 10px; }
 .quick-link-list button { appearance: none; width: 100%; padding: 5px 9px; text-align: left; color: var(--muted); background: transparent; border: 0; border-radius: 6px; font-size: 13px; cursor: pointer; }
 .quick-link-list button:hover, .quick-link-list button.active { color: var(--ink); background: var(--surface-soft); }
@@ -56,6 +63,8 @@ button, select { color: inherit; }
 .sidebar-tool-list { display: grid; gap: 2px; margin-top: 8px; }
 .sidebar-tool-list a { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 9px; color: var(--muted); border-radius: 6px; font-size: 12px; }
 .sidebar-tool-list a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-tool-list .tool-link-label { min-width: 0; display: flex; align-items: center; gap: 7px; }
+.sidebar-tool-list .tool-link-label>span:first-child { flex: 0 0 auto; font-size: 13px; }
 .sidebar-tool-list a svg { flex: 0 0 auto; color: var(--subtle); }
 .sidebar-tool-list a:hover { color: var(--ink); background: var(--surface-soft); }
 .sidebar-tool-list a:focus-visible { color: var(--ink); background: var(--surface-soft); outline: 2px solid var(--ink); outline-offset: 1px; }

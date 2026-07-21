@@ -109,6 +109,9 @@ test("overview renders every article immediately while retaining search and cate
   const sidebar = await readFile(new URL("../app/components/SiteSidebar.tsx", import.meta.url), "utf8");
   assert.match(sidebar, /小工具/);
   assert.match(sidebar, /link\.kind === "tool"/);
+  assert.match(sidebar, /blog-sidebar-quick-open/);
+  assert.match(sidebar, /\/api\/content\/navigation/);
+  assert.doesNotMatch(sidebar, /categories\.slice/);
   assert.match(sidebar, /mobile-tools/);
   assert.match(blog, /const visible = useMemo/);
   assert.match(blog, /category === ALL \|\| post\.category === category/);
@@ -328,6 +331,7 @@ test("content endpoint maps only the filtered Notion response and disables cachi
     if (body.filter.and.some((item) => item.or)) return Response.json({ results: [
       { id: "rss", properties: { title: { title: [{ plain_text: "RSS" }] }, slug: { rich_text: [{ plain_text: "rss/feed.xml" }] }, summary: { rich_text: [{ plain_text: "订阅" }] }, icon: { rich_text: [] } } },
       { id: "tool", icon: { type: "emoji", emoji: "👾" }, properties: { title: { title: [{ plain_text: "超焦距" }] }, slug: { rich_text: [{ plain_text: "https://hd.530555.xyz" }] }, summary: { rich_text: [{ plain_text: "跳转hd" }] }, icon: { rich_text: [] } } },
+      { id: "annotated", properties: { title: { title: [{ plain_text: "带跳转的工具" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [{ plain_text: "Notion 注释链接", href: "https://annotated.example" }] }, icon: { rich_text: [] } } },
       { id: "broken", properties: { title: { title: [{ plain_text: "资讯" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
     ] });
     requestBody = body;
@@ -343,10 +347,25 @@ test("content endpoint maps only the filtered Notion response and disables cachi
     const payload = await response.json();
     assert.equal(payload.posts[0].slug, "public-post");
     assert.deepEqual(payload.posts[0].tags, ["旅行"]);
-    assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://hd.530555.xyz", "tool"]]);
+    assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://hd.530555.xyz", "tool"], ["带跳转的工具", "https://annotated.example", "tool"]]);
     assert.deepEqual(payload.config, { author: "Notion 作者", since: "2019" });
     assert.doesNotMatch(JSON.stringify(payload), /不得输出|禁用作者/);
     assert.deepEqual(requestBody.filter.and.map((item) => item.property), ["type", "status"]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("navigation endpoint returns only live Notion-configured jump links", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ results: [
+    { id: "tool", icon: { type: "emoji", emoji: "🧭" }, properties: { title: { title: [{ plain_text: "导航工具" }] }, slug: { rich_text: [{ plain_text: "打开", href: "https://nav.example" }] }, summary: { rich_text: [] } } },
+    { id: "invalid", properties: { title: { title: [{ plain_text: "无效跳转" }] }, slug: { rich_text: [{ plain_text: "javascript:alert(1)" }] }, summary: { rich_text: [] } } },
+  ] });
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/navigation"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await response.json(), { links: [{ id: "tool", title: "导航工具", href: "https://nav.example", summary: "", icon: "🧭", external: true, kind: "tool" }], source: "notion" });
   } finally { globalThis.fetch = originalFetch; }
 });
 
