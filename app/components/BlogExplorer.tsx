@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
-  ArrowSquareOut,
   Camera,
   Code,
   FileText,
@@ -12,10 +11,8 @@ import {
   MagnifyingGlass,
   MapTrifold,
   Moon,
-  Rss,
   Sparkle,
   Sun,
-  Toolbox,
   Wrench,
 } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
@@ -24,7 +21,6 @@ import { ContentFooter } from "./ContentFooter";
 import { SiteSidebar } from "./SiteSidebar";
 
 const ALL = "全部";
-const RSS_LINK: SiteLink = { id: "rss", title: "RSS 订阅", href: "/rss.xml", summary: "订阅全部公开文章", external: false, kind: "rss" };
 const preferredCategories = ["心情随笔", "嵌入式开发", "小软件工程", "相机分享", "旅行游记", "输入密码"];
 
 const categoryIcons: Array<[RegExp, Icon]> = [
@@ -96,8 +92,6 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
     return Array.from(map.entries()).sort(([a], [b]) => categories.indexOf(a) - categories.indexOf(b));
   }, [visible, categories]);
 
-  const resources = useMemo(() => [RSS_LINK, ...siteLinks.filter((link) => link.kind === "tool")], [siteLinks]);
-
   const selectCategory = (value: string) => {
     setCategory(value);
     window.requestAnimationFrame(() => document.getElementById("archive")?.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -105,7 +99,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
 
   return (
     <div className="blog-frame">
-      <SiteSidebar categories={categories.slice(1)} activeCategory={category} onCategoryChange={selectCategory} siteConfig={siteConfig} />
+      <SiteSidebar categories={categories.slice(1)} activeCategory={category} onCategoryChange={selectCategory} siteConfig={siteConfig} siteLinks={siteLinks} />
 
       <main className="blog-main">
         <header className="blog-toolbar">
@@ -128,22 +122,6 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
             </button>
           </div>
         </header>
-
-        <section className="resource-strip" aria-labelledby="resource-title">
-          <div className="resource-heading">
-            <div><p className="eyebrow">NOTION LINKS</p><h2 id="resource-title">工具与订阅</h2></div>
-          </div>
-          <div className="resource-list">
-            {resources.map((link) => {
-              const ResourceIcon = link.kind === "rss" ? Rss : Toolbox;
-              return <a className="resource-card" href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id}>
-                <ResourceIcon aria-hidden size={22} weight="duotone" />
-                <span><strong>{link.title}</strong><small>{link.summary || (link.kind === "rss" ? "订阅全部公开文章" : "打开外部小工具")}</small></span>
-                <ArrowSquareOut aria-hidden size={16} />
-              </a>;
-            })}
-          </div>
-        </section>
 
         <section className="archive-shell" id="archive" aria-label="文章归档">
           <div className="filter-row">

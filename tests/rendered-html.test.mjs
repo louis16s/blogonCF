@@ -104,7 +104,11 @@ test("overview renders every article immediately while retaining search and cate
   const blog = await readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(blog, /items\.slice\(/);
   assert.match(blog, /\{items\.map\(\(post, index\)/);
-  assert.match(blog, /工具与订阅/);
+  assert.doesNotMatch(blog, /resource-strip|工具与订阅/);
+  assert.match(blog, /siteLinks=\{siteLinks\}/);
+  const sidebar = await readFile(new URL("../app/components/SiteSidebar.tsx", import.meta.url), "utf8");
+  assert.match(sidebar, /小工具/);
+  assert.match(sidebar, /link\.kind === "tool"/);
   assert.match(blog, /const visible = useMemo/);
   assert.match(blog, /category === ALL \|\| post\.category === category/);
   assert.match(blog, /post\.tags/);
@@ -479,6 +483,10 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
   };
   const env = { ASSETS: assets, DB: createRateLimitDb(), NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
   try {
+    const missing = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: childId }) }), env, context);
+    assert.equal(missing.status, 403);
+    assert.equal(childBlockRequests, 0, "a missing parent password must never fetch child content");
+
     const wrong = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: childId, password: "wrong" }) }), env, context);
     assert.equal(wrong.status, 401);
     assert.equal(childBlockRequests, 0, "a wrong parent password must never fetch child content");
@@ -509,6 +517,22 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     const outside = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: outsideId, password: "correct" }) }), env, context);
     assert.equal(outside.status, 404);
     assert.equal(childBlockRequests, 6, "non-descendant and unreferenced pages must never expose their blocks");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("a child-page UUID cannot bypass the published article collection", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  let blockRequests = 0;
+  globalThis.fetch = async (input) => {
+    if (String(input).includes("/blocks/")) blockRequests++;
+    return Response.json({ results: [] });
+  };
+  try {
+    const childId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const response = await worker.fetch(new Request(`http://localhost/api/content/post/${childId}`), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(response.status, 404);
+    assert.equal(blockRequests, 0, "unpublished or child-page UUIDs must never be read as top-level posts");
   } finally { globalThis.fetch = originalFetch; }
 });
 

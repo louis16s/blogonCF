@@ -4,11 +4,13 @@ import Link from "next/link";
 import {
   Archive,
   Compass,
+  ArrowSquareOut,
   Info,
   Rss,
   TreeStructure,
+  Wrench,
 } from "@phosphor-icons/react";
-import type { SiteConfig } from "../data/types";
+import type { SiteConfig, SiteLink } from "../data/types";
 import { useSiteConfig } from "./useSiteConfig";
 
 type SidebarProps = {
@@ -16,9 +18,10 @@ type SidebarProps = {
   activeCategory?: string;
   onCategoryChange?: (category: string) => void;
   siteConfig?: SiteConfig;
+  siteLinks?: SiteLink[];
 };
 
-export function SiteSidebar({ categories = [], activeCategory, onCategoryChange, siteConfig }: SidebarProps) {
+export function SiteSidebar({ categories = [], activeCategory, onCategoryChange, siteConfig, siteLinks = [] }: SidebarProps) {
   const config = useSiteConfig(siteConfig);
   const currentYear = new Date().getFullYear();
   const years = config.since === String(currentYear) ? config.since : `${config.since}–${currentYear}`;
@@ -51,6 +54,19 @@ export function SiteSidebar({ categories = [], activeCategory, onCategoryChange,
                 >
                   {item}
                 </button>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {siteLinks.some((link) => link.kind === "tool") && (
+          <section className="sidebar-tools" aria-labelledby="sidebar-tools-title">
+            <div className="quick-links-title" id="sidebar-tools-title"><span>小工具</span><Wrench aria-hidden size={16} /></div>
+            <div className="sidebar-tool-list">
+              {siteLinks.filter((link) => link.kind === "tool").map((link) => (
+                <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id}>
+                  <span>{link.title}</span><ArrowSquareOut aria-hidden size={13} />
+                </a>
               ))}
             </div>
           </section>
