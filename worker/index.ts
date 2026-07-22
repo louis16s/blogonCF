@@ -5,6 +5,7 @@ import handler from "vinext/server/app-router-entry";
 import { clearPasswordAttempts, getPasswordAttemptStatus, recordPasswordFailure } from "../db/rate-limit";
 import { clearArticlePayload, storeArticlePayload, type ArticlePayload } from "../server/article-context";
 import { clearHomePayload, storeHomePayload, type HomePayload } from "../server/home-context";
+import { buildWordCloud } from "../shared/wordCloud.js";
 
 interface Env {
   ASSETS: Fetcher;
@@ -24,7 +25,12 @@ const NOTION_VERSION = "2026-03-11";
 const NOTION_IMAGE_HOSTS = new Set(["prod-files-secure.s3.us-west-2.amazonaws.com"]);
 const MAX_BLOCKS = 10_000;
 const MAX_BLOCK_DEPTH = 12;
+const MAX_WORD_CLOUD_BLOCKS_PER_POST = 800;
+const WORD_CLOUD_CACHE_TTL_MS = 10 * 60 * 1000;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
+const wordCloudCache = new Map<string, { expiresAt: number; payload: WordCloudPayload }>();
+
+type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "notion" };
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -34,6 +40,7 @@ const worker = {
     if (url.pathname === "/api/content/posts" && request.method === "GET") return notionPosts(env);
     if (url.pathname === "/api/content/navigation" && request.method === "GET") return notionNavigation(env);
     if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
+    if (url.pathname === "/api/content/word-cloud" && request.method === "GET") return notionWordCloud(env);
     if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
     if (url.pathname === "/_notion/image" && (request.method === "GET" || request.method === "HEAD")) return notionImage(request);
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
@@ -140,6 +147,36 @@ async function notionNavigation(env: Env): Promise<Response> {
     const linkPages = await querySiteLinks(env);
     const links = linkPages.map(toSiteLink).filter((link) => link.href);
     return Response.json({ links, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+  } catch (reason) { return notionError(reason); }
+}
+
+async function notionWordCloud(env: Env): Promise<Response> {
+  if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  const cacheKey = env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID;
+  const cached = wordCloudCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return Response.json(cached.payload, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
+  }
+
+  try {
+    const pages = await queryPosts(env, undefined, 100);
+    const publicPages = pages.filter((page) => !plain(page.properties?.password));
+    let partial = false;
+    const documents = (await mapWithConcurrency(publicPages, 3, async (page) => {
+      try {
+        const state: BlockReadState = { remaining: MAX_WORD_CLOUD_BLOCKS_PER_POST, truncated: false };
+        const blocks = await getBlockChildren(env, page.id, state, 0);
+        if (state.truncated) partial = true;
+        return { id: page.id, title: title(page.properties?.title) || "未命名文章", body: blockText(blocks) };
+      } catch (reason) {
+        partial = true;
+        console.warn(reason instanceof Error ? reason.message : "Word cloud article read failed");
+        return null;
+      }
+    })).filter((document): document is { id: string; title: string; body: string } => Boolean(document));
+    const payload: WordCloudPayload = { words: buildWordCloud(documents), sourceCount: documents.length, partial, source: "notion" };
+    wordCloudCache.set(cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, payload });
+    return Response.json(payload, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -326,6 +363,33 @@ async function getBlockChildren(env: Env, id: string, budget: BlockReadState, de
     cursor = payload.has_more && budget.remaining > 0 ? payload.next_cursor : undefined;
   } while (cursor);
   return output;
+}
+
+async function mapWithConcurrency<T, U>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<U>): Promise<U[]> {
+  const results = new Array<U>(items.length);
+  let nextIndex = 0;
+  const run = async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await mapper(items[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, run));
+  return results;
+}
+
+function blockText(blocks: any[]): string {
+  const fragments: string[] = [];
+  const visit = (items: any[]) => {
+    for (const block of items || []) {
+      const rich = Array.isArray(block.richText) ? block.richText.map((item: any) => item.text || "").join("") : "";
+      if (rich) fragments.push(rich);
+      if (typeof block.caption === "string" && block.caption) fragments.push(block.caption);
+      if (Array.isArray(block.children)) visit(block.children);
+    }
+  };
+  visit(blocks);
+  return fragments.join("\n");
 }
 
 async function notionFetch(env: Env, path: string, init: RequestInit = {}): Promise<any> {

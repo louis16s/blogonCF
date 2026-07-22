@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useDeferredValue, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
   Camera,
   Code,
@@ -19,7 +19,8 @@ import type { Icon } from "@phosphor-icons/react";
 import { DEFAULT_SITE_CONFIG, type Post, type SiteConfig, type SiteLink } from "../data/types";
 import { ContentFooter } from "./ContentFooter";
 import { SiteSidebar } from "./SiteSidebar";
-import { buildWordCloud, normalizeSearchText } from "./wordCloud.js";
+import { WordCloudDialog } from "./WordCloudDialog";
+import { normalizeSearchText } from "../../shared/wordCloud.js";
 
 const ALL = "全部";
 const preferredCategories = ["心情随笔", "嵌入式开发", "小软件工程", "相机分享", "旅行游记", "输入密码"];
@@ -41,6 +42,32 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const [dark, setDark] = useState(false);
+  const [wordCloudOpen, setWordCloudOpen] = useState(false);
+
+  useEffect(() => {
+    const syncFromHash = () => setWordCloudOpen(window.location.hash === "#word-cloud");
+    const openFromMenu = (event: MouseEvent) => {
+      const target = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a[href="/#word-cloud"]') : null;
+      if (!target) return;
+      event.preventDefault();
+      window.history.pushState(null, "", "/#word-cloud");
+      setWordCloudOpen(true);
+    };
+    syncFromHash();
+    window.addEventListener("hashchange", syncFromHash);
+    window.addEventListener("popstate", syncFromHash);
+    document.addEventListener("click", openFromMenu);
+    return () => {
+      window.removeEventListener("hashchange", syncFromHash);
+      window.removeEventListener("popstate", syncFromHash);
+      document.removeEventListener("click", openFromMenu);
+    };
+  }, []);
+
+  const closeWordCloud = useCallback(() => {
+    if (window.location.hash === "#word-cloud") window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    setWordCloudOpen(false);
+  }, []);
 
   useEffect(() => {
     let saved: string | null = null;
@@ -96,21 +123,15 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
     });
     return Array.from(map.entries()).sort(([a], [b]) => categories.indexOf(a) - categories.indexOf(b));
   }, [visible, categories]);
-  const frequentWords = useMemo(() => buildWordCloud(posts), [posts]);
 
   const selectCategory = (value: string) => {
     setCategory(value);
     window.requestAnimationFrame(() => document.getElementById("posts")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
-  const selectWord = (word: string) => {
-    setCategory(ALL);
-    setQuery(word);
-    window.requestAnimationFrame(() => document.getElementById("posts")?.scrollIntoView({ behavior: "smooth", block: "start" }));
-  };
-
   return (
     <div className="blog-frame">
       <SiteSidebar siteConfig={siteConfig} siteLinks={siteLinks} />
+      <WordCloudDialog open={wordCloudOpen} posts={posts} onClose={closeWordCloud} />
 
       <main className="blog-main">
         <header className="blog-toolbar">
@@ -143,30 +164,6 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
               ))}
             </div>
           </div>
-
-          {frequentWords.length > 0 && (
-            <section className="word-cloud" aria-labelledby="word-cloud-title">
-              <div className="word-cloud-heading">
-                <h2 id="word-cloud-title">最近常出现</h2>
-                <p>从标题、摘要、分类和标签里捞出来的高频词，点一个就能筛文章。</p>
-              </div>
-              <div className="word-cloud-words" aria-label="文章高频词">
-                {frequentWords.map(({ word, count, level }) => (
-                  <button
-                    type="button"
-                    className={normalizeSearchText(query) === word ? "active" : ""}
-                    data-level={level}
-                    key={word}
-                    onClick={() => selectWord(word)}
-                    aria-label={`${word}，相关权重 ${count}`}
-                    title={`筛选“${word}”`}
-                  >
-                    {word}
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
 
           {groups.map(([name, items]) => (
             <section className="category-section" key={name} aria-labelledby={`category-${slugify(name)}`}>

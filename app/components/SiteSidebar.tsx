@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo } from "react";
 import {
   CaretDown,
+  Cloud,
   Compass,
   ArrowSquareOut,
   Info,
@@ -47,6 +48,7 @@ export function SiteSidebar({ siteConfig, siteLinks = [] }: SidebarProps) {
         </Link>
 
         <nav className="sidebar-nav" aria-label="主导航">
+          <Link href="/#word-cloud"><Cloud aria-hidden size={19} weight="regular" />文章词云</Link>
           <Link href={aboutLink?.href || "/#about"}><Info aria-hidden size={19} weight="regular" />{aboutLink?.title || "关于我"}</Link>
           <Link href={sitemapLink?.href || "/sitemap.xml"}><TreeStructure aria-hidden size={19} weight="regular" />{sitemapLink?.title || "站点地图"}</Link>
           {extraNavLinks.map((link) => link.external ? (
@@ -82,6 +84,7 @@ export function SiteSidebar({ siteConfig, siteLinks = [] }: SidebarProps) {
               if (event.target instanceof Element && event.target.closest("a")) event.currentTarget.closest("details")?.removeAttribute("open");
             }}
           >
+            <Link href="/#word-cloud">文章词云</Link>
             {aboutLink && <Link href={aboutLink.href}>{aboutLink.title || "关于我"}</Link>}
             {extraNavLinks.map((link) => link.external ? (
               <a href={link.href} target="_blank" rel="noreferrer" key={link.id}>{link.title}<small>外部</small></a>

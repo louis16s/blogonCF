@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 import { createSharedRequest, readDisclosureState, writeDisclosureState } from "../app/components/clientState.js";
-import { completeIntro, INTRO_BOOTSTRAP_SCRIPT, INTRO_STORAGE_KEY } from "../app/components/introState.js";
-import { buildWordCloud, normalizeSearchText } from "../app/components/wordCloud.js";
+import { completeIntro, INTRO_BOOTSTRAP_SCRIPT, INTRO_DURATION_MS } from "../app/components/introState.js";
+import { buildWordCloud, normalizeSearchText } from "../shared/wordCloud.js";
 
 const workerUrl = new URL("../dist/server/index.js", import.meta.url);
 
@@ -50,8 +50,8 @@ test("server-renders a safe loading state without stale Notion content", async (
   assert.match(html, /<title>louis16s&#x27; blog<\/title>/);
   assert.match(html, /blog 复活啦/);
   assert.match(html, /正在从 Notion 读取文章/);
-  assert.match(html, /blog\.intro\.rangefinder\.v2/);
-  assert.ok(html.indexOf("blog.intro.rangefinder.v2") < html.indexOf("site-intro"), "pre-paint decision must run before the intro markup");
+  assert.match(html, /prefers-reduced-motion/);
+  assert.ok(html.indexOf("prefers-reduced-motion") < html.indexOf("site-intro"), "pre-paint decision must run before the intro markup");
   assert.doesNotMatch(html, /2026槟城/);
   assert.match(html, /https:\/\/bblog\.530555\.xyz\/og\.png/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/);
@@ -134,39 +134,41 @@ test("overview renders every article immediately while retaining search and cate
   assert.doesNotMatch(blog, /SortMode|最新优先|最早优先|sort-select/);
   assert.doesNotMatch(blog, /同步 Notion 中的跳转菜单/);
   assert.match(blog, /<ContentFooter id="about" siteConfig=\{siteConfig\} postCount=\{posts\.length\}/);
-  assert.match(blog, /buildWordCloud\(posts\)/);
-  assert.match(blog, /id="word-cloud-title"/);
+  assert.doesNotMatch(blog, /最近常出现|buildWordCloud\(posts\)/);
+  assert.match(blog, /<WordCloudDialog open=\{wordCloudOpen\}/);
+  assert.match(sidebar, /href="\/#word-cloud"/);
 });
 
-test("word cloud ranks metadata and prose deterministically while dropping filler", () => {
+test("word cloud ranks only article titles and bodies deterministically", () => {
   const cloud = buildWordCloud([
-    { title: "旅行与相机", summary: "用相机记录旅行", category: "旅行游记", tags: ["胶片", "相机"] },
-    { title: "胶片相机散步", summary: "旅行时带着胶片相机", category: "相机分享", tags: ["胶片", "相机"] },
-    { title: "旅行照片", summary: "这是一个关于旅行的记录", category: "旅行游记", tags: ["胶片"] },
+    { id: "one", title: "旅行与相机", body: "用相机看旅行", summary: "摘要禁词 摘要禁词", category: "分类禁词", tags: ["标签禁词"] },
+    { id: "two", title: "胶片相机散步", body: "旅行时带着胶片相机", summary: "摘要禁词", category: "分类禁词", tags: ["标签禁词"] },
+    { id: "three", title: "旅行照片", body: "旅行中的照片", summary: "摘要禁词", category: "分类禁词", tags: ["标签禁词"] },
   ], 8);
-  assert.equal(cloud[0].word, "胶片");
+  assert.equal(cloud[0].word, "旅行");
   assert.ok(cloud.every((item) => item.count >= 2 && item.level >= 1 && item.level <= 5));
-  assert.ok(cloud.some((item) => item.word === "旅行游记"));
-  assert.ok(!cloud.some((item) => ["一个", "关于", "记录"].includes(item.word)));
+  assert.ok(cloud.some((item) => item.word === "相机"));
+  assert.ok(!cloud.some((item) => ["摘要禁词", "分类禁词", "标签禁词"].includes(item.word)));
+  assert.ok(cloud.every((item) => item.tone >= 0 && item.tone <= 5 && item.tilt >= -4 && item.tilt <= 4));
   assert.deepEqual(cloud, buildWordCloud([
-    { title: "旅行与相机", summary: "用相机记录旅行", category: "旅行游记", tags: ["胶片", "相机"] },
-    { title: "胶片相机散步", summary: "旅行时带着胶片相机", category: "相机分享", tags: ["胶片", "相机"] },
-    { title: "旅行照片", summary: "这是一个关于旅行的记录", category: "旅行游记", tags: ["胶片"] },
+    { id: "one", title: "旅行与相机", body: "用相机看旅行" },
+    { id: "two", title: "胶片相机散步", body: "旅行时带着胶片相机" },
+    { id: "three", title: "旅行照片", body: "旅行中的照片" },
   ], 8));
 });
 
 test("every generated word uses the same Unicode normalization as article search", () => {
   const posts = [
-    { title: "ＡＩ ＡＩ 与 Cafe\u0301", summary: "兼容字符测试", category: "技术", tags: ["ＦＵＬＬＷＩＤＴＨ"] },
+    { id: "one", title: "ＡＩ ＡＩ 与 Cafe\u0301", body: "兼容字符 兼容字符", summary: "属性禁词", category: "属性禁词", tags: ["属性禁词"] },
   ];
   const cloud = buildWordCloud(posts);
-  const corpus = normalizeSearchText(posts.flatMap((post) => [post.title, post.summary, post.category, ...post.tags]).join(" "));
+  const corpus = normalizeSearchText(posts.flatMap((post) => [post.title, post.body]).join(" "));
   assert.ok(cloud.some((item) => item.word === "ai"));
   assert.ok(cloud.every((item) => corpus.includes(normalizeSearchText(item.word))), "clickable cloud words must match their normalized source corpus");
   assert.equal(normalizeSearchText("  ＡＩ  "), "ai");
 });
 
-test("rangefinder intro is brief, session-scoped, skippable, and motion-safe", async () => {
+test("rangefinder intro lasts at least five seconds, plays on every load, and remains motion-safe", async () => {
   const [layout, intro, css, asset] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/IntroSequence.tsx", import.meta.url), "utf8"),
@@ -177,7 +179,8 @@ test("rangefinder intro is brief, session-scoped, skippable, and motion-safe", a
   assert.match(layout, /INTRO_BOOTSTRAP_SCRIPT/);
   assert.match(layout, /suppressHydrationWarning/);
   assert.match(intro, /INTRO_DURATION_MS/);
-  assert.match(intro, /completeIntro\(window\.sessionStorage/);
+  assert.match(intro, /completeIntro\(document\.documentElement/);
+  assert.ok(INTRO_DURATION_MS >= 5_000);
   assert.match(intro, />跳过<\/button>/);
   assert.match(intro, /rangefinder-intro\.webp/);
   assert.match(css, /@keyframes intro-camera-journey/);
@@ -211,16 +214,11 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   assert.match(css, /\.filters button \{ flex: 0 0 auto; min-height: 44px;/);
 });
 
-test("intro bootstrap prevents reload flashes and respects reduced motion", () => {
-  const storage = new Map();
+test("intro bootstrap plays on reload and respects reduced motion", () => {
   const runBootstrap = (reducedMotion = false) => {
     const document = { documentElement: { dataset: {} } };
     const window = {
       matchMedia: () => ({ matches: reducedMotion }),
-      sessionStorage: {
-        getItem: (key) => storage.get(key) ?? null,
-        setItem: (key, value) => storage.set(key, value),
-      },
     };
     vm.runInNewContext(INTRO_BOOTSTRAP_SCRIPT, { document, window });
     return { document, window };
@@ -230,17 +228,15 @@ test("intro bootstrap prevents reload flashes and respects reduced motion", () =
   assert.equal(firstVisit.document.documentElement.dataset.intro, "playing");
 
   const bodyClasses = new Set(["intro-playing"]);
-  completeIntro(firstVisit.window.sessionStorage, firstVisit.document.documentElement, {
+  completeIntro(firstVisit.document.documentElement, {
     classList: { remove: (name) => bodyClasses.delete(name) },
   });
-  assert.equal(storage.get(INTRO_STORAGE_KEY), "seen", "Skip or timer completion records the session");
   assert.equal(firstVisit.document.documentElement.dataset.intro, "complete");
   assert.equal(bodyClasses.has("intro-playing"), false);
 
   const reload = runBootstrap();
-  assert.equal(reload.document.documentElement.dataset.intro, "complete", "same-session reload is hidden before body parsing");
+  assert.equal(reload.document.documentElement.dataset.intro, "playing", "a full reload plays the opening again");
 
-  storage.clear();
   const reduced = runBootstrap(true);
   assert.equal(reduced.document.documentElement.dataset.intro, "complete", "reduced motion is hidden on the first frame");
 });
@@ -356,6 +352,48 @@ test("content endpoint follows Notion pagination cursors", async () => {
     assert.deepEqual(payload.posts.map((post) => post.slug), ["a", "b"]);
     assert.equal(bodies[0].start_cursor, undefined);
     assert.equal(bodies[1].start_cursor, "cursor-2");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("word-cloud endpoint reads public titles and bodies without leaking properties or locked articles", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const blockReads = [];
+  const page = (id, titleText, password = "") => ({ id, properties: {
+    title: { title: [{ plain_text: titleText }] },
+    slug: { rich_text: [{ plain_text: id }] },
+    summary: { rich_text: [{ plain_text: "摘要禁词 摘要禁词" }] },
+    category: { select: { name: "分类禁词" } },
+    tags: { multi_select: [{ name: "标签禁词" }] },
+    date: { date: null },
+    password: { rich_text: password ? [{ plain_text: password }] : [] },
+  } });
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("/data_sources/source-id/query")) return Response.json({ results: [
+      page("public-one", "山海 山海"),
+      page("public-two", "公开标题"),
+      page("locked-one", "私密标题 私密标题", "secret"),
+    ], has_more: false });
+    if (url.includes("/blocks/")) {
+      blockReads.push(url);
+      const text = url.includes("public-one") ? "cloudflare cloudflare" : "山海 cloudflare";
+      return Response.json({ results: [{ id: `${blockReads.length}-paragraph`, type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: text, annotations: {} }] } }], has_more: false });
+    }
+    throw new Error(`Unexpected Notion request: ${url} ${init.method || "GET"}`);
+  };
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/word-cloud"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "private, max-age=300");
+    const payload = await response.json();
+    assert.equal(payload.sourceCount, 2);
+    assert.equal(payload.partial, false);
+    assert.ok(payload.words.some((item) => item.word === "山海" && item.postIds.includes("public-one")));
+    assert.ok(payload.words.some((item) => item.word === "cloudflare"));
+    assert.doesNotMatch(JSON.stringify(payload), /摘要禁词|分类禁词|标签禁词|私密标题|locked-one|secret/);
+    assert.equal(blockReads.length, 2);
+    assert.ok(blockReads.every((url) => !url.includes("locked-one")), "locked pages must be excluded before any body request");
   } finally { globalThis.fetch = originalFetch; }
 });
 

@@ -30,37 +30,51 @@ function segmentWords(value) {
   return Array.from(text.matchAll(FALLBACK_WORDS), (match) => normalizeWord(match[0])).filter(Boolean);
 }
 
-/**
- * Builds a deterministic, metadata-aware word cloud from public post summaries.
- * Tags are strongest signals, categories are next, and prose tokens add context.
- *
- * @param {Array<{title?: string, summary?: string, category?: string, tags?: string[]}>} posts
- * @param {number} [limit]
- * @returns {Array<{word: string, count: number, level: number}>}
- */
-export function buildWordCloud(posts, limit = 22) {
-  const scores = new Map();
-  const add = (value, weight) => {
-    const word = normalizeWord(value);
-    if (word) scores.set(word, (scores.get(word) || 0) + weight);
-  };
+function stableHash(value) {
+  let hash = 2166136261;
+  for (const character of value) {
+    hash ^= character.codePointAt(0) || 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
 
-  for (const post of posts || []) {
-    add(post.category, 2);
-    for (const tag of post.tags || []) add(tag, 3);
-    for (const word of segmentWords(`${post.title || ""} ${post.summary || ""}`)) add(word, 1);
+/**
+ * Builds a deterministic word cloud from public article titles and bodies only.
+ * Article properties such as summary, category and tags are intentionally ignored.
+ *
+ * @param {Array<{id?: string, title?: string, body?: string}>} documents
+ * @param {number} [limit]
+ * @returns {Array<{word: string, count: number, level: number, tone: number, tilt: number, postIds: string[]}>}
+ */
+export function buildWordCloud(documents, limit = 56) {
+  const frequencies = new Map();
+
+  for (const document of documents || []) {
+    const documentId = String(document.id || "");
+    for (const word of segmentWords(`${document.title || ""} ${document.body || ""}`)) {
+      const current = frequencies.get(word) || { count: 0, postIds: new Set() };
+      current.count += 1;
+      if (documentId) current.postIds.add(documentId);
+      frequencies.set(word, current);
+    }
   }
 
-  const ranked = Array.from(scores, ([word, count]) => ({ word, count }))
+  const ranked = Array.from(frequencies, ([word, value]) => ({ word, count: value.count, postIds: Array.from(value.postIds) }))
     .filter((item) => item.count >= 2)
-    .sort((a, b) => b.count - a.count || a.word.localeCompare(b.word, "zh-CN"))
+    .sort((a, b) => b.count - a.count || b.postIds.length - a.postIds.length || a.word.localeCompare(b.word, "zh-CN"))
     .slice(0, Math.max(0, limit));
   if (!ranked.length) return [];
 
   const min = ranked[ranked.length - 1].count;
   const max = ranked[0].count;
-  return ranked.map((item) => ({
-    ...item,
-    level: max === min ? 3 : Math.round(1 + ((item.count - min) / (max - min)) * 4),
-  }));
+  return ranked.map((item) => {
+    const hash = stableHash(item.word);
+    return {
+      ...item,
+      level: max === min ? 3 : Math.round(1 + ((Math.sqrt(item.count) - Math.sqrt(min)) / (Math.sqrt(max) - Math.sqrt(min))) * 4),
+      tone: hash % 6,
+      tilt: (Math.floor(hash / 6) % 9) - 4,
+    };
+  });
 }
