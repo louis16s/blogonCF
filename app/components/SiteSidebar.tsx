@@ -8,6 +8,7 @@ import {
   Compass,
   ArrowSquareOut,
   Info,
+  List,
   Rss,
   TreeStructure,
   Wrench,
@@ -101,18 +102,27 @@ export function SiteSidebar({ categories = [], activeCategory, onCategoryChange,
           </details>
         )}
 
-        {toolLinks.length > 0 && (
-          <details className="mobile-tools">
-            <summary aria-label="打开小工具菜单"><Wrench aria-hidden size={19} /></summary>
-            <div className="mobile-tool-list">
-              {toolLinks.map((link) => (
-                <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id}>
-                  <span>{link.icon ? `${link.icon} ` : ""}{link.title}</span><ArrowSquareOut aria-hidden size={13} />
-                </a>
-              ))}
-            </div>
-          </details>
-        )}
+        <details className="mobile-menu">
+          <summary><List aria-hidden size={18} /><span>菜单</span><CaretDown className="section-caret" aria-hidden size={13} /></summary>
+          <nav className="mobile-menu-list" aria-label="移动端菜单">
+            <Link href={archiveLink?.href || "/#archive"}>文章归档</Link>
+            {aboutLink && <Link href={aboutLink.href}>{aboutLink.title || "关于我"}</Link>}
+            {extraNavLinks.map((link) => link.external ? (
+              <a href={link.href} target="_blank" rel="noreferrer" key={link.id}>{link.title}<small>外部</small></a>
+            ) : (
+              <Link href={link.href} key={link.id}>{link.title}</Link>
+            ))}
+            {toolLinks.length > 0 && (
+              <div className="mobile-menu-group">
+                <p>小工具</p>
+                {toolLinks.map((link) => (
+                  <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id}>{link.title}{link.external && <small>外部</small>}</a>
+                ))}
+              </div>
+            )}
+            {rssLink && <Link href={rssLink.href}>RSS 订阅</Link>}
+          </nav>
+        </details>
 
         {rssLink && <Link className="rss-link" href={rssLink.href}><Rss aria-hidden size={20} />{rssLink.title || "RSS 订阅"}</Link>}
       </div>

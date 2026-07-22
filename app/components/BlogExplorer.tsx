@@ -108,7 +108,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
       <main className="blog-main">
         <header className="blog-toolbar">
           <div className="welcome-block">
-            <p className="welcome"><Sparkle aria-hidden size={19} weight="fill" />blog 复活啦！是新的一年真好啊，绝胜烟柳满皇都！</p>
+            <p className="welcome"><Sparkle aria-hidden size={19} weight="fill" /><span>blog 复活啦！<span className="welcome-tagline">是新的一年真好啊，绝胜烟柳满皇都！</span></span></p>
             <div className="sync-meta">
               <span>{syncState === "live" ? `${posts.length} 篇公开文章 · 首页全部展开` : syncState === "loading" ? "正在读取公开文章" : "内容源暂时不可用"}</span>
               <span className={`source ${syncState === "live" ? "live" : ""}`}>{syncState === "live" ? "Notion 实时同步" : syncState === "loading" ? "正在同步" : "同步中断"}</span>
@@ -123,6 +123,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
             </label>
             <button className="icon-button" type="button" onClick={() => setDark((value) => !value)} aria-label={dark ? "切换为浅色模式" : "切换为深色模式"}>
               {dark ? <Sun aria-hidden size={21} /> : <Moon aria-hidden size={21} />}
+              <span className="theme-label">{dark ? "浅色" : "深色"}</span>
             </button>
           </div>
         </header>

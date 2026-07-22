@@ -120,7 +120,13 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(sidebar, /blog-sidebar-quick-open/);
   assert.match(navigationHook, /\/api\/content\/navigation/);
   assert.doesNotMatch(sidebar, /categories\.slice/);
-  assert.match(sidebar, /mobile-tools/);
+  assert.match(sidebar, /className="mobile-menu"/);
+  assert.match(sidebar, />菜单</);
+  assert.match(sidebar, />文章归档</);
+  assert.match(sidebar, />RSS 订阅</);
+  assert.match(sidebar, /className="mobile-menu-group"/);
+  assert.match(sidebar, /aboutLink && <Link href=\{aboutLink\.href\}/);
+  assert.doesNotMatch(sidebar, /className="mobile-tools"/);
   assert.match(blog, /const visible = useMemo/);
   assert.match(blog, /category === ALL \|\| post\.category === category/);
   assert.match(blog, /post\.tags/);
@@ -147,6 +153,28 @@ test("rangefinder intro is brief, session-scoped, skippable, and motion-safe", a
   assert.match(css, /html\[data-intro="playing"\] \.site-intro \{ display: grid; \}/);
   assert.match(css, /\.site-intro \{ display: none !important; \}/);
   assert.ok(asset.length > 100_000, "intro asset should be a real optimized camera render");
+});
+
+test("mobile header uses explicit labels, predictable links, and touch-sized controls", async () => {
+  const [sidebar, blog, css] = await Promise.all([
+    readFile(new URL("../app/components/SiteSidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(sidebar, /<span>菜单<\/span>/);
+  assert.match(sidebar, />文章归档<\/Link>/);
+  assert.match(sidebar, />RSS 订阅<\/Link>/);
+  assert.match(sidebar, /<p>小工具<\/p>/);
+  assert.match(sidebar, /<small>外部<\/small>/);
+  assert.match(sidebar, /aboutLink && <Link/, "unconfigured About links must not be invented on mobile");
+  assert.doesNotMatch(sidebar, /className="mobile-tools"/);
+  assert.match(blog, /className="theme-label"/);
+  assert.match(blog, /className="welcome-tagline"/);
+  assert.match(css, /\.sidebar-main \{[^}]*overflow: visible;/);
+  assert.match(css, /\.mobile-menu>summary \{ min-height: 44px;/);
+  assert.match(css, /\.mobile-menu-list a \{ min-height: 44px;/);
+  assert.match(css, /\.mobile-menu:not\(\[open\]\) \.mobile-menu-list \{ display: none; \}/);
+  assert.match(css, /\.filters button \{ flex: 0 0 auto; min-height: 44px;/);
 });
 
 test("intro bootstrap prevents reload flashes and respects reduced motion", () => {
