@@ -19,7 +19,7 @@ import type { Icon } from "@phosphor-icons/react";
 import { DEFAULT_SITE_CONFIG, type Post, type SiteConfig, type SiteLink } from "../data/types";
 import { ContentFooter } from "./ContentFooter";
 import { SiteSidebar } from "./SiteSidebar";
-import { buildWordCloud } from "./wordCloud.js";
+import { buildWordCloud, normalizeSearchText } from "./wordCloud.js";
 
 const ALL = "全部";
 const preferredCategories = ["心情随笔", "嵌入式开发", "小软件工程", "相机分享", "旅行游记", "输入密码"];
@@ -83,9 +83,9 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
     return [ALL, ...found];
   }, [posts]);
   const visible = useMemo(() => {
-    const needle = deferredQuery.trim().toLocaleLowerCase();
+    const needle = normalizeSearchText(deferredQuery);
     return posts.filter((post) => (category === ALL || post.category === category)
-      && (!needle || [post.title, post.summary, post.category, ...post.tags].join(" ").toLocaleLowerCase().includes(needle)));
+      && (!needle || normalizeSearchText([post.title, post.summary, post.category, ...post.tags].join(" ")).includes(needle)));
   }, [posts, category, deferredQuery]);
 
   const groups = useMemo(() => {
@@ -154,7 +154,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
                 {frequentWords.map(({ word, count, level }) => (
                   <button
                     type="button"
-                    className={query.trim().toLocaleLowerCase() === word ? "active" : ""}
+                    className={normalizeSearchText(query) === word ? "active" : ""}
                     data-level={level}
                     key={word}
                     onClick={() => selectWord(word)}

@@ -4,7 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 import { createSharedRequest, readDisclosureState, writeDisclosureState } from "../app/components/clientState.js";
 import { completeIntro, INTRO_BOOTSTRAP_SCRIPT, INTRO_STORAGE_KEY } from "../app/components/introState.js";
-import { buildWordCloud } from "../app/components/wordCloud.js";
+import { buildWordCloud, normalizeSearchText } from "../app/components/wordCloud.js";
 
 const workerUrl = new URL("../dist/server/index.js", import.meta.url);
 
@@ -153,6 +153,17 @@ test("word cloud ranks metadata and prose deterministically while dropping fille
     { title: "胶片相机散步", summary: "旅行时带着胶片相机", category: "相机分享", tags: ["胶片", "相机"] },
     { title: "旅行照片", summary: "这是一个关于旅行的记录", category: "旅行游记", tags: ["胶片"] },
   ], 8));
+});
+
+test("every generated word uses the same Unicode normalization as article search", () => {
+  const posts = [
+    { title: "ＡＩ ＡＩ 与 Cafe\u0301", summary: "兼容字符测试", category: "技术", tags: ["ＦＵＬＬＷＩＤＴＨ"] },
+  ];
+  const cloud = buildWordCloud(posts);
+  const corpus = normalizeSearchText(posts.flatMap((post) => [post.title, post.summary, post.category, ...post.tags]).join(" "));
+  assert.ok(cloud.some((item) => item.word === "ai"));
+  assert.ok(cloud.every((item) => corpus.includes(normalizeSearchText(item.word))), "clickable cloud words must match their normalized source corpus");
+  assert.equal(normalizeSearchText("  ＡＩ  "), "ai");
 });
 
 test("rangefinder intro is brief, session-scoped, skippable, and motion-safe", async () => {

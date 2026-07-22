@@ -7,12 +7,14 @@ const LATIN_WORD = /^[a-z\d][a-z\d.+#-]*$/i;
 const HAN = /[\p{Script=Han}]/u;
 const FALLBACK_WORDS = /[\p{Script=Han}]{2,8}|[a-z\d][a-z\d.+#-]{1,}/giu;
 
+export function normalizeSearchText(value) {
+  return String(value || "").normalize("NFKC").trim().toLocaleLowerCase("zh-CN");
+}
+
 function normalizeWord(value) {
-  const word = String(value || "")
-    .normalize("NFKC")
-    .trim()
+  const word = normalizeSearchText(value)
     .replace(/^[#@\s]+|[，。！？、：；“”‘’（）()《》【】\[\],.!?:;\s]+$/g, "")
-    .toLocaleLowerCase("zh-CN");
+    .trim();
   if (!word || STOP_WORDS.has(word)) return "";
   if (LATIN_WORD.test(word)) return word.length >= 2 ? word : "";
   return HAN.test(word) && word.length >= 2 && word.length <= 10 ? word : "";
