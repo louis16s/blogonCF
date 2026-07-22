@@ -167,10 +167,13 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   assert.match(sidebar, /<p>小工具<\/p>/);
   assert.match(sidebar, /<small>外部<\/small>/);
   assert.match(sidebar, /aboutLink && <Link/, "unconfigured About links must not be invented on mobile");
+  assert.match(sidebar, /event\.target instanceof Element && event\.target\.closest\("a"\)/, "mobile menu should close after a destination is chosen");
   assert.doesNotMatch(sidebar, /className="mobile-tools"/);
   assert.match(blog, /className="theme-label"/);
   assert.match(blog, /className="welcome-tagline"/);
   assert.match(css, /\.sidebar-main \{[^}]*overflow: visible;/);
+  assert.match(css, /\.site-sidebar \{ position: sticky; top: 14px; z-index: 200;/);
+  assert.match(css, /\.blog-main, \.article-shell \{ position: relative; z-index: 1;/);
   assert.match(css, /\.mobile-menu>summary \{ min-height: 44px;/);
   assert.match(css, /\.mobile-menu-list a \{ min-height: 44px;/);
   assert.match(css, /\.mobile-menu:not\(\[open\]\) \.mobile-menu-list \{ display: none; \}/);

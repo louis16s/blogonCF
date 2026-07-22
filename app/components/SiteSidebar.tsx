@@ -104,7 +104,13 @@ export function SiteSidebar({ categories = [], activeCategory, onCategoryChange,
 
         <details className="mobile-menu">
           <summary><List aria-hidden size={18} /><span>菜单</span><CaretDown className="section-caret" aria-hidden size={13} /></summary>
-          <nav className="mobile-menu-list" aria-label="移动端菜单">
+          <nav
+            className="mobile-menu-list"
+            aria-label="移动端菜单"
+            onClick={(event) => {
+              if (event.target instanceof Element && event.target.closest("a")) event.currentTarget.closest("details")?.removeAttribute("open");
+            }}
+          >
             <Link href={archiveLink?.href || "/#archive"}>文章归档</Link>
             {aboutLink && <Link href={aboutLink.href}>{aboutLink.title || "关于我"}</Link>}
             {extraNavLinks.map((link) => link.external ? (
