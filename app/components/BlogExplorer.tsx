@@ -19,6 +19,7 @@ import type { Icon } from "@phosphor-icons/react";
 import { DEFAULT_SITE_CONFIG, type Post, type SiteConfig, type SiteLink } from "../data/types";
 import { ContentFooter } from "./ContentFooter";
 import { SiteSidebar } from "./SiteSidebar";
+import { buildWordCloud } from "./wordCloud.js";
 
 const ALL = "全部";
 const preferredCategories = ["心情随笔", "嵌入式开发", "小软件工程", "相机分享", "旅行游记", "输入密码"];
@@ -95,15 +96,21 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
     });
     return Array.from(map.entries()).sort(([a], [b]) => categories.indexOf(a) - categories.indexOf(b));
   }, [visible, categories]);
+  const frequentWords = useMemo(() => buildWordCloud(posts), [posts]);
 
   const selectCategory = (value: string) => {
     setCategory(value);
-    window.requestAnimationFrame(() => document.getElementById("archive")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    window.requestAnimationFrame(() => document.getElementById("posts")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
+  const selectWord = (word: string) => {
+    setCategory(ALL);
+    setQuery(word);
+    window.requestAnimationFrame(() => document.getElementById("posts")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
   return (
     <div className="blog-frame">
-      <SiteSidebar categories={categories.slice(1)} activeCategory={category} onCategoryChange={selectCategory} siteConfig={siteConfig} siteLinks={siteLinks} />
+      <SiteSidebar siteConfig={siteConfig} siteLinks={siteLinks} />
 
       <main className="blog-main">
         <header className="blog-toolbar">
@@ -128,7 +135,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
           </div>
         </header>
 
-        <section className="archive-shell" id="archive" aria-label="文章归档">
+        <section className="posts-shell" id="posts" aria-label="全部文章">
           <div className="filter-row">
             <div className="filters" role="group" aria-label="按分类筛选">
               {categories.map((item) => (
@@ -136,6 +143,30 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
               ))}
             </div>
           </div>
+
+          {frequentWords.length > 0 && (
+            <section className="word-cloud" aria-labelledby="word-cloud-title">
+              <div className="word-cloud-heading">
+                <h2 id="word-cloud-title">最近常出现</h2>
+                <p>从标题、摘要、分类和标签里捞出来的高频词，点一个就能筛文章。</p>
+              </div>
+              <div className="word-cloud-words" aria-label="文章高频词">
+                {frequentWords.map(({ word, count, level }) => (
+                  <button
+                    type="button"
+                    className={query.trim().toLocaleLowerCase() === word ? "active" : ""}
+                    data-level={level}
+                    key={word}
+                    onClick={() => selectWord(word)}
+                    aria-label={`${word}，相关权重 ${count}`}
+                    title={`筛选“${word}”`}
+                  >
+                    {word}
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
 
           {groups.map(([name, items]) => (
             <section className="category-section" key={name} aria-labelledby={`category-${slugify(name)}`}>
@@ -154,7 +185,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
           )}
         </section>
 
-        <ContentFooter id="about" siteConfig={siteConfig} />
+        <ContentFooter id="about" siteConfig={siteConfig} postCount={posts.length} />
       </main>
     </div>
   );

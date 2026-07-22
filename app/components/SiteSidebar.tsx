@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import {
-  Archive,
   CaretDown,
   Compass,
   ArrowSquareOut,
@@ -19,27 +18,22 @@ import { useSiteConfig } from "./useSiteConfig";
 import { useSiteNavigation } from "./useSiteNavigation";
 
 type SidebarProps = {
-  categories?: string[];
-  activeCategory?: string;
-  onCategoryChange?: (category: string) => void;
   siteConfig?: SiteConfig;
   siteLinks?: SiteLink[];
 };
 
-export function SiteSidebar({ categories = [], activeCategory, onCategoryChange, siteConfig, siteLinks = [] }: SidebarProps) {
+export function SiteSidebar({ siteConfig, siteLinks = [] }: SidebarProps) {
   const config = useSiteConfig(siteConfig);
   const resolvedLinks = useSiteNavigation(siteLinks);
-  const quickDisclosure = usePersistedDisclosure({ key: "blog.sidebar.quick.v1", legacyKey: "blog-sidebar-quick-open" });
   const toolsDisclosure = usePersistedDisclosure({ key: "blog.sidebar.tools.v1", legacyKey: "blog-sidebar-tools-open" });
   const currentYear = new Date().getFullYear();
   const years = config.since === String(currentYear) ? config.since : `${config.since}–${currentYear}`;
   const toolLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "tool"), [resolvedLinks]);
-  const navLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "nav"), [resolvedLinks]);
+  const navLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "nav" && !link.title.includes("归档") && !link.href.includes("#archive")), [resolvedLinks]);
   const rssLink = resolvedLinks.find((link) => link.kind === "rss");
-  const archiveLink = navLinks.find((link) => link.href.includes("#archive") || link.title.includes("归档"));
   const aboutLink = navLinks.find((link) => link.href.includes("#about") || link.title.includes("关于"));
   const sitemapLink = navLinks.find((link) => link.href.includes("sitemap") || link.title.includes("地图"));
-  const assignedNavIds = new Set([archiveLink?.id, aboutLink?.id, sitemapLink?.id].filter(Boolean));
+  const assignedNavIds = new Set([aboutLink?.id, sitemapLink?.id].filter(Boolean));
   const extraNavLinks = navLinks.filter((link) => !assignedNavIds.has(link.id));
 
   return (
@@ -53,7 +47,6 @@ export function SiteSidebar({ categories = [], activeCategory, onCategoryChange,
         </Link>
 
         <nav className="sidebar-nav" aria-label="主导航">
-          <Link href={archiveLink?.href || "/#archive"}><Archive aria-hidden size={19} weight="regular" />{archiveLink?.title || "历史归档"}</Link>
           <Link href={aboutLink?.href || "/#about"}><Info aria-hidden size={19} weight="regular" />{aboutLink?.title || "关于我"}</Link>
           <Link href={sitemapLink?.href || "/sitemap.xml"}><TreeStructure aria-hidden size={19} weight="regular" />{sitemapLink?.title || "站点地图"}</Link>
           {extraNavLinks.map((link) => link.external ? (
@@ -62,28 +55,6 @@ export function SiteSidebar({ categories = [], activeCategory, onCategoryChange,
             <Link href={link.href} key={link.id}><Compass aria-hidden size={19} />{link.title}</Link>
           ))}
         </nav>
-
-        {categories.length > 0 && (
-          <details
-            className="sidebar-section quick-links"
-            open={quickDisclosure.open}
-            onToggle={quickDisclosure.onToggle}
-          >
-            <summary><span><Compass aria-hidden size={16} />快速访问 <small>{categories.length}</small></span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
-            <div className="quick-link-list">
-              {categories.map((item) => (
-                <button
-                  type="button"
-                  key={item}
-                  className={item === activeCategory ? "active" : ""}
-                  onClick={() => onCategoryChange?.(item)}
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
-          </details>
-        )}
 
         {toolLinks.length > 0 && (
           <details
@@ -111,7 +82,6 @@ export function SiteSidebar({ categories = [], activeCategory, onCategoryChange,
               if (event.target instanceof Element && event.target.closest("a")) event.currentTarget.closest("details")?.removeAttribute("open");
             }}
           >
-            <Link href={archiveLink?.href || "/#archive"}>文章归档</Link>
             {aboutLink && <Link href={aboutLink.href}>{aboutLink.title || "关于我"}</Link>}
             {extraNavLinks.map((link) => link.external ? (
               <a href={link.href} target="_blank" rel="noreferrer" key={link.id}>{link.title}<small>外部</small></a>
@@ -135,7 +105,7 @@ export function SiteSidebar({ categories = [], activeCategory, onCategoryChange,
 
       <div className="sidebar-footer">
         <p>© {config.author} {years}</p>
-        <p>Powered by <a href="https://www.notion.so" target="_blank" rel="noreferrer">Notion</a> &amp; Cloudflare</p>
+        <p>在 <a href="https://www.notion.so" target="_blank" rel="noreferrer">Notion</a> 写字，Cloudflare 带它兜风。</p>
       </div>
     </aside>
   );

@@ -4,6 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 import { createSharedRequest, readDisclosureState, writeDisclosureState } from "../app/components/clientState.js";
 import { completeIntro, INTRO_BOOTSTRAP_SCRIPT, INTRO_STORAGE_KEY } from "../app/components/introState.js";
+import { buildWordCloud } from "../app/components/wordCloud.js";
 
 const workerUrl = new URL("../dist/server/index.js", import.meta.url);
 
@@ -117,12 +118,12 @@ test("overview renders every article immediately while retaining search and cate
   ]);
   assert.match(sidebar, /小工具/);
   assert.match(sidebar, /link\.kind === "tool"/);
-  assert.match(sidebar, /blog-sidebar-quick-open/);
+  assert.doesNotMatch(sidebar, /快速访问|blog-sidebar-quick-open|quick-links/);
   assert.match(navigationHook, /\/api\/content\/navigation/);
   assert.doesNotMatch(sidebar, /categories\.slice/);
   assert.match(sidebar, /className="mobile-menu"/);
   assert.match(sidebar, />菜单</);
-  assert.match(sidebar, />文章归档</);
+  assert.doesNotMatch(sidebar, /文章归档|历史归档/);
   assert.match(sidebar, />RSS 订阅</);
   assert.match(sidebar, /className="mobile-menu-group"/);
   assert.match(sidebar, /aboutLink && <Link href=\{aboutLink\.href\}/);
@@ -132,7 +133,26 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(blog, /post\.tags/);
   assert.doesNotMatch(blog, /SortMode|最新优先|最早优先|sort-select/);
   assert.doesNotMatch(blog, /同步 Notion 中的跳转菜单/);
-  assert.match(blog, /<ContentFooter id="about" siteConfig=\{siteConfig\}/);
+  assert.match(blog, /<ContentFooter id="about" siteConfig=\{siteConfig\} postCount=\{posts\.length\}/);
+  assert.match(blog, /buildWordCloud\(posts\)/);
+  assert.match(blog, /id="word-cloud-title"/);
+});
+
+test("word cloud ranks metadata and prose deterministically while dropping filler", () => {
+  const cloud = buildWordCloud([
+    { title: "旅行与相机", summary: "用相机记录旅行", category: "旅行游记", tags: ["胶片", "相机"] },
+    { title: "胶片相机散步", summary: "旅行时带着胶片相机", category: "相机分享", tags: ["胶片", "相机"] },
+    { title: "旅行照片", summary: "这是一个关于旅行的记录", category: "旅行游记", tags: ["胶片"] },
+  ], 8);
+  assert.equal(cloud[0].word, "胶片");
+  assert.ok(cloud.every((item) => item.count >= 2 && item.level >= 1 && item.level <= 5));
+  assert.ok(cloud.some((item) => item.word === "旅行游记"));
+  assert.ok(!cloud.some((item) => ["一个", "关于", "记录"].includes(item.word)));
+  assert.deepEqual(cloud, buildWordCloud([
+    { title: "旅行与相机", summary: "用相机记录旅行", category: "旅行游记", tags: ["胶片", "相机"] },
+    { title: "胶片相机散步", summary: "旅行时带着胶片相机", category: "相机分享", tags: ["胶片", "相机"] },
+    { title: "旅行照片", summary: "这是一个关于旅行的记录", category: "旅行游记", tags: ["胶片"] },
+  ], 8));
 });
 
 test("rangefinder intro is brief, session-scoped, skippable, and motion-safe", async () => {
@@ -162,7 +182,7 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
   assert.match(sidebar, /<span>菜单<\/span>/);
-  assert.match(sidebar, />文章归档<\/Link>/);
+  assert.doesNotMatch(sidebar, /文章归档|历史归档|快速访问/);
   assert.match(sidebar, />RSS 订阅<\/Link>/);
   assert.match(sidebar, /<p>小工具<\/p>/);
   assert.match(sidebar, /<small>外部<\/small>/);
