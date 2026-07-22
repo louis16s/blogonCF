@@ -106,11 +106,14 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(blog, /\{items\.map\(\(post, index\)/);
   assert.doesNotMatch(blog, /resource-strip|工具与订阅/);
   assert.match(blog, /siteLinks=\{siteLinks\}/);
-  const sidebar = await readFile(new URL("../app/components/SiteSidebar.tsx", import.meta.url), "utf8");
+  const [sidebar, navigationHook] = await Promise.all([
+    readFile(new URL("../app/components/SiteSidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/useSiteNavigation.ts", import.meta.url), "utf8"),
+  ]);
   assert.match(sidebar, /小工具/);
   assert.match(sidebar, /link\.kind === "tool"/);
   assert.match(sidebar, /blog-sidebar-quick-open/);
-  assert.match(sidebar, /\/api\/content\/navigation/);
+  assert.match(navigationHook, /\/api\/content\/navigation/);
   assert.doesNotMatch(sidebar, /categories\.slice/);
   assert.match(sidebar, /mobile-tools/);
   assert.match(blog, /const visible = useMemo/);
@@ -119,6 +122,24 @@ test("overview renders every article immediately while retaining search and cate
   assert.doesNotMatch(blog, /SortMode|最新优先|最早优先|sort-select/);
   assert.doesNotMatch(blog, /同步 Notion 中的跳转菜单/);
   assert.match(blog, /<ContentFooter id="about" siteConfig=\{siteConfig\}/);
+});
+
+test("rangefinder intro is brief, session-scoped, skippable, and motion-safe", async () => {
+  const [layout, intro, css, asset] = await Promise.all([
+    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/IntroSequence.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../public/rangefinder-intro.webp", import.meta.url)),
+  ]);
+  assert.match(layout, /<IntroSequence \/>/);
+  assert.match(intro, /INTRO_DURATION_MS = 2250/);
+  assert.match(intro, /sessionStorage/);
+  assert.match(intro, /prefers-reduced-motion/);
+  assert.match(intro, />跳过<\/button>/);
+  assert.match(intro, /rangefinder-intro\.webp/);
+  assert.match(css, /@keyframes intro-camera-journey/);
+  assert.match(css, /\.site-intro \{ display: none !important; \}/);
+  assert.ok(asset.length > 100_000, "intro asset should be a real optimized camera render");
 });
 
 test("article raw HTML contains live title, summary, and public Notion content", async () => {

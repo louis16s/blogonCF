@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
   Camera,
   Code,
@@ -38,10 +38,13 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
   const [syncState, setSyncState] = useState<"loading" | "live" | "unavailable">(initialPosts.length ? "live" : "loading");
   const [category, setCategory] = useState(ALL);
   const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
   const [dark, setDark] = useState(false);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("blog-theme");
+    let saved: string | null = null;
+    try { saved = window.localStorage.getItem("blog-theme"); }
+    catch { /* Use the system theme when storage is unavailable. */ }
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     const frame = window.requestAnimationFrame(() => setDark(saved ? saved === "dark" : prefersDark));
     return () => window.cancelAnimationFrame(frame);
@@ -49,7 +52,8 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
 
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
-    window.localStorage.setItem("blog-theme", dark ? "dark" : "light");
+    try { window.localStorage.setItem("blog-theme", dark ? "dark" : "light"); }
+    catch { /* Theme switching still works without persistence. */ }
   }, [dark]);
 
   useEffect(() => {
@@ -78,10 +82,10 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
     return [ALL, ...found];
   }, [posts]);
   const visible = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase();
+    const needle = deferredQuery.trim().toLocaleLowerCase();
     return posts.filter((post) => (category === ALL || post.category === category)
       && (!needle || [post.title, post.summary, post.category, ...post.tags].join(" ").toLocaleLowerCase().includes(needle)));
-  }, [posts, category, query]);
+  }, [posts, category, deferredQuery]);
 
   const groups = useMemo(() => {
     const map = new Map<string, Post[]>();
@@ -158,7 +162,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
 function PostCard({ post, index }: { post: Post; index: number }) {
   const Icon = categoryIcons.find(([matcher]) => matcher.test(post.category))?.[1] || FileText;
   return (
-    <article className="post-card">
+    <article className="post-card" style={{ "--card-order": Math.min(index, 8) } as CSSProperties}>
       <Icon className={`post-icon tone-${index % 4}`} aria-hidden size={29} weight="duotone" />
       <div className="post-card-body">
         <div className="post-card-title">

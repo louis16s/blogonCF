@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   Archive,
   CaretDown,
@@ -13,7 +13,9 @@ import {
   Wrench,
 } from "@phosphor-icons/react";
 import type { SiteConfig, SiteLink } from "../data/types";
+import { usePersistedDisclosure } from "./usePersistedDisclosure";
 import { useSiteConfig } from "./useSiteConfig";
+import { useSiteNavigation } from "./useSiteNavigation";
 
 type SidebarProps = {
   categories?: string[];
@@ -25,12 +27,11 @@ type SidebarProps = {
 
 export function SiteSidebar({ categories = [], activeCategory, onCategoryChange, siteConfig, siteLinks = [] }: SidebarProps) {
   const config = useSiteConfig(siteConfig);
-  const [fetchedLinks, setFetchedLinks] = useState<SiteLink[]>([]);
-  const [quickOpen, setQuickOpen] = useState(true);
-  const [toolsOpen, setToolsOpen] = useState(true);
+  const resolvedLinks = useSiteNavigation(siteLinks);
+  const quickDisclosure = usePersistedDisclosure({ key: "blog.sidebar.quick.v1", legacyKey: "blog-sidebar-quick-open" });
+  const toolsDisclosure = usePersistedDisclosure({ key: "blog.sidebar.tools.v1", legacyKey: "blog-sidebar-tools-open" });
   const currentYear = new Date().getFullYear();
   const years = config.since === String(currentYear) ? config.since : `${config.since}–${currentYear}`;
-  const resolvedLinks = siteLinks.length ? siteLinks : fetchedLinks;
   const toolLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "tool"), [resolvedLinks]);
   const navLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "nav"), [resolvedLinks]);
   const rssLink = resolvedLinks.find((link) => link.kind === "rss");
@@ -40,25 +41,6 @@ export function SiteSidebar({ categories = [], activeCategory, onCategoryChange,
   const assignedNavIds = new Set([archiveLink?.id, aboutLink?.id, sitemapLink?.id].filter(Boolean));
   const extraNavLinks = navLinks.filter((link) => !assignedNavIds.has(link.id));
 
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      const quick = window.localStorage.getItem("blog-sidebar-quick-open");
-      const tools = window.localStorage.getItem("blog-sidebar-tools-open");
-      if (quick !== null) setQuickOpen(quick === "true");
-      if (tools !== null) setToolsOpen(tools === "true");
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
-
-  useEffect(() => {
-    if (siteLinks.length) return;
-    const controller = new AbortController();
-    fetch("/api/content/navigation", { signal: controller.signal, cache: "no-store" })
-      .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((payload) => { if (Array.isArray(payload.links)) setFetchedLinks(payload.links); })
-      .catch(() => undefined);
-    return () => controller.abort();
-  }, [siteLinks.length]);
   return (
     <aside className="site-sidebar" aria-label="站点导航">
       <div className="sidebar-main">
@@ -83,12 +65,8 @@ export function SiteSidebar({ categories = [], activeCategory, onCategoryChange,
         {categories.length > 0 && (
           <details
             className="sidebar-section quick-links"
-            open={quickOpen}
-            onToggle={(event) => {
-              const open = event.currentTarget.open;
-              setQuickOpen(open);
-              window.localStorage.setItem("blog-sidebar-quick-open", String(open));
-            }}
+            open={quickDisclosure.open}
+            onToggle={quickDisclosure.onToggle}
           >
             <summary><span><Compass aria-hidden size={16} />快速访问 <small>{categories.length}</small></span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
             <div className="quick-link-list">
@@ -109,12 +87,8 @@ export function SiteSidebar({ categories = [], activeCategory, onCategoryChange,
         {toolLinks.length > 0 && (
           <details
             className="sidebar-section sidebar-tools"
-            open={toolsOpen}
-            onToggle={(event) => {
-              const open = event.currentTarget.open;
-              setToolsOpen(open);
-              window.localStorage.setItem("blog-sidebar-tools-open", String(open));
-            }}
+            open={toolsDisclosure.open}
+            onToggle={toolsDisclosure.onToggle}
           >
             <summary><span><Wrench aria-hidden size={16} />小工具 <small>{toolLinks.length}</small></span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
             <div className="sidebar-tool-list">
