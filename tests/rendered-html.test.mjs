@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import vm from "node:vm";
+import { createSharedRequest, readDisclosureState, writeDisclosureState } from "../app/components/clientState.js";
+import { completeIntro, INTRO_BOOTSTRAP_SCRIPT, INTRO_STORAGE_KEY } from "../app/components/introState.js";
 
 const workerUrl = new URL("../dist/server/index.js", import.meta.url);
 
@@ -46,6 +49,8 @@ test("server-renders a safe loading state without stale Notion content", async (
   assert.match(html, /<title>louis16s&#x27; blog<\/title>/);
   assert.match(html, /blog 复活啦/);
   assert.match(html, /正在从 Notion 读取文章/);
+  assert.match(html, /blog\.intro\.rangefinder\.v2/);
+  assert.ok(html.indexOf("blog.intro.rangefinder.v2") < html.indexOf("site-intro"), "pre-paint decision must run before the intro markup");
   assert.doesNotMatch(html, /2026槟城/);
   assert.match(html, /https:\/\/bblog\.530555\.xyz\/og\.png/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/);
@@ -132,14 +137,83 @@ test("rangefinder intro is brief, session-scoped, skippable, and motion-safe", a
     readFile(new URL("../public/rangefinder-intro.webp", import.meta.url)),
   ]);
   assert.match(layout, /<IntroSequence \/>/);
-  assert.match(intro, /INTRO_DURATION_MS = 2250/);
-  assert.match(intro, /sessionStorage/);
-  assert.match(intro, /prefers-reduced-motion/);
+  assert.match(layout, /INTRO_BOOTSTRAP_SCRIPT/);
+  assert.match(layout, /suppressHydrationWarning/);
+  assert.match(intro, /INTRO_DURATION_MS/);
+  assert.match(intro, /completeIntro\(window\.sessionStorage/);
   assert.match(intro, />跳过<\/button>/);
   assert.match(intro, /rangefinder-intro\.webp/);
   assert.match(css, /@keyframes intro-camera-journey/);
+  assert.match(css, /html\[data-intro="playing"\] \.site-intro \{ display: grid; \}/);
   assert.match(css, /\.site-intro \{ display: none !important; \}/);
   assert.ok(asset.length > 100_000, "intro asset should be a real optimized camera render");
+});
+
+test("intro bootstrap prevents reload flashes and respects reduced motion", () => {
+  const storage = new Map();
+  const runBootstrap = (reducedMotion = false) => {
+    const document = { documentElement: { dataset: {} } };
+    const window = {
+      matchMedia: () => ({ matches: reducedMotion }),
+      sessionStorage: {
+        getItem: (key) => storage.get(key) ?? null,
+        setItem: (key, value) => storage.set(key, value),
+      },
+    };
+    vm.runInNewContext(INTRO_BOOTSTRAP_SCRIPT, { document, window });
+    return { document, window };
+  };
+
+  const firstVisit = runBootstrap();
+  assert.equal(firstVisit.document.documentElement.dataset.intro, "playing");
+
+  const bodyClasses = new Set(["intro-playing"]);
+  completeIntro(firstVisit.window.sessionStorage, firstVisit.document.documentElement, {
+    classList: { remove: (name) => bodyClasses.delete(name) },
+  });
+  assert.equal(storage.get(INTRO_STORAGE_KEY), "seen", "Skip or timer completion records the session");
+  assert.equal(firstVisit.document.documentElement.dataset.intro, "complete");
+  assert.equal(bodyClasses.has("intro-playing"), false);
+
+  const reload = runBootstrap();
+  assert.equal(reload.document.documentElement.dataset.intro, "complete", "same-session reload is hidden before body parsing");
+
+  storage.clear();
+  const reduced = runBootstrap(true);
+  assert.equal(reduced.document.documentElement.dataset.intro, "complete", "reduced motion is hidden on the first frame");
+});
+
+test("shared client requests deduplicate concurrency and retry after failure", async () => {
+  let calls = 0;
+  const shared = createSharedRequest(async () => {
+    calls++;
+    if (calls === 1) throw new Error("temporary");
+    return "ready";
+  });
+  const firstPair = await Promise.allSettled([shared(), shared()]);
+  assert.equal(calls, 1);
+  assert.deepEqual(firstPair.map(({ status }) => status), ["rejected", "rejected"]);
+  assert.equal(await shared(), "ready");
+  assert.equal(calls, 2, "a rejected request must not poison future refreshes");
+  assert.equal(await shared(), "ready");
+  assert.equal(calls, 2, "a successful request remains shared");
+});
+
+test("disclosure persistence prefers the versioned key and survives storage errors", () => {
+  const values = new Map([["legacy", "false"]]);
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  };
+  assert.equal(readDisclosureState(storage, "current", "legacy", true), false);
+  values.set("current", "true");
+  assert.equal(readDisclosureState(storage, "current", "legacy", false), true, "versioned state wins over legacy state");
+  writeDisclosureState(storage, "current", false);
+  assert.equal(values.get("current"), "false");
+
+  const blockedStorage = { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); } };
+  assert.equal(readDisclosureState(blockedStorage, "current", "legacy", true), true);
+  assert.doesNotThrow(() => writeDisclosureState(blockedStorage, "current", false));
 });
 
 test("article raw HTML contains live title, summary, and public Notion content", async () => {

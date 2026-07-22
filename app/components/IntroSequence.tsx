@@ -1,34 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-
-const INTRO_DURATION_MS = 2250;
-const INTRO_STORAGE_KEY = "blog.intro.rangefinder.v2";
+import { completeIntro, INTRO_DURATION_MS } from "./introState";
 
 export function IntroSequence() {
   const [visible, setVisible] = useState(true);
 
   const finish = useCallback(() => {
-    try { window.sessionStorage.setItem(INTRO_STORAGE_KEY, "seen"); }
-    catch { /* Storage may be unavailable in private browsing. */ }
-    document.documentElement.dataset.intro = "complete";
-    document.body.classList.remove("intro-playing");
+    completeIntro(window.sessionStorage, document.documentElement, document.body);
     setVisible(false);
   }, []);
 
   useEffect(() => {
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    let alreadySeen = false;
-    try { alreadySeen = window.sessionStorage.getItem(INTRO_STORAGE_KEY) === "seen"; }
-    catch { /* Play once when storage is unavailable. */ }
-
-    if (reducedMotion || alreadySeen) {
-      document.documentElement.dataset.intro = "complete";
+    if (document.documentElement.dataset.intro !== "playing") {
       const frame = window.requestAnimationFrame(() => setVisible(false));
       return () => window.cancelAnimationFrame(frame);
     }
 
-    document.documentElement.dataset.intro = "playing";
     document.body.classList.add("intro-playing");
     const timer = window.setTimeout(finish, INTRO_DURATION_MS);
     return () => {

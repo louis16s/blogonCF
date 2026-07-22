@@ -2,21 +2,13 @@
 
 import { useEffect, useState } from "react";
 import type { SiteLink } from "../data/types";
+import { createSharedRequest } from "./clientState";
 
-let navigationRequest: Promise<SiteLink[]> | undefined;
-
-function loadSiteNavigation() {
-  if (!navigationRequest) {
-    navigationRequest = fetch("/api/content/navigation", { cache: "no-store" })
+const loadSiteNavigation = createSharedRequest(() =>
+  fetch("/api/content/navigation", { cache: "no-store" })
       .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((payload) => Array.isArray(payload.links) ? payload.links : [])
-      .catch((reason) => {
-        navigationRequest = undefined;
-        throw reason;
-      });
-  }
-  return navigationRequest;
-}
+      .then((payload): SiteLink[] => Array.isArray(payload.links) ? payload.links : [])
+);
 
 export function useSiteNavigation(initialLinks: SiteLink[] = []) {
   const [fetchedLinks, setFetchedLinks] = useState<SiteLink[]>([]);

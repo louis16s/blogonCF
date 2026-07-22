@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type SyntheticEvent } from "react";
+import { readDisclosureState, writeDisclosureState } from "./clientState";
 
 type DisclosureOptions = {
   key: string;
@@ -13,19 +14,15 @@ export function usePersistedDisclosure({ key, legacyKey, defaultOpen = true }: D
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      try {
-        const saved = window.localStorage.getItem(key) ?? (legacyKey ? window.localStorage.getItem(legacyKey) : null);
-        if (saved !== null) setOpen(saved === "true");
-      } catch { /* Keep the accessible default when storage is unavailable. */ }
+      setOpen(readDisclosureState(window.localStorage, key, legacyKey, defaultOpen));
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [key, legacyKey]);
+  }, [defaultOpen, key, legacyKey]);
 
   const onToggle = useCallback((event: SyntheticEvent<HTMLDetailsElement>) => {
     const nextOpen = event.currentTarget.open;
     setOpen(nextOpen);
-    try { window.localStorage.setItem(key, String(nextOpen)); }
-    catch { /* The disclosure still works without persistence. */ }
+    writeDisclosureState(window.localStorage, key, nextOpen);
   }, [key]);
 
   return { open, onToggle };
