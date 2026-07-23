@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { ArrowsOutSimple, DotsNine, Rows, X } from "@phosphor-icons/react";
+import { ArrowDown, ArrowsOutSimple, ChartBar, DotsNine, Rows, StarFour, X } from "@phosphor-icons/react";
 import type { Post } from "../data/types";
 
 type CloudWord = {
@@ -20,12 +20,15 @@ type CloudPayload = {
   partial?: boolean;
 };
 
-type CloudMode = "pile" | "drift" | "rows";
+type CloudMode = "pile" | "drift" | "rows" | "cascade" | "constellation" | "rank";
 
 const modes: Array<{ id: CloudMode; label: string; icon: typeof DotsNine }> = [
   { id: "pile", label: "堆叠", icon: DotsNine },
   { id: "drift", label: "散落", icon: ArrowsOutSimple },
   { id: "rows", label: "规整", icon: Rows },
+  { id: "cascade", label: "瀑布", icon: ArrowDown },
+  { id: "constellation", label: "星群", icon: StarFour },
+  { id: "rank", label: "频率榜", icon: ChartBar },
 ];
 
 export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts: Post[]; onClose: () => void }) {
@@ -103,7 +106,7 @@ export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts
               className={selectedWord === item.word ? "active" : ""}
               data-level={item.level}
               data-tone={item.tone}
-              style={{ "--cloud-tilt": `${item.tilt}deg`, "--cloud-order": index } as CSSProperties}
+              style={{ "--cloud-tilt": `${item.tilt}deg`, "--cloud-order": index, "--cloud-step": index % 6, "--cloud-strength": `${item.level * 18}%` } as CSSProperties}
               onClick={() => setSelectedWord((current) => current === item.word ? "" : item.word)}
               aria-label={`${item.word}，出现 ${item.count} 次，涉及 ${item.postIds.length} 篇文章`}
               aria-pressed={selectedWord === item.word}

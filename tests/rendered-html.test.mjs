@@ -71,7 +71,7 @@ test("homepage raw HTML contains the live Notion article index, tools, and foote
       title: { title: [{ plain_text: "测试工具" }] }, slug: { rich_text: [{ plain_text: "https://tool.example" }] }, summary: { rich_text: [{ plain_text: "外部工具" }] },
     } }] });
     return Response.json({ results: [
-      { id: "penang", properties: { title: { title: [{ plain_text: "2026槟城" }] }, slug: { rich_text: [{ plain_text: "Penang" }] }, summary: { rich_text: [] }, category: { select: { name: "旅行游记" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] } } },
+      { id: "penang", icon: { type: "emoji", emoji: "🌴" }, properties: { title: { title: [{ plain_text: "2026槟城" }] }, slug: { rich_text: [{ plain_text: "Penang" }] }, summary: { rich_text: [] }, category: { select: { name: "旅行游记" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] } } },
       { id: "locked", properties: { title: { title: [{ plain_text: "Y-1" }] }, slug: { rich_text: [{ plain_text: "Y-1" }] }, summary: { rich_text: [] }, category: { select: { name: "输入密码" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "hidden" }] } } },
       { id: "77777777-7777-4777-8777-777777777777", properties: { title: { title: [{ plain_text: "nikon F3p" }] }, slug: { rich_text: [] }, summary: { rich_text: [] }, category: { select: { name: "相机分享" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] } } },
     ] });
@@ -80,6 +80,7 @@ test("homepage raw HTML contains the live Notion article index, tools, and foote
     const response = await worker.fetch(new Request("http://localhost/", { headers: { accept: "text/html" } }), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id", NOTION_CONFIG_DATA_SOURCE_ID: "config-source" }, context);
     const html = await response.text();
     assert.match(html, /2026槟城/);
+    assert.match(html, /🌴/, "Notion page emoji should be present in the rendered article card");
     assert.match(html, /Y-1/);
     assert.match(html, /nikon F3p/);
     assert.match(html, /测试工具/);
@@ -137,6 +138,30 @@ test("overview renders every article immediately while retaining search and cate
   assert.doesNotMatch(blog, /最近常出现|buildWordCloud\(posts\)/);
   assert.match(blog, /<WordCloudDialog open=\{wordCloudOpen\}/);
   assert.match(sidebar, /href="\/#word-cloud"/);
+  assert.match(blog, /post\.icon \|\| "📝"/, "article cards should render the Notion page emoji");
+  assert.doesNotMatch(blog, /categoryIcons|post-icon|Heart|MapTrifold/, "category guesses must not replace Notion icons");
+  assert.doesNotMatch(sidebar, />站点地图</, "the XML sitemap should not be presented as visitor navigation");
+});
+
+test("daylight theme uses a warm editorial palette and word cloud offers six layouts", async () => {
+  const [css, cloud] = await Promise.all([
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/WordCloudDialog.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(css, /--bg: #f4efe7/);
+  assert.match(css, /--surface: #fffdf8/);
+  assert.match(css, /--accent: #b96745/);
+  assert.match(css, /\.post-emoji \{/);
+  for (const mode of ["pile", "drift", "rows", "cascade", "constellation", "rank"]) {
+    assert.match(cloud, new RegExp(`id: "${mode}"`));
+  }
+  assert.match(css, /\.word-cloud-canvas\.mode-cascade/);
+  assert.match(css, /\.word-cloud-canvas\.mode-constellation/);
+  assert.match(css, /\.word-cloud-canvas\.mode-rank/);
+  assert.match(css, /@media \(max-width: 420px\)/);
+  assert.match(css, /@media \(max-height: 680px\)/);
+  assert.match(css, /@media \(max-width: 900px\) and \(max-height: 520px\)/);
+  assert.match(css, /overscroll-behavior-inline: contain/);
 });
 
 test("word cloud ranks only article titles and bodies deterministically", () => {

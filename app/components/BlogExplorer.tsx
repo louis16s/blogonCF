@@ -3,19 +3,13 @@
 import Link from "next/link";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
-  Camera,
-  Code,
   FileText,
-  Heart,
   LockSimple,
   MagnifyingGlass,
-  MapTrifold,
   Moon,
   Sparkle,
   Sun,
-  Wrench,
 } from "@phosphor-icons/react";
-import type { Icon } from "@phosphor-icons/react";
 import { DEFAULT_SITE_CONFIG, type Post, type SiteConfig, type SiteLink } from "../data/types";
 import { ContentFooter } from "./ContentFooter";
 import { SiteSidebar } from "./SiteSidebar";
@@ -24,14 +18,6 @@ import { normalizeSearchText } from "../../shared/wordCloud.js";
 
 const ALL = "全部";
 const preferredCategories = ["心情随笔", "嵌入式开发", "小软件工程", "相机分享", "旅行游记", "输入密码"];
-
-const categoryIcons: Array<[RegExp, Icon]> = [
-  [/心情|随笔|生活/, Heart],
-  [/嵌入|开发|代码|技术/, Code],
-  [/软件|工具|工程/, Wrench],
-  [/相机|摄影/, Camera],
-  [/旅行|游记/, MapTrifold],
-];
 
 export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConfig = DEFAULT_SITE_CONFIG }: { initialPosts?: Post[]; initialLinks?: SiteLink[]; initialConfig?: SiteConfig }) {
   const [posts, setPosts] = useState<Post[]>(initialPosts);
@@ -189,10 +175,9 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
 }
 
 function PostCard({ post, index }: { post: Post; index: number }) {
-  const Icon = categoryIcons.find(([matcher]) => matcher.test(post.category))?.[1] || FileText;
   return (
     <article className="post-card" style={{ "--card-order": Math.min(index, 8) } as CSSProperties}>
-      <Icon className={`post-icon tone-${index % 4}`} aria-hidden size={29} weight="duotone" />
+      <span className="post-emoji" aria-label={post.icon ? `Notion 图标 ${post.icon}` : "默认文章图标"}>{post.icon || "📝"}</span>
       <div className="post-card-body">
         <div className="post-card-title">
           <h3><Link href={`/blog/${encodeURIComponent(post.slug)}`}>{post.title}</Link></h3>

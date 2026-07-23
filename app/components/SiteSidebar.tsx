@@ -10,7 +10,6 @@ import {
   Info,
   List,
   Rss,
-  TreeStructure,
   Wrench,
 } from "@phosphor-icons/react";
 import type { SiteConfig, SiteLink } from "../data/types";
@@ -50,7 +49,6 @@ export function SiteSidebar({ siteConfig, siteLinks = [] }: SidebarProps) {
         <nav className="sidebar-nav" aria-label="主导航">
           <Link href="/#word-cloud"><Cloud aria-hidden size={19} weight="regular" />文章词云</Link>
           <Link href={aboutLink?.href || "/#about"}><Info aria-hidden size={19} weight="regular" />{aboutLink?.title || "关于我"}</Link>
-          <Link href={sitemapLink?.href || "/sitemap.xml"}><TreeStructure aria-hidden size={19} weight="regular" />{sitemapLink?.title || "站点地图"}</Link>
           {extraNavLinks.map((link) => link.external ? (
             <a href={link.href} target="_blank" rel="noreferrer" key={link.id}><ArrowSquareOut aria-hidden size={19} />{link.title}</a>
           ) : (
