@@ -42,48 +42,41 @@ button, select { color: inherit; }
 ::selection { background: var(--ink); color: var(--bg); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
-.site-intro { --intro-bg: #f8f7f4; --intro-ink: #22211f; --intro-blade: #5d5b58; --intro-line: rgba(34, 33, 31, .22); position: fixed; inset: 0; z-index: 1000; display: none; overflow: hidden; place-items: center; color: var(--intro-ink); background: var(--intro-bg); isolation: isolate; animation: intro-curtain 6.4s var(--ease-soft) both; }
-:root[data-theme="dark"] .site-intro { --intro-bg: #111210; --intro-ink: #f2f0eb; --intro-blade: #aaa69e; --intro-glass: #050605; --intro-line: rgba(242, 240, 235, .23); }
+.site-intro { position: fixed; inset: 0; z-index: 1000; display: none; overflow: hidden; place-items: center; color: #171717; background: #fff; isolation: isolate; animation: intro-curtain 5.6s var(--ease-soft) both; }
 html[data-intro="playing"] .site-intro { display: grid; }
-.site-intro::before { content: ""; position: absolute; inset: 0; z-index: -1; opacity: .72; background: radial-gradient(circle at 50% 47%, color-mix(in srgb, var(--intro-ink) 5%, transparent), transparent 45%), linear-gradient(90deg, transparent 49.9%, var(--intro-line) 50%, transparent 50.1%), linear-gradient(transparent 49.9%, var(--intro-line) 50%, transparent 50.1%); }
+.site-intro::before { content: ""; position: absolute; inset: 0; z-index: -1; opacity: .38; background: radial-gradient(circle at 50% 48%, #fff 0 34%, #f7f7f7 72%, #efefef 100%); }
 .intro-stage { position: relative; width: min(76vw, 760px); aspect-ratio: 3 / 2; }
-.intro-camera-rig { position: absolute; inset: 0; transform-origin: 53% 55%; will-change: transform, opacity; animation: intro-camera-journey 6.15s var(--ease-out) both; }
-.intro-camera { width: 100%; height: 100%; display: block; object-fit: contain; }
-.intro-lens-aperture { position: absolute; top: 55%; left: 53%; width: 16.8%; aspect-ratio: 1; overflow: hidden; background: radial-gradient(circle, rgba(6, 7, 8, .08) 0 34%, rgba(3, 4, 4, .76) 74%, #020302 100%); border: 1px solid rgba(255, 255, 255, .1); border-radius: 50%; box-shadow: inset 0 0 18px rgba(0, 0, 0, .9); opacity: 0; transform: translate(-50%, -50%); animation: intro-aperture-reveal 6.15s var(--ease-soft) both; }
-.intro-aperture-blades { position: absolute; inset: 0; animation: intro-blades-turn 3.55s steps(6, end) 1.75s both; }
-.intro-aperture-blade { --blade-angle: 0deg; position: absolute; top: 50%; left: 50%; width: 62%; height: 37%; background: linear-gradient(155deg, color-mix(in srgb, var(--intro-blade) 86%, #000), color-mix(in srgb, var(--intro-blade) 48%, #000)); border-top: 1px solid rgba(255, 255, 255, .18); border-radius: 85% 18% 74% 24%; clip-path: polygon(0 0, 100% 12%, 78% 100%, 3% 72%); transform: rotate(var(--blade-angle)) translate(41%, -50%) skewX(-13deg); transform-origin: 0 50%; animation: intro-blade-close 3.55s steps(6, end) 1.75s both; }
-.intro-aperture-opening { position: absolute; top: 50%; left: 50%; width: 50%; aspect-ratio: 1; background: radial-gradient(circle at 42% 38%, #17131c 0, #050506 42%, #010101 100%); border: 1px solid rgba(255, 255, 255, .08); border-radius: 50%; box-shadow: 0 0 14px rgba(0, 0, 0, .82); transform: translate(-50%, -50%) scale(1.35); animation: intro-opening-close 3.55s steps(6, end) 1.75s both; }
-.intro-lens-flash { position: absolute; top: 55%; left: 53%; width: 18%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, rgba(255, 255, 255, .96) 0 5%, rgba(187, 210, 233, .6) 17%, rgba(20, 20, 24, .13) 45%, transparent 72%); opacity: 0; mix-blend-mode: screen; transform: translate(-50%, -50%) scale(.25); animation: intro-lens-pulse 6.15s var(--ease-soft) both; }
-.intro-wordmark { position: absolute; left: 50%; bottom: 0; width: max-content; font-family: "Snell Roundhand", "Segoe Script", "Brush Script MT", cursive; font-size: clamp(32px, 5vw, 48px); font-weight: 500; line-height: 1; letter-spacing: .015em; transform: translateX(-50%); animation: intro-wordmark-journey 6.15s var(--ease-soft) both; }
-.intro-shutter { position: absolute; inset: 0; z-index: 3; pointer-events: none; background: var(--intro-bg); opacity: 0; animation: intro-shutter-fire 6.4s linear both; }
-.intro-skip { position: absolute; top: max(22px, env(safe-area-inset-top)); right: max(24px, env(safe-area-inset-right)); z-index: 4; min-height: 38px; padding: 8px 14px; color: color-mix(in srgb, var(--intro-ink) 62%, transparent); background: color-mix(in srgb, var(--intro-bg) 78%, transparent); border: 1px solid var(--intro-line); border-radius: 999px; cursor: pointer; font-size: 12px; backdrop-filter: blur(8px); animation: intro-skip-exit 6.4s ease both; }
-.intro-skip:hover, .intro-skip:focus-visible { color: var(--intro-ink); border-color: color-mix(in srgb, var(--intro-ink) 44%, transparent); outline: none; }
-.intro-skip:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--intro-ink) 13%, transparent); }
+.intro-camera { width: 100%; height: 100%; display: block; object-fit: contain; transform-origin: 53% 55%; will-change: transform, opacity; animation: intro-camera-journey 5.35s var(--ease-out) both; }
+.intro-lens-flash { position: absolute; top: 55%; left: 53%; width: clamp(78px, 12vw, 122px); aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, rgba(255, 255, 255, .95) 0 5%, rgba(187, 210, 233, .55) 16%, rgba(20, 20, 24, .12) 44%, transparent 70%); transform: translate(-50%, -50%) scale(.25); opacity: 0; mix-blend-mode: screen; animation: intro-lens-pulse 5.35s var(--ease-soft) both; }
+.intro-caption { position: absolute; left: 50%; bottom: 2%; display: grid; gap: 4px; width: max-content; text-align: center; transform: translateX(-50%); animation: intro-caption-journey 5.35s var(--ease-soft) both; }
+.intro-caption span { color: #929292; font-size: 9px; font-weight: 650; letter-spacing: .18em; }
+.intro-caption strong { font-size: 13px; font-weight: 580; letter-spacing: .08em; }
+.intro-progress { position: absolute; left: 50%; bottom: -6%; width: min(220px, 48vw); height: 1px; overflow: hidden; background: #dedede; transform: translateX(-50%); }
+.intro-progress::after { content: ""; display: block; width: 100%; height: 100%; background: #252525; transform-origin: left; animation: intro-progress 5.15s linear both; }
+.intro-skip { position: absolute; top: max(22px, env(safe-area-inset-top)); right: max(24px, env(safe-area-inset-right)); z-index: 2; min-height: 38px; padding: 8px 14px; color: #737373; background: rgba(255, 255, 255, .78); border: 1px solid #e4e4e4; border-radius: 999px; cursor: pointer; font-size: 12px; backdrop-filter: blur(8px); animation: intro-skip-exit 5.6s ease both; }
+.intro-skip:hover, .intro-skip:focus-visible { color: #171717; border-color: #bdbdbd; outline: none; }
+.intro-skip:focus-visible { box-shadow: 0 0 0 3px rgba(23, 23, 23, .13); }
 
 @keyframes intro-camera-journey {
   0% { opacity: 0; transform: translate3d(-74vw, 12px, 0) scale(.7) rotate(-4deg); }
-  9% { opacity: 1; }
-  28% { opacity: 1; transform: translate3d(0, 0, 0) scale(1) rotate(0); }
-  43% { transform: translate3d(0, 0, 0) scale(.975); }
-  57% { transform: translate3d(0, 0, 0) scale(1.025); }
-  79% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+  10% { opacity: 1; }
+  30% { opacity: 1; transform: translate3d(0, 0, 0) scale(1) rotate(0); }
+  46% { transform: translate3d(0, 0, 0) scale(.97); }
+  61% { transform: translate3d(0, 0, 0) scale(1.025); }
+  78% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
   100% { opacity: 0; transform: translate3d(0, 0, 0) scale(16); }
 }
-@keyframes intro-blade-close {
-  0%, 8% { transform: rotate(var(--blade-angle)) translate(41%, -50%) skewX(-13deg); }
-  72%, 100% { transform: rotate(calc(var(--blade-angle) + 23deg)) translate(1%, -50%) skewX(-13deg); }
+@keyframes intro-lens-pulse {
+  0%, 54% { opacity: 0; transform: translate(-50%, -50%) scale(.25); }
+  64% { opacity: .18; transform: translate(-50%, -50%) scale(.72); }
+  74% { opacity: 1; transform: translate(-50%, -50%) scale(1.15); }
+  84% { opacity: .1; transform: translate(-50%, -50%) scale(2.1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(9); }
 }
-@keyframes intro-blades-turn { from { transform: rotate(-10deg); } to { transform: rotate(18deg); } }
-@keyframes intro-opening-close {
-  0%, 8% { transform: translate(-50%, -50%) scale(1.35); }
-  72%, 100% { transform: translate(-50%, -50%) scale(.16); }
-}
-@keyframes intro-aperture-reveal { 0%, 28% { opacity: 0; } 35%, 78% { opacity: .96; } 91%, 100% { opacity: 0; } }
-@keyframes intro-lens-pulse { 0%, 76% { opacity: 0; transform: translate(-50%, -50%) scale(.25); } 80% { opacity: .2; transform: translate(-50%, -50%) scale(.72); } 84% { opacity: 1; transform: translate(-50%, -50%) scale(1.15); } 91% { opacity: .08; transform: translate(-50%, -50%) scale(2.1); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(9); } }
-@keyframes intro-wordmark-journey { 0%, 24% { opacity: 0; transform: translate(-50%, 8px); } 34%, 77% { opacity: 1; transform: translate(-50%, 0); } 88%, 100% { opacity: 0; transform: translate(-50%, -4px); } }
-@keyframes intro-shutter-fire { 0%, 78% { opacity: 0; } 79% { opacity: 1; background: var(--intro-ink); } 81% { opacity: 0; } 83% { opacity: .96; background: var(--intro-bg); } 88%, 100% { opacity: 0; } }
+@keyframes intro-caption-journey { 0%, 22% { opacity: 0; transform: translate(-50%, 7px); } 36%, 76% { opacity: 1; transform: translate(-50%, 0); } 90%, 100% { opacity: 0; transform: translate(-50%, -4px); } }
+@keyframes intro-progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 @keyframes intro-curtain { 0%, 82% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
-@keyframes intro-skip-exit { 0%, 76% { opacity: 1; } 84%, 100% { opacity: 0; } }
+@keyframes intro-skip-exit { 0%, 88% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes page-arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes sidebar-arrive { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes card-arrive { from { opacity: 0; transform: translateY(9px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
@@ -388,7 +381,7 @@ html[data-intro="playing"] .site-intro { display: grid; }
   .child-document-head { padding-top: 32px; }
   .content-footer { align-items: flex-start; flex-direction: column; }
   .intro-stage { width: min(92vw, 620px); }
-  .intro-wordmark { bottom: 2%; }
+  .intro-camera { transform-origin: 53% 55%; }
 }
 
 @media (max-width: 420px) {

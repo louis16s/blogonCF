@@ -1,4 +1,4 @@
-export const INTRO_DURATION_MS = 6400;
+export const INTRO_DURATION_MS = 5600;
 
 export const INTRO_BOOTSTRAP_SCRIPT = `(() => {
   let reducedMotion = false;

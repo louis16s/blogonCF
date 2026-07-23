@@ -201,7 +201,7 @@ test("every generated word uses the same Unicode normalization as article search
   assert.equal(normalizeSearchText("  ＡＩ  "), "ai");
 });
 
-test("rangefinder intro integrates an aperture, lasts at least five seconds, and remains motion-safe", async () => {
+test("rangefinder intro matches the 07cd9ba sequence, lasts at least five seconds, and remains motion-safe", async () => {
   const [layout, intro, css, asset, favicon] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/IntroSequence.tsx", import.meta.url), "utf8"),
@@ -217,14 +217,13 @@ test("rangefinder intro integrates an aperture, lasts at least five seconds, and
   assert.ok(INTRO_DURATION_MS >= 5_000);
   assert.match(intro, />跳过<\/button>/);
   assert.match(intro, /rangefinder-intro\.webp/);
-  assert.match(intro, /intro-camera-rig/);
-  assert.match(intro, /intro-lens-aperture/);
-  assert.match(intro, /intro-aperture-blade/);
-  assert.match(intro, />louis16s<\/strong>/);
-  assert.doesNotMatch(intro, /FRAME 01|正在对焦生活/);
+  assert.match(intro, /LOUIS16S · FRAME 01/);
+  assert.match(intro, /正在对焦生活/);
+  assert.match(intro, /intro-progress/);
+  assert.doesNotMatch(intro, /intro-camera-rig|intro-lens-aperture|intro-aperture-blade|intro-shutter/);
   assert.match(css, /@keyframes intro-camera-journey/);
-  assert.match(css, /@keyframes intro-opening-close/);
-  assert.match(css, /@keyframes intro-shutter-fire/);
+  assert.match(css, /@keyframes intro-caption-journey/);
+  assert.match(css, /@keyframes intro-progress/);
   assert.match(css, /html\[data-intro="playing"\] \.site-intro \{ display: grid; \}/);
   assert.match(css, /\.site-intro \{ display: none !important; \}/);
   assert.ok(asset.length > 100_000, "intro asset should be a real optimized camera render");
