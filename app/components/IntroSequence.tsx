@@ -43,12 +43,14 @@ export function IntroSequence() {
     >
       <button className="intro-skip" type="button" onClick={finish}>跳过</button>
       <div className="intro-stage" aria-hidden="true">
-        <div className="intro-aperture">
-          <span className="intro-aperture-scale" />
-          <div className="intro-aperture-glass">
+        <div className="intro-camera-rig">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img className="intro-camera" src="/rangefinder-intro.webp" alt="" width="1280" height="853" fetchPriority="high" />
+          <div className="intro-lens-aperture">
             <div className="intro-aperture-blades">{APERTURE_BLADES}</div>
             <span className="intro-aperture-opening" />
           </div>
+          <span className="intro-lens-flash" />
         </div>
         <strong className="intro-wordmark">louis16s</strong>
       </div>

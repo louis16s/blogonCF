@@ -201,11 +201,12 @@ test("every generated word uses the same Unicode normalization as article search
   assert.equal(normalizeSearchText("  ＡＩ  "), "ai");
 });
 
-test("aperture intro lasts at least five seconds, plays on every load, and remains motion-safe", async () => {
-  const [layout, intro, css, favicon] = await Promise.all([
+test("rangefinder intro integrates an aperture, lasts at least five seconds, and remains motion-safe", async () => {
+  const [layout, intro, css, asset, favicon] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/IntroSequence.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../public/rangefinder-intro.webp", import.meta.url)),
     readFile(new URL("../public/favicon.svg", import.meta.url), "utf8"),
   ]);
   assert.match(layout, /<IntroSequence \/>/);
@@ -215,13 +216,18 @@ test("aperture intro lasts at least five seconds, plays on every load, and remai
   assert.match(intro, /completeIntro\(document\.documentElement/);
   assert.ok(INTRO_DURATION_MS >= 5_000);
   assert.match(intro, />跳过<\/button>/);
+  assert.match(intro, /rangefinder-intro\.webp/);
+  assert.match(intro, /intro-camera-rig/);
+  assert.match(intro, /intro-lens-aperture/);
   assert.match(intro, /intro-aperture-blade/);
   assert.match(intro, />louis16s<\/strong>/);
-  assert.doesNotMatch(intro, /FRAME 01|正在对焦生活|rangefinder-intro/);
+  assert.doesNotMatch(intro, /FRAME 01|正在对焦生活/);
+  assert.match(css, /@keyframes intro-camera-journey/);
   assert.match(css, /@keyframes intro-opening-close/);
   assert.match(css, /@keyframes intro-shutter-fire/);
   assert.match(css, /html\[data-intro="playing"\] \.site-intro \{ display: grid; \}/);
   assert.match(css, /\.site-intro \{ display: none !important; \}/);
+  assert.ok(asset.length > 100_000, "intro asset should be a real optimized camera render");
   assert.match(favicon, /class="blade"/);
   assert.match(favicon, /prefers-color-scheme: dark/);
 });
