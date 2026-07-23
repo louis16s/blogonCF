@@ -1,7 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { completeIntro, INTRO_DURATION_MS } from "./introState";
+
+const APERTURE_BLADES = Array.from({ length: 9 }, (_, index) => (
+  <span
+    className="intro-aperture-blade"
+    style={{ "--blade-angle": `${index * 40}deg` } as CSSProperties}
+    key={index}
+  />
+));
 
 export function IntroSequence() {
   const [visible, setVisible] = useState(true);
@@ -35,12 +43,16 @@ export function IntroSequence() {
     >
       <button className="intro-skip" type="button" onClick={finish}>跳过</button>
       <div className="intro-stage" aria-hidden="true">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="intro-camera" src="/rangefinder-intro.webp" alt="" width="1280" height="853" fetchPriority="high" />
-        <span className="intro-lens-flash" />
-        <div className="intro-caption"><span>LOUIS16S · FRAME 01</span><strong>正在对焦生活</strong></div>
-        <span className="intro-progress" />
+        <div className="intro-aperture">
+          <span className="intro-aperture-scale" />
+          <div className="intro-aperture-glass">
+            <div className="intro-aperture-blades">{APERTURE_BLADES}</div>
+            <span className="intro-aperture-opening" />
+          </div>
+        </div>
+        <strong className="intro-wordmark">louis16s</strong>
       </div>
+      <span className="intro-shutter" aria-hidden="true" />
     </div>
   );
 }

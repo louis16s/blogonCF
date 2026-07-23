@@ -1,6 +1,20 @@
-<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M22 19.2727C22 20.779 20.779 22 19.2727 22H14.7273C13.221 22 12 20.779 12 19.2727V12H19.2727C20.779 12 22 13.221 22 14.7273V19.2727Z" fill="#68C4FF"/>
-<path d="M20 2C21.1046 2 22 2.89543 22 4V7C22 8.10457 21.1046 9 20 9H17C15.8954 9 15 8.10457 15 7V4C15 2.89543 15.8954 2 17 2H20Z" fill="#0C79D8"/>
-<path d="M7 15C8.10457 15 9 15.8954 9 17V20C9 21.1046 8.10457 22 7 22H4C2.89543 22 2 21.1046 2 20V17C2 15.8954 2.89543 15 4 15H7Z" fill="#0C79D8"/>
-<path d="M12 12H4.72727C3.22104 12 2 10.779 2 9.27273V4.72727C2 3.22104 3.22104 2 4.72727 2H9.27273C10.779 2 12 3.22104 12 4.72727V12Z" fill="#2E9EFF"/>
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .shell { fill: #25231f; }
+    .blade { fill: #f7f4ee; stroke: #25231f; stroke-width: 1.35; stroke-linejoin: round; }
+    .core { fill: #b96745; }
+    @media (prefers-color-scheme: dark) {
+      .shell { fill: #f3f1ed; }
+      .blade { fill: #242321; stroke: #f3f1ed; }
+      .core { fill: #db8d68; }
+    }
+  </style>
+  <circle class="shell" cx="32" cy="32" r="29"/>
+  <path class="blade" d="M31.8 12.5c7.1 0 13.1 2.8 17.2 7.4L36.4 31.1 24.8 14.2a23 23 0 0 1 7-1.7Z"/>
+  <path class="blade" d="M50.8 22.2a22.8 22.8 0 0 1 1.4 18.7l-16.4-5.3 4-20.1a23 23 0 0 1 11 6.7Z"/>
+  <path class="blade" d="M50.7 43.2a22.8 22.8 0 0 1-15.5 10.5l-3.7-16.8 20.4-2a23 23 0 0 1-1.2 8.3Z"/>
+  <path class="blade" d="M31.9 54.5a22.8 22.8 0 0 1-17-7.9l12.7-11.5 11.4 17a23 23 0 0 1-7.1 2.4Z"/>
+  <path class="blade" d="M12.8 44.5a22.8 22.8 0 0 1-.8-18.7l16.2 5.8-4.7 20a23 23 0 0 1-10.7-7.1Z"/>
+  <path class="blade" d="M13.5 23.5A22.8 22.8 0 0 1 29.4 13.6l3.1 16.9-20.4 1.3a23 23 0 0 1 1.4-8.3Z"/>
+  <circle class="core" cx="32" cy="32" r="6.4"/>
 </svg>

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { ArrowDown, ArrowsOutSimple, ChartBar, DotsNine, Rows, StarFour, X } from "@phosphor-icons/react";
 import type { Post } from "../data/types";
 
@@ -74,7 +75,7 @@ export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts
 
   if (!open) return null;
 
-  return (
+  return createPortal(
     <div className="word-cloud-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="word-cloud-dialog" role="dialog" aria-modal="true" aria-labelledby="word-cloud-title">
         <header className="word-cloud-dialog-head">
@@ -128,6 +129,7 @@ export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts
           ) : <p>点一个词，可以看看它出现在哪些文章里。</p>}
         </footer>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }

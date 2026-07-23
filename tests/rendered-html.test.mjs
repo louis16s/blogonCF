@@ -108,7 +108,10 @@ test("HEIC decoding survives signed URL refreshes without repeated work", async 
 });
 
 test("overview renders every article immediately while retaining search and category filters", async () => {
-  const blog = await readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8");
+  const [blog, footer] = await Promise.all([
+    readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/ContentFooter.tsx", import.meta.url), "utf8"),
+  ]);
   assert.doesNotMatch(blog, /items\.slice\(/);
   assert.match(blog, /\{items\.map\(\(post, index\)/);
   assert.doesNotMatch(blog, /resource-strip|工具与订阅/);
@@ -134,6 +137,9 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(blog, /post\.tags/);
   assert.doesNotMatch(blog, /SortMode|最新优先|最早优先|sort-select/);
   assert.doesNotMatch(blog, /同步 Notion 中的跳转菜单/);
+  assert.doesNotMatch(blog, /首页全部展开/);
+  assert.match(footer, /这里收录着 \$\{postCount\} 个文章。不赶时间，慢慢翻。/);
+  assert.match(footer, /偶尔拍照，或是写代码，剩下的时间用来对焦生活。/);
   assert.match(blog, /<ContentFooter id="about" siteConfig=\{siteConfig\} postCount=\{posts\.length\}/);
   assert.doesNotMatch(blog, /最近常出现|buildWordCloud\(posts\)/);
   assert.match(blog, /<WordCloudDialog open=\{wordCloudOpen\}/);
@@ -143,13 +149,13 @@ test("overview renders every article immediately while retaining search and cate
   assert.doesNotMatch(sidebar, />站点地图</, "the XML sitemap should not be presented as visitor navigation");
 });
 
-test("daylight theme uses a warm editorial palette and word cloud offers six layouts", async () => {
+test("daylight theme uses a clear reference-led palette and word cloud offers six layouts", async () => {
   const [css, cloud] = await Promise.all([
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/components/WordCloudDialog.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(css, /--bg: #f4efe7/);
-  assert.match(css, /--surface: #fffdf8/);
+  assert.match(css, /--bg: #fafaf9/);
+  assert.match(css, /--surface: #ffffff/);
   assert.match(css, /--accent: #b96745/);
   assert.match(css, /\.post-emoji \{/);
   for (const mode of ["pile", "drift", "rows", "cascade", "constellation", "rank"]) {
@@ -162,6 +168,8 @@ test("daylight theme uses a warm editorial palette and word cloud offers six lay
   assert.match(css, /@media \(max-height: 680px\)/);
   assert.match(css, /@media \(max-width: 900px\) and \(max-height: 520px\)/);
   assert.match(css, /overscroll-behavior-inline: contain/);
+  assert.match(cloud, /createPortal/);
+  assert.match(cloud, /document\.body/);
 });
 
 test("word cloud ranks only article titles and bodies deterministically", () => {
@@ -193,12 +201,12 @@ test("every generated word uses the same Unicode normalization as article search
   assert.equal(normalizeSearchText("  ＡＩ  "), "ai");
 });
 
-test("rangefinder intro lasts at least five seconds, plays on every load, and remains motion-safe", async () => {
-  const [layout, intro, css, asset] = await Promise.all([
+test("aperture intro lasts at least five seconds, plays on every load, and remains motion-safe", async () => {
+  const [layout, intro, css, favicon] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/IntroSequence.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
-    readFile(new URL("../public/rangefinder-intro.webp", import.meta.url)),
+    readFile(new URL("../public/favicon.svg", import.meta.url), "utf8"),
   ]);
   assert.match(layout, /<IntroSequence \/>/);
   assert.match(layout, /INTRO_BOOTSTRAP_SCRIPT/);
@@ -207,11 +215,15 @@ test("rangefinder intro lasts at least five seconds, plays on every load, and re
   assert.match(intro, /completeIntro\(document\.documentElement/);
   assert.ok(INTRO_DURATION_MS >= 5_000);
   assert.match(intro, />跳过<\/button>/);
-  assert.match(intro, /rangefinder-intro\.webp/);
-  assert.match(css, /@keyframes intro-camera-journey/);
+  assert.match(intro, /intro-aperture-blade/);
+  assert.match(intro, />louis16s<\/strong>/);
+  assert.doesNotMatch(intro, /FRAME 01|正在对焦生活|rangefinder-intro/);
+  assert.match(css, /@keyframes intro-opening-close/);
+  assert.match(css, /@keyframes intro-shutter-fire/);
   assert.match(css, /html\[data-intro="playing"\] \.site-intro \{ display: grid; \}/);
   assert.match(css, /\.site-intro \{ display: none !important; \}/);
-  assert.ok(asset.length > 100_000, "intro asset should be a real optimized camera render");
+  assert.match(favicon, /class="blade"/);
+  assert.match(favicon, /prefers-color-scheme: dark/);
 });
 
 test("mobile header uses explicit labels, predictable links, and touch-sized controls", async () => {
@@ -403,7 +415,10 @@ test("word-cloud endpoint reads public titles and bodies without leaking propert
     if (url.includes("/blocks/")) {
       blockReads.push(url);
       const text = url.includes("public-one") ? "cloudflare cloudflare" : "山海 cloudflare";
-      return Response.json({ results: [{ id: `${blockReads.length}-paragraph`, type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: text, annotations: {} }] } }], has_more: false });
+      return Response.json({ results: [
+        { id: `${blockReads.length}-paragraph`, type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: text, annotations: {} }] } },
+        { id: `${blockReads.length}-code`, type: "code", has_children: false, code: { language: "javascript", rich_text: [{ plain_text: "forbidden_code forbidden_code", annotations: {} }], caption: [{ plain_text: "forbidden_caption forbidden_caption" }] } },
+      ], has_more: false });
     }
     throw new Error(`Unexpected Notion request: ${url} ${init.method || "GET"}`);
   };
@@ -416,7 +431,7 @@ test("word-cloud endpoint reads public titles and bodies without leaking propert
     assert.equal(payload.partial, false);
     assert.ok(payload.words.some((item) => item.word === "山海" && item.postIds.includes("public-one")));
     assert.ok(payload.words.some((item) => item.word === "cloudflare"));
-    assert.doesNotMatch(JSON.stringify(payload), /摘要禁词|分类禁词|标签禁词|私密标题|locked-one|secret/);
+    assert.doesNotMatch(JSON.stringify(payload), /摘要禁词|分类禁词|标签禁词|私密标题|locked-one|secret|forbidden_code|forbidden_caption/);
     assert.equal(blockReads.length, 2);
     assert.ok(blockReads.every((url) => !url.includes("locked-one")), "locked pages must be excluded before any body request");
   } finally { globalThis.fetch = originalFetch; }

@@ -382,6 +382,7 @@ function blockText(blocks: any[]): string {
   const fragments: string[] = [];
   const visit = (items: any[]) => {
     for (const block of items || []) {
+      if (block.type === "code") continue;
       const rich = Array.isArray(block.richText) ? block.richText.map((item: any) => item.text || "").join("") : "";
       if (rich) fragments.push(rich);
       if (typeof block.caption === "string" && block.caption) fragments.push(block.caption);

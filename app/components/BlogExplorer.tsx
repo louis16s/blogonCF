@@ -28,6 +28,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
   const [dark, setDark] = useState(false);
+  const [themeReady, setThemeReady] = useState(false);
   const [wordCloudOpen, setWordCloudOpen] = useState(false);
 
   useEffect(() => {
@@ -60,15 +61,19 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
     try { saved = window.localStorage.getItem("blog-theme"); }
     catch { /* Use the system theme when storage is unavailable. */ }
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const frame = window.requestAnimationFrame(() => setDark(saved ? saved === "dark" : prefersDark));
+    const frame = window.requestAnimationFrame(() => {
+      setDark(saved ? saved === "dark" : prefersDark);
+      setThemeReady(true);
+    });
     return () => window.cancelAnimationFrame(frame);
   }, []);
 
   useEffect(() => {
+    if (!themeReady) return;
     document.documentElement.dataset.theme = dark ? "dark" : "light";
     try { window.localStorage.setItem("blog-theme", dark ? "dark" : "light"); }
     catch { /* Theme switching still works without persistence. */ }
-  }, [dark]);
+  }, [dark, themeReady]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -124,7 +129,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
           <div className="welcome-block">
             <p className="welcome"><Sparkle aria-hidden size={19} weight="fill" /><span>blog 复活啦！<span className="welcome-tagline">是新的一年真好啊，绝胜烟柳满皇都！</span></span></p>
             <div className="sync-meta">
-              <span>{syncState === "live" ? `${posts.length} 篇公开文章 · 首页全部展开` : syncState === "loading" ? "正在读取公开文章" : "内容源暂时不可用"}</span>
+              <span>{syncState === "live" ? `${posts.length} 篇公开文章` : syncState === "loading" ? "正在读取公开文章" : "内容源暂时不可用"}</span>
               <span className={`source ${syncState === "live" ? "live" : ""}`}>{syncState === "live" ? "Notion 实时同步" : syncState === "loading" ? "正在同步" : "同步中断"}</span>
             </div>
           </div>
