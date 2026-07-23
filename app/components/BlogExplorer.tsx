@@ -121,17 +121,13 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
   };
   return (
     <div className="blog-frame">
-      <SiteSidebar siteConfig={siteConfig} siteLinks={siteLinks} />
+      <SiteSidebar siteLinks={siteLinks} postCount={posts.length} syncState={syncState} />
       <WordCloudDialog open={wordCloudOpen} posts={posts} onClose={closeWordCloud} />
 
       <main className="blog-main">
         <header className="blog-toolbar">
           <div className="welcome-block">
             <p className="welcome"><Sparkle aria-hidden size={19} weight="fill" /><span>blog 复活啦！<span className="welcome-tagline">是新的一年真好啊，绝胜烟柳满皇都！</span></span></p>
-            <div className="sync-meta">
-              <span>{syncState === "live" ? `${posts.length} 篇公开文章` : syncState === "loading" ? "正在读取公开文章" : "内容源暂时不可用"}</span>
-              <span className={`source ${syncState === "live" ? "live" : ""}`}>{syncState === "live" ? "Notion 实时同步" : syncState === "loading" ? "正在同步" : "同步中断"}</span>
-            </div>
           </div>
 
           <div className="toolbar-actions">

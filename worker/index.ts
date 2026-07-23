@@ -322,6 +322,7 @@ async function querySiteLinks(env: Env): Promise<any[]> {
         { or: [
           { property: "type", select: { equals: "Menu" } },
           { property: "type", select: { equals: "SubMenu" } },
+          { property: "type", select: { equals: "Page" } },
         ] },
       ] },
       sorts: [{ property: "date", direction: "descending" }],
@@ -418,23 +419,29 @@ function toPost(page: any) {
 
 function toSiteLink(page: any) {
   const properties = page.properties || {};
+  const menuType = properties.type?.select?.name;
+  const linkTitle = (title(properties.title) || "未命名链接").replace(/_+$/, "");
+  const pageSlug = plain(properties.slug).trim();
+  const isAboutPage = menuType === "Page" && (pageSlug === "me" || linkTitle.includes("关于"));
   const configuredTarget = [properties.slug, ...Object.values(properties).filter((property) => property !== properties.slug)]
     .map(notionPropertyLink)
-    .find(Boolean) || plain(properties.slug).trim();
-  const external = /^https?:\/\//i.test(configuredTarget);
-  const internal = /^\/(?!\/)/.test(configuredTarget);
-  const rss = /^\/?rss(?:\/feed\.xml|\.xml)?\/?$/i.test(configuredTarget)
+    .find(Boolean) || pageSlug;
+  const notionPageId = isAboutPage ? normalizeNotionId(page.id) : "";
+  const pageTarget = notionPageId ? `https://www.notion.so/${notionPageId.replaceAll("-", "")}` : "";
+  const target = pageTarget || configuredTarget;
+  const external = /^https?:\/\//i.test(target);
+  const internal = /^\/(?!\/)/.test(target);
+  const rss = /^\/?rss(?:\/feed\.xml|\.xml)?\/?$/i.test(target)
     || /^rss(?:\s|$)/i.test(title(properties.title));
-  const href = rss ? "/rss.xml" : external || internal ? normalizeInternalNavigationTarget(configuredTarget) : "";
-  const menuType = properties.type?.select?.name;
+  const href = menuType === "Page" && !isAboutPage ? "" : rss ? "/rss.xml" : external || internal ? normalizeInternalNavigationTarget(target) : "";
   return {
     id: page.id,
-    title: (title(properties.title) || "未命名链接").replace(/_+$/, ""),
+    title: linkTitle,
     href,
     summary: plain(properties.summary),
     icon: page.icon?.type === "emoji" ? page.icon.emoji : plain(properties.icon),
     external,
-    kind: rss ? "rss" as const : menuType === "Menu" ? "nav" as const : "tool" as const,
+    kind: rss ? "rss" as const : menuType === "Menu" || menuType === "Page" ? "nav" as const : "tool" as const,
   };
 }
 

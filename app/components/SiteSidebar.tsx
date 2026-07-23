@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CaretDown,
   Cloud,
@@ -12,22 +12,22 @@ import {
   Rss,
   Wrench,
 } from "@phosphor-icons/react";
-import type { SiteConfig, SiteLink } from "../data/types";
+import type { SiteLink } from "../data/types";
 import { usePersistedDisclosure } from "./usePersistedDisclosure";
-import { useSiteConfig } from "./useSiteConfig";
 import { useSiteNavigation } from "./useSiteNavigation";
 
+export type ContentSyncState = "loading" | "live" | "unavailable";
+
 type SidebarProps = {
-  siteConfig?: SiteConfig;
   siteLinks?: SiteLink[];
+  postCount?: number;
+  syncState?: ContentSyncState;
 };
 
-export function SiteSidebar({ siteConfig, siteLinks = [] }: SidebarProps) {
-  const config = useSiteConfig(siteConfig);
+export function SiteSidebar({ siteLinks = [], postCount, syncState }: SidebarProps) {
   const resolvedLinks = useSiteNavigation(siteLinks);
   const toolsDisclosure = usePersistedDisclosure({ key: "blog.sidebar.tools.v1", legacyKey: "blog-sidebar-tools-open" });
-  const currentYear = new Date().getFullYear();
-  const years = config.since === String(currentYear) ? config.since : `${config.since}–${currentYear}`;
+  const [articlePageSync, setArticlePageSync] = useState<{ count?: number; state: ContentSyncState }>({ state: "loading" });
   const toolLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "tool"), [resolvedLinks]);
   const navLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "nav" && !link.title.includes("归档") && !link.href.includes("#archive")), [resolvedLinks]);
   const rssLink = resolvedLinks.find((link) => link.kind === "rss");
@@ -35,6 +35,27 @@ export function SiteSidebar({ siteConfig, siteLinks = [] }: SidebarProps) {
   const sitemapLink = navLinks.find((link) => link.href.includes("sitemap") || link.title.includes("地图"));
   const assignedNavIds = new Set([aboutLink?.id, sitemapLink?.id].filter(Boolean));
   const extraNavLinks = navLinks.filter((link) => !assignedNavIds.has(link.id));
+  const resolvedSyncState = syncState || articlePageSync.state;
+  const resolvedPostCount = typeof postCount === "number" ? postCount : articlePageSync.count;
+  const countLabel = resolvedSyncState === "live" && typeof resolvedPostCount === "number"
+    ? `${resolvedPostCount} 篇公开文章`
+    : resolvedSyncState === "loading" ? "正在读取公开文章" : "内容源暂时不可用";
+  const syncLabel = resolvedSyncState === "live" ? "Notion 实时同步" : resolvedSyncState === "loading" ? "正在同步" : "同步中断";
+
+  useEffect(() => {
+    if (typeof postCount === "number" || syncState) return;
+    const controller = new AbortController();
+    fetch("/api/content/posts", { signal: controller.signal, cache: "no-store" })
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((data) => setArticlePageSync({
+        count: Array.isArray(data.posts) ? data.posts.length : 0,
+        state: "live",
+      }))
+      .catch(() => {
+        if (!controller.signal.aborted) setArticlePageSync({ state: "unavailable" });
+      });
+    return () => controller.abort();
+  }, [postCount, syncState]);
 
   return (
     <aside className="site-sidebar" aria-label="站点导航">
@@ -48,7 +69,11 @@ export function SiteSidebar({ siteConfig, siteLinks = [] }: SidebarProps) {
 
         <nav className="sidebar-nav" aria-label="主导航">
           <Link href="/#word-cloud"><Cloud aria-hidden size={19} weight="regular" />文章词云</Link>
-          <Link href={aboutLink?.href || "/#about"}><Info aria-hidden size={19} weight="regular" />{aboutLink?.title || "关于我"}</Link>
+          {aboutLink && (aboutLink.external ? (
+            <a href={aboutLink.href} target="_blank" rel="noreferrer"><Info aria-hidden size={19} weight="regular" />{aboutLink.title || "关于我"}</a>
+          ) : (
+            <Link href={aboutLink.href}><Info aria-hidden size={19} weight="regular" />{aboutLink.title || "关于我"}</Link>
+          ))}
           {extraNavLinks.map((link) => link.external ? (
             <a href={link.href} target="_blank" rel="noreferrer" key={link.id}><ArrowSquareOut aria-hidden size={19} />{link.title}</a>
           ) : (
@@ -83,7 +108,11 @@ export function SiteSidebar({ siteConfig, siteLinks = [] }: SidebarProps) {
             }}
           >
             <Link href="/#word-cloud">文章词云</Link>
-            {aboutLink && <Link href={aboutLink.href}>{aboutLink.title || "关于我"}</Link>}
+            {aboutLink && (aboutLink.external ? (
+              <a href={aboutLink.href} target="_blank" rel="noreferrer">{aboutLink.title || "关于我"}<small>Notion</small></a>
+            ) : (
+              <Link href={aboutLink.href}>{aboutLink.title || "关于我"}</Link>
+            ))}
             {extraNavLinks.map((link) => link.external ? (
               <a href={link.href} target="_blank" rel="noreferrer" key={link.id}>{link.title}<small>外部</small></a>
             ) : (
@@ -98,6 +127,10 @@ export function SiteSidebar({ siteConfig, siteLinks = [] }: SidebarProps) {
               </div>
             )}
             {rssLink && <Link href={rssLink.href}>RSS 订阅</Link>}
+            <div className="mobile-menu-status" aria-live="polite">
+              <span>{countLabel}</span>
+              <span className={`source ${resolvedSyncState === "live" ? "live" : ""}`}>{syncLabel}</span>
+            </div>
           </nav>
         </details>
 
@@ -105,8 +138,11 @@ export function SiteSidebar({ siteConfig, siteLinks = [] }: SidebarProps) {
       </div>
 
       <div className="sidebar-footer">
-        <p>© {config.author} {years}</p>
-        <p>在 <a href="https://www.notion.so" target="_blank" rel="noreferrer">Notion</a> 写字，Cloudflare 带它兜风。</p>
+        <div className="sidebar-sync-meta" aria-live="polite">
+          <span>{countLabel}</span>
+          <span className={`source ${resolvedSyncState === "live" ? "live" : ""}`}>{syncLabel}</span>
+        </div>
+        <p>在 <a href="https://www.notion.so/" target="_blank" rel="noreferrer">Notion</a> 创造，Cloudflare 带它兜风。</p>
       </div>
     </aside>
   );
