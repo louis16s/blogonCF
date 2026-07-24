@@ -3,7 +3,7 @@ import { THEME_BOOTSTRAP_SCRIPT } from "./components/introState";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://bblog.530555.xyz"),
+  metadataBase: new URL("https://1.530555.xyz"),
   title: { default: "louis16s' blog", template: "%s · louis16s' blog" },
   description: "关于旅行、摄影、开发与生活的个人记录。由 Notion 写作，运行在 Cloudflare。",
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },

@@ -11,7 +11,7 @@
 
 ## Browser verification
 
-- Rendered production page opened in a real browser at `https://bblog.530555.xyz/` and the Sites deployment URL.
+- Rendered production page opened in a real browser at `https://1.530555.xyz/` and the Sites deployment URL.
 - Primary interactions tested: full-text search, category filter, dark/light theme toggle, public article navigation and Notion body rendering, password-protected article gate.
 - RSS, sitemap, health, and live post endpoints were checked over HTTPS.
 - Browser console errors/warnings checked after the final production reload: none from the page.

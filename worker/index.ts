@@ -325,7 +325,7 @@ async function notionSitePageChild(env: Env, request: Request): Promise<Response
 }
 
 async function notionSitemap(env: Env): Promise<Response> {
-  const base = "https://bblog.530555.xyz";
+  const base = "https://1.530555.xyz";
   let posts: ReturnType<typeof toPost>[] = [];
   let pages: ReturnType<typeof toSitePagePost>[] = [];
   if (env.NOTION_TOKEN) {
@@ -345,7 +345,7 @@ async function notionSitemap(env: Env): Promise<Response> {
 }
 
 async function notionRss(env: Env): Promise<Response> {
-  const base = "https://bblog.530555.xyz";
+  const base = "https://1.530555.xyz";
   let posts: ReturnType<typeof toPost>[] = [];
   if (env.NOTION_TOKEN) {
     try { posts = (await queryPosts(env, undefined, 100)).map(toPost).filter((post) => post.slug); }

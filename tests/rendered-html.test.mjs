@@ -53,7 +53,7 @@ test("server-renders a safe loading state without stale Notion content", async (
   assert.match(html, /prefers-reduced-motion/);
   assert.ok(html.indexOf("prefers-reduced-motion") < html.indexOf("site-intro"), "pre-paint decision must run before the intro markup");
   assert.doesNotMatch(html, /2026槟城/);
-  assert.match(html, /https:\/\/bblog\.530555\.xyz\/og\.png/);
+  assert.match(html, /https:\/\/1\.530555\.xyz\/og\.png/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/);
 });
 
@@ -555,7 +555,7 @@ test("sitemap is generated from current Published posts and safely degrades", as
   const worker = await loadWorker();
   const safe = await worker.fetch(new Request("http://localhost/sitemap.xml"), { ASSETS: assets }, context);
   const safeXml = await safe.text();
-  assert.match(safeXml, /https:\/\/bblog\.530555\.xyz\/<\/loc>/);
+  assert.match(safeXml, /https:\/\/1\.530555\.xyz\/<\/loc>/);
   assert.doesNotMatch(safeXml, /\/blog\//);
   const head = await worker.fetch(new Request("http://localhost/sitemap.xml", { method: "HEAD" }), { ASSETS: assets }, context);
   assert.equal(head.status, 200);

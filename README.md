@@ -2,9 +2,11 @@
 
 把 Notion 数据库直接变成运行在 Cloudflare Workers 上的完整博客。文章、独立页面、导航、小工具、RSS、站点地图和站点信息均从 Notion 读取，无需 Vercel，也不需要把访客送回 Notion 阅读正文。
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/louis16s/bloginCF)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/louis16s/blogonCF)
 
-线上示例：[2.530555.xyz](https://2.530555.xyz)
+线上示例：[1.530555.xyz](https://1.530555.xyz)
+
+等价入口：[blog.530555.xyz](https://blog.530555.xyz) · [www.530555.xyz](https://www.530555.xyz)
 
 ## 特性
 
@@ -45,8 +47,8 @@ Cloudflare 的一键部署会从公开仓库创建副本并配置 Workers Builds
 - 一个可读取博客数据库的 Notion Integration
 
 ```bash
-git clone https://github.com/louis16s/bloginCF.git
-cd bloginCF
+git clone https://github.com/louis16s/blogonCF.git
+cd blogonCF
 corepack enable
 pnpm install
 ```
