@@ -35,5 +35,5 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
   const decoded = decodeURIComponent(slug);
   const { payload, fetched } = await getArticle(decoded);
   if (payload?.status === 404) notFound();
-  return <div className="blog-frame article-frame"><SiteSidebar /><main className="article-shell"><header className="article-toolbar"><Link href="/">← 返回全部文章</Link><span>Notion · Cloudflare</span></header><article><ArticleClient slug={decoded} initialPost={payload?.post} initialBlocks={payload?.locked ? [] : payload?.blocks || []} initialLocked={Boolean(payload?.locked)} initialFetched={fetched} initialError={payload?.error || ""} initialTruncated={Boolean(payload?.truncated)} /></article><ContentFooter /></main></div>;
+  return <div className="blog-frame article-frame"><SiteSidebar /><main className="article-shell"><header className="article-toolbar"><Link href="/">← 返回全部文章</Link></header><article><ArticleClient slug={decoded} initialPost={payload?.post} initialBlocks={payload?.locked ? [] : payload?.blocks || []} initialLocked={Boolean(payload?.locked)} initialFetched={fetched} initialError={payload?.error || ""} initialTruncated={Boolean(payload?.truncated)} /></article><ContentFooter /></main></div>;
 }

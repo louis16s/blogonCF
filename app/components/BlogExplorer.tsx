@@ -121,7 +121,14 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
   };
   return (
     <div className="blog-frame">
-      <SiteSidebar siteLinks={siteLinks} postCount={posts.length} syncState={syncState} />
+      <SiteSidebar
+        siteLinks={siteLinks}
+        postCount={posts.length}
+        syncState={syncState}
+        categories={categories}
+        activeCategory={category}
+        onCategoryChange={selectCategory}
+      />
       <WordCloudDialog open={wordCloudOpen} posts={posts} onClose={closeWordCloud} />
 
       <main className="blog-main">
@@ -144,14 +151,6 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
         </header>
 
         <section className="posts-shell" id="posts" aria-label="全部文章">
-          <div className="filter-row">
-            <div className="filters" role="group" aria-label="按分类筛选">
-              {categories.map((item) => (
-                <button type="button" key={item} className={item === category ? "active" : ""} onClick={() => selectCategory(item)}>{item}</button>
-              ))}
-            </div>
-          </div>
-
           {groups.map(([name, items]) => (
             <section className="category-section" key={name} aria-labelledby={`category-${slugify(name)}`}>
               <h2 id={`category-${slugify(name)}`}>#&nbsp; {name}</h2>

@@ -230,6 +230,14 @@ function notionPageIdFromHref(href: string): string {
   } catch { return ""; }
 }
 
+function bookmarkSource(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "");
+  } catch {
+    return url;
+  }
+}
+
 function notionImageIdentity(block: ContentBlock): string {
   try {
     const gateway = new URL(block.url || "", "https://notion-image.local");
@@ -309,7 +317,7 @@ function Block({ block, onOpenChild }: { block: ContentBlock; onOpenChild: (page
     case "image": return block.url ? block.url.startsWith("/_notion/image?")
       ? <NotionHeicImage src={block.url} identity={notionImageIdentity(block)} alt={block.caption || "文章图片"} caption={block.caption} />
       : <NotionImage src={block.url} alt={block.caption || "文章图片"} caption={block.caption} /> : null;
-    case "bookmark": return block.url ? <a className={`${className} bookmark`} href={block.url} target="_blank" rel="noreferrer">{block.caption || block.url}<ArrowSquareOut aria-hidden size={16} /></a> : null;
+    case "bookmark": return block.url ? <a className={`${className} bookmark`} href={block.url} target="_blank" rel="noreferrer"><span><strong>{block.caption || bookmarkSource(block.url)}</strong><small>{bookmarkSource(block.url)}</small></span><ArrowSquareOut aria-hidden size={16} /></a> : null;
     case "embed": return block.url ? <figure className={`${className} notion-embed`}><iframe src={block.url} title={block.caption || "Notion 嵌入内容"} loading="lazy" allowFullScreen sandbox="allow-forms allow-popups allow-same-origin allow-scripts" />{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
     case "file": case "pdf": case "audio": return block.url ? <a className="bookmark" href={block.url} target="_blank" rel="noreferrer">{block.caption || (block.type === "pdf" ? "查看 PDF" : "下载附件")}<ArrowSquareOut aria-hidden size={16} /></a> : null;
     case "child_page": return block.pageId ? <a className={`${className} notion-child-page`} href={`?child=${encodeURIComponent(block.pageId)}`} onClick={(event) => { event.preventDefault(); onOpenChild(block.pageId!); }}><FileText aria-hidden size={18} /><strong>{block.caption || "子页面"}</strong><CaretRight aria-hidden size={16} /></a> : null;

@@ -129,6 +129,12 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(sidebar, />菜单</);
   assert.doesNotMatch(sidebar, /文章归档|历史归档/);
   assert.match(sidebar, />RSS 订阅</);
+  assert.match(sidebar, />文章分类/);
+  assert.match(sidebar, /className="sidebar-section sidebar-categories"/);
+  assert.match(sidebar, /categories\.map\(\(item\)/);
+  assert.match(blog, /categories=\{categories\}/);
+  assert.match(blog, /onCategoryChange=\{selectCategory\}/);
+  assert.doesNotMatch(blog, /className="filter-row"|className="filters"/);
   assert.match(sidebar, /className="mobile-menu-group"/);
   assert.match(sidebar, /aboutLink && \(aboutLink\.external/);
   assert.match(sidebar, /<Link href=\{aboutLink\.href\}>.*aboutLink\.title/s);
@@ -260,7 +266,7 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   assert.match(sidebar, /<small>外部<\/small>/);
   assert.match(sidebar, /aboutLink && \(aboutLink\.external/, "unconfigured About links must not be invented on mobile");
   assert.doesNotMatch(sidebar, /href="\/#about"/);
-  assert.match(sidebar, /event\.target instanceof Element && event\.target\.closest\("a"\)/, "mobile menu should close after a destination is chosen");
+  assert.match(sidebar, /event\.target instanceof Element && event\.target\.closest\("a, button"\)/, "mobile menu should close after a destination or category is chosen");
   assert.doesNotMatch(sidebar, /className="mobile-tools"/);
   assert.match(blog, /className="theme-label"/);
   assert.match(blog, /className="welcome-tagline"/);
@@ -270,7 +276,7 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   assert.match(css, /\.mobile-menu>summary \{ min-height: 44px;/);
   assert.match(css, /\.mobile-menu-list a \{ min-height: 44px;/);
   assert.match(css, /\.mobile-menu:not\(\[open\]\) \.mobile-menu-list \{ display: none; \}/);
-  assert.match(css, /\.filters button \{ flex: 0 0 auto; min-height: 44px;/);
+  assert.match(css, /\.mobile-category-list button \{ min-height: 42px;/);
 });
 
 test("intro bootstrap plays on reload and respects reduced motion", () => {
@@ -372,6 +378,7 @@ test("about and other Published Notion pages render inside the site shell", asyn
     const url = String(input);
     if (url.includes(`/blocks/${pageId}/children`)) return Response.json({ results: [
       { id: "about-paragraph", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: "这是本站渲染的关于我正文。", annotations: { bold: true } }] } },
+      { id: "about-bookmark", type: "bookmark", has_children: false, bookmark: { url: "https://www.ifanr.com/", caption: [] } },
     ], has_more: false });
     if (url.includes("/data_sources/source-id/query")) {
       const body = JSON.parse(init.body);
@@ -392,6 +399,8 @@ test("about and other Published Notion pages render inside the site shell", asyn
     assert.match(html, /LOUIS16S · PAGE/);
     assert.match(html, /关于 louis16s/);
     assert.match(html, /这是本站渲染的关于我正文。/);
+    assert.match(html, /爱范儿/);
+    assert.match(html, /ifanr\.com/);
     assert.match(html, /← 返回全部文章/);
     assert.doesNotMatch(html, /href="https:\/\/www\.notion\.so\/118ad771/);
     assert.doesNotMatch(html, /fas fa-info/);
@@ -405,13 +414,15 @@ test("about and other Published Notion pages render inside the site shell", asyn
     assert.equal(payload.post.slug, "me");
     assert.equal(payload.post.icon, "");
     assert.equal(payload.blocks[0].richText[0].text, "这是本站渲染的关于我正文。");
+    assert.equal(payload.blocks[1].caption, "爱范儿");
   } finally { globalThis.fetch = originalFetch; }
 });
 
 test("site page routing keeps all Published Page content internal while tools remain external", async () => {
-  const [workerSource, pageScreen, aboutRoute, genericRoute] = await Promise.all([
+  const [workerSource, pageScreen, articleRoute, aboutRoute, genericRoute] = await Promise.all([
     readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/components/SiteContentPage.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/blog/[slug]/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/about/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/page/[slug]/page.tsx", import.meta.url), "utf8"),
   ]);
@@ -421,6 +432,8 @@ test("site page routing keeps all Published Page content internal while tools re
   assert.match(pageScreen, /contentKind="page"/);
   assert.match(aboutRoute, /SiteContentPage slug="about"/);
   assert.match(genericRoute, /SiteContentPage slug=\{decoded\}/);
+  assert.doesNotMatch(pageScreen, /Notion · Cloudflare/);
+  assert.doesNotMatch(articleRoute, /Notion · Cloudflare/);
 });
 
 test("locked article raw HTML renders only its password gate", async () => {

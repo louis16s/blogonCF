@@ -7,6 +7,7 @@ import {
   Cloud,
   Compass,
   ArrowSquareOut,
+  FolderOpen,
   Info,
   List,
   Newspaper,
@@ -23,11 +24,15 @@ type SidebarProps = {
   siteLinks?: SiteLink[];
   postCount?: number;
   syncState?: ContentSyncState;
+  categories?: string[];
+  activeCategory?: string;
+  onCategoryChange?: (category: string) => void;
 };
 
-export function SiteSidebar({ siteLinks = [], postCount, syncState }: SidebarProps) {
+export function SiteSidebar({ siteLinks = [], postCount, syncState, categories = [], activeCategory, onCategoryChange }: SidebarProps) {
   const resolvedLinks = useSiteNavigation(siteLinks);
   const toolsDisclosure = usePersistedDisclosure({ key: "blog.sidebar.tools.v1", legacyKey: "blog-sidebar-tools-open" });
+  const categoriesDisclosure = usePersistedDisclosure({ key: "blog.sidebar.categories.v1" });
   const [articlePageSync, setArticlePageSync] = useState<{ count?: number; state: ContentSyncState }>({ state: "loading" });
   const toolLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "tool"), [resolvedLinks]);
   const navLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "nav" && !link.title.includes("归档") && !link.href.includes("#archive")), [resolvedLinks]);
@@ -111,7 +116,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState }: SidebarPro
             className="mobile-menu-list"
             aria-label="移动端菜单"
             onClick={(event) => {
-              if (event.target instanceof Element && event.target.closest("a")) event.currentTarget.closest("details")?.removeAttribute("open");
+              if (event.target instanceof Element && event.target.closest("a, button")) event.currentTarget.closest("details")?.removeAttribute("open");
             }}
           >
             <Link href="/#word-cloud">文章词云</Link>
@@ -139,6 +144,14 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState }: SidebarPro
               </div>
             )}
             {rssLink && <Link href={rssLink.href}>RSS 订阅</Link>}
+            {categories.length > 0 && onCategoryChange && (
+              <div className="mobile-menu-group mobile-category-list">
+                <p>文章分类</p>
+                {categories.map((item) => (
+                  <button type="button" className={item === activeCategory ? "active" : ""} aria-pressed={item === activeCategory} onClick={() => onCategoryChange(item)} key={item}>{item}</button>
+                ))}
+              </div>
+            )}
             <div className="mobile-menu-status" aria-live="polite">
               <span>{countLabel}</span>
               <span className={`source ${resolvedSyncState === "live" ? "live" : ""}`}>{syncLabel}</span>
@@ -147,6 +160,20 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState }: SidebarPro
         </details>
 
         {rssLink && <Link className="rss-link" href={rssLink.href}><Rss aria-hidden size={20} />{rssLink.title || "RSS 订阅"}</Link>}
+        {categories.length > 0 && onCategoryChange && (
+          <details
+            className="sidebar-section sidebar-categories"
+            open={categoriesDisclosure.open}
+            onToggle={categoriesDisclosure.onToggle}
+          >
+            <summary><span><FolderOpen aria-hidden size={16} />文章分类 <small>{Math.max(0, categories.length - 1)}</small></span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
+            <div className="sidebar-category-list" role="group" aria-label="按分类筛选">
+              {categories.map((item) => (
+                <button type="button" className={item === activeCategory ? "active" : ""} aria-pressed={item === activeCategory} onClick={() => onCategoryChange(item)} key={item}>{item}</button>
+              ))}
+            </div>
+          </details>
+        )}
       </div>
 
       <div className="sidebar-footer">

@@ -11,7 +11,6 @@ export function SiteContentPage({ slug, payload, fetched = true }: { slug: strin
       <main className="article-shell">
         <header className="article-toolbar">
           <Link href="/">← 返回全部文章</Link>
-          <span>Notion · Cloudflare</span>
         </header>
         <article>
           <ArticleClient

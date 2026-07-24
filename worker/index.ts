@@ -761,6 +761,28 @@ function normalizeRichText(value: any[] = []) {
   }));
 }
 
+const BOOKMARK_TITLES: Record<string, string> = {
+  "ifanr.com": "爱范儿",
+  "ruanyifeng.com": "阮一峰的网络日志",
+  "sspai.com": "少数派",
+  "v2ex.com": "V2EX",
+  "chiphell.com": "Chiphell",
+  "topys.cn": "TOPYS",
+};
+
+function bookmarkTitle(url: unknown): string {
+  if (typeof url !== "string") return "网页链接";
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.replace(/^www\./i, "").toLocaleLowerCase();
+    if (BOOKMARK_TITLES[hostname]) return BOOKMARK_TITLES[hostname];
+    const stem = hostname.split(".")[0].replace(/[-_]+/g, " ").trim();
+    return stem ? stem.replace(/\b\w/g, (letter) => letter.toLocaleUpperCase()) : "网页链接";
+  } catch {
+    return "网页链接";
+  }
+}
+
 function normalizeBlock(raw: any): any | null {
   const type = raw.type;
   const value = raw[type] || {};
@@ -778,7 +800,9 @@ function normalizeBlock(raw: any): any | null {
     }
     case "bookmark": case "embed": case "video": case "file": case "pdf": case "audio": case "link_preview": {
       const url = value.url || value.external?.url || value.file?.url;
-      return { ...base, type: type === "video" ? "embed" : type === "link_preview" ? "bookmark" : type, url, caption: richText(value.caption) };
+      const normalizedType = type === "video" ? "embed" : type === "link_preview" ? "bookmark" : type;
+      const caption = richText(value.caption) || (normalizedType === "bookmark" ? bookmarkTitle(url) : "");
+      return { ...base, type: normalizedType, url, caption };
     }
     case "child_page": return { ...base, caption: value.title || "子页面", pageId: normalizeNotionId(raw.id) };
     case "child_database": return { ...base, caption: value.title || "子数据库", url: `https://www.notion.so/${String(raw.id).replaceAll("-", "")}` };
