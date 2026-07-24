@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 import { createSharedRequest, readDisclosureState, writeDisclosureState } from "../app/components/clientState.js";
-import { completeIntro, INTRO_BOOTSTRAP_SCRIPT, INTRO_DURATION_MS } from "../app/components/introState.js";
+import { completeIntro, INTRO_BOOTSTRAP_SCRIPT, INTRO_DURATION_MS, THEME_BOOTSTRAP_SCRIPT } from "../app/components/introState.js";
 import { buildWordCloud, normalizeSearchText } from "../shared/wordCloud.js";
 
 const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -212,17 +212,22 @@ test("every generated word uses the same Unicode normalization as article search
 });
 
 test("rangefinder intro matches the 07cd9ba sequence, lasts at least five seconds, and remains motion-safe", async () => {
-  const [layout, intro, css, asset, favicon] = await Promise.all([
+  const [layout, home, intro, css, asset, favicon] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/IntroSequence.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../public/rangefinder-intro.webp", import.meta.url)),
     readFile(new URL("../public/favicon.svg", import.meta.url), "utf8"),
   ]);
-  assert.match(layout, /<IntroSequence \/>/);
-  assert.match(layout, /INTRO_BOOTSTRAP_SCRIPT/);
+  assert.doesNotMatch(layout, /IntroSequence|INTRO_BOOTSTRAP_SCRIPT/);
+  assert.match(layout, /THEME_BOOTSTRAP_SCRIPT/);
   assert.match(layout, /suppressHydrationWarning/);
+  assert.match(home, /<IntroSequence \/>/);
+  assert.match(home, /INTRO_BOOTSTRAP_SCRIPT/);
   assert.match(intro, /INTRO_DURATION_MS/);
+  assert.match(intro, /useLayoutEffect/, "in-app navigation must start the homepage intro before paint");
+  assert.doesNotMatch(intro, /\buseEffect\b/, "a passive effect can flash homepage content before the intro");
   assert.match(intro, /completeIntro\(document\.documentElement/);
   assert.ok(INTRO_DURATION_MS >= 5_000);
   assert.match(intro, />跳过<\/button>/);
@@ -295,6 +300,17 @@ test("intro bootstrap plays on reload and respects reduced motion", () => {
   assert.equal(reduced.document.documentElement.dataset.intro, "complete", "reduced motion is hidden on the first frame");
 });
 
+test("theme bootstrap remains global when the intro is homepage-only", () => {
+  const document = { documentElement: { dataset: {} } };
+  const window = {
+    localStorage: { getItem: () => "dark" },
+    matchMedia: () => ({ matches: false }),
+  };
+  vm.runInNewContext(THEME_BOOTSTRAP_SCRIPT, { document, window });
+  assert.equal(document.documentElement.dataset.theme, "dark");
+  assert.equal(document.documentElement.dataset.intro, undefined);
+});
+
 test("shared client requests deduplicate concurrency and retry after failure", async () => {
   let calls = 0;
   const shared = createSharedRequest(async () => {
@@ -344,6 +360,7 @@ test("article raw HTML contains live title, summary, and public Notion content",
     assert.match(html, /<h1>2026槟城<\/h1>/);
     assert.match(html, /服务端正文内容/);
     assert.doesNotMatch(html, /正在从 Notion 读取文章/);
+    assert.doesNotMatch(html, /site-intro|网站开场动画|rangefinder-intro/, "article routes must not render the homepage intro");
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -378,6 +395,7 @@ test("about and other Published Notion pages render inside the site shell", asyn
     assert.match(html, /← 返回全部文章/);
     assert.doesNotMatch(html, /href="https:\/\/www\.notion\.so\/118ad771/);
     assert.doesNotMatch(html, /fas fa-info/);
+    assert.doesNotMatch(html, /site-intro|网站开场动画|rangefinder-intro/, "about and page routes must not render the homepage intro");
 
     const api = await worker.fetch(new Request("http://localhost/api/content/page/about"), env, context);
     assert.equal(api.status, 200);

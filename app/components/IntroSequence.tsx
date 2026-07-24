@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useLayoutEffect, useState } from "react";
 import { completeIntro, INTRO_DURATION_MS } from "./introState";
 
 export function IntroSequence() {
@@ -11,10 +11,19 @@ export function IntroSequence() {
     setVisible(false);
   }, []);
 
-  useEffect(() => {
+  // A layout effect prevents the homepage from flashing before the intro when
+  // this component mounts after an in-app navigation from another route.
+  useLayoutEffect(() => {
     if (document.documentElement.dataset.intro !== "playing") {
-      const frame = window.requestAnimationFrame(() => setVisible(false));
-      return () => window.cancelAnimationFrame(frame);
+      let reducedMotion = false;
+      try {
+        reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      } catch {}
+      if (reducedMotion) {
+        const frame = window.requestAnimationFrame(finish);
+        return () => window.cancelAnimationFrame(frame);
+      }
+      document.documentElement.dataset.intro = "playing";
     }
 
     document.body.classList.add("intro-playing");

@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { IntroSequence } from "./components/IntroSequence";
-import { INTRO_BOOTSTRAP_SCRIPT } from "./components/introState";
+import { THEME_BOOTSTRAP_SCRIPT } from "./components/introState";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -18,8 +17,8 @@ export const viewport: Viewport = { colorScheme: "light dark", themeColor: "#fff
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
-      <head><script dangerouslySetInnerHTML={{ __html: INTRO_BOOTSTRAP_SCRIPT }} /></head>
-      <body><IntroSequence />{children}</body>
+      <head><script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} /></head>
+      <body>{children}</body>
     </html>
   );
 }
