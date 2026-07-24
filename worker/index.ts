@@ -577,8 +577,51 @@ function toSiteLink(page: any) {
 }
 
 function toSiteLinks(pages: any[]) {
+  const contentPages = pages.filter((page) => page.properties?.type?.select?.name === "Page");
+  const linkedPageIds = new Set<string>();
+  const candidates: ReturnType<typeof toSiteLink>[] = [];
+
+  for (const page of pages) {
+    const type = page.properties?.type?.select?.name;
+    if (type === "Page") continue;
+    const menuLink = toSiteLink(page);
+    if (type !== "Menu" || menuLink.kind === "rss") {
+      candidates.push(menuLink);
+      continue;
+    }
+
+    const menuTitle = title(page.properties?.title).replace(/_+$/, "").trim();
+    const menuSlug = plain(page.properties?.slug).trim();
+    const targetId = Object.values(page.properties || {})
+      .map(notionPropertyLink)
+      .map(notionPageIdFromUrl)
+      .find(Boolean);
+    const matchedPage = contentPages.find((contentPage) => {
+      const pageTitle = title(contentPage.properties?.title).replace(/_+$/, "").trim();
+      const pageSlug = plain(contentPage.properties?.slug).trim();
+      return (targetId && normalizeNotionId(contentPage.id) === targetId)
+        || (menuSlug && menuSlug === pageSlug)
+        || (menuTitle && menuTitle === pageTitle);
+    });
+    if (!matchedPage) {
+      candidates.push(menuLink);
+      continue;
+    }
+    linkedPageIds.add(normalizeNotionId(matchedPage.id));
+    candidates.push({
+      ...menuLink,
+      href: sitePagePath(toSitePagePost(matchedPage)),
+      external: false,
+      kind: "nav",
+    });
+  }
+
+  for (const page of contentPages) {
+    if (!linkedPageIds.has(normalizeNotionId(page.id))) candidates.push(toSiteLink(page));
+  }
+
   const seen = new Set<string>();
-  return pages.map(toSiteLink).filter((link) => {
+  return candidates.filter((link) => {
     if (!link.href) return false;
     const identity = `${link.kind}:${link.href}`;
     if (seen.has(identity)) return false;

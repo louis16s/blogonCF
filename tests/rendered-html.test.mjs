@@ -132,8 +132,9 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(sidebar, /className="mobile-menu-group"/);
   assert.match(sidebar, /aboutLink && \(aboutLink\.external/);
   assert.match(sidebar, /<Link href=\{aboutLink\.href\}>.*aboutLink\.title/s);
-  assert.match(sidebar, /在 <a href="https:\/\/www\.notion\.so\/"/);
-  assert.match(sidebar, /Notion<\/a> 创造，Cloudflare 带它兜风。/);
+  assert.doesNotMatch(sidebar, /Notion<\/a> 创造，Cloudflare 带它兜风。/);
+  assert.match(footer, /在 <a href="https:\/\/www\.notion\.so\/"/);
+  assert.match(footer, /Notion<\/a> 创造，Cloudflare 带它兜风。/);
   assert.match(sidebar, /\$\{resolvedPostCount\} 篇公开文章/);
   assert.match(sidebar, /Notion 实时同步/);
   assert.doesNotMatch(sidebar, /©/);
@@ -226,7 +227,8 @@ test("rangefinder intro matches the 07cd9ba sequence, lasts at least five second
   assert.ok(INTRO_DURATION_MS >= 5_000);
   assert.match(intro, />跳过<\/button>/);
   assert.match(intro, /rangefinder-intro\.webp/);
-  assert.match(intro, /LOUIS16S · FRAME 01/);
+  assert.match(intro, />LOUIS16S</);
+  assert.doesNotMatch(intro, /FRAME 01/);
   assert.match(intro, /正在对焦生活/);
   assert.match(intro, /intro-progress/);
   assert.doesNotMatch(intro, /intro-camera-rig|intro-lens-aperture|intro-aperture-blade|intro-shutter/);
@@ -640,6 +642,7 @@ test("content endpoint maps only the filtered Notion response and disables cachi
       { id: "annotated", properties: { title: { title: [{ plain_text: "带跳转的工具" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [{ plain_text: "Notion 注释链接", href: "https://annotated.example" }] }, icon: { rich_text: [] } } },
       { id: "archive", properties: { type: { select: { name: "Menu" } }, title: { title: [{ plain_text: "历史归档" }] }, slug: { rich_text: [{ plain_text: "/archive" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
       { id: "118ad771-48f4-8006-8e05-f46d51bd244c", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "关于我_" }] }, slug: { rich_text: [{ plain_text: "me" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
+      { id: "fffad771-48f4-816c-b993-d78a936a4c78", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "资讯_" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
       { id: "broken", properties: { title: { title: [{ plain_text: "资讯" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
     ] });
     requestBody = body;
@@ -655,7 +658,7 @@ test("content endpoint maps only the filtered Notion response and disables cachi
     const payload = await response.json();
     assert.equal(payload.posts[0].slug, "public-post");
     assert.deepEqual(payload.posts[0].tags, ["旅行"]);
-    assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://hd.530555.xyz", "tool"], ["带跳转的工具", "https://annotated.example", "tool"], ["历史归档", "/#archive", "nav"], ["关于我", "/about", "nav"]]);
+    assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://hd.530555.xyz", "tool"], ["带跳转的工具", "https://annotated.example", "tool"], ["历史归档", "/#archive", "nav"], ["关于我", "/about", "nav"], ["资讯", "/page/links", "nav"]]);
     assert.deepEqual(payload.config, { author: "Notion 作者", since: "2019" });
     assert.doesNotMatch(JSON.stringify(payload), /不得输出|禁用作者/);
     assert.deepEqual(requestBody.filter.and.map((item) => item.property), ["type", "status"]);
@@ -669,6 +672,7 @@ test("navigation endpoint returns only live Notion-configured jump links", async
     { id: "tool", icon: { type: "emoji", emoji: "🧭" }, properties: { title: { title: [{ plain_text: "导航工具" }] }, slug: { rich_text: [{ plain_text: "打开", href: "https://nav.example" }] }, summary: { rich_text: [] } } },
     { id: "uppercase-url", properties: { type: { select: { name: "SubMenu" } }, title: { title: [{ plain_text: "URL 属性工具" }] }, slug: { rich_text: [{ plain_text: "tool" }] }, URL: { url: "https://uppercase.example/tool" }, summary: { rich_text: [] } } },
     { id: "118ad771-48f4-8006-8e05-f46d51bd244c", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "关于我_" }] }, slug: { rich_text: [{ plain_text: "me" }] }, summary: { rich_text: [] } } },
+    { id: "fffad771-48f4-816c-b993-d78a936a4c78", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "资讯_" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] } } },
     { id: "fffad771-48f4-810c-987c-000c02fa3dea", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "RSS_" }] }, slug: { rich_text: [{ plain_text: "rss-page" }] }, summary: { rich_text: [] } } },
     { id: "invalid", properties: { title: { title: [{ plain_text: "无效跳转" }] }, slug: { rich_text: [{ plain_text: "javascript:alert(1)" }] }, summary: { rich_text: [] } } },
   ] });
@@ -680,6 +684,7 @@ test("navigation endpoint returns only live Notion-configured jump links", async
       { id: "tool", title: "导航工具", href: "https://nav.example", summary: "", icon: "🧭", external: true, kind: "tool" },
       { id: "uppercase-url", title: "URL 属性工具", href: "https://uppercase.example/tool", summary: "", icon: "", external: true, kind: "tool" },
       { id: "118ad771-48f4-8006-8e05-f46d51bd244c", title: "关于我", href: "/about", summary: "", icon: "", external: false, kind: "nav" },
+      { id: "fffad771-48f4-816c-b993-d78a936a4c78", title: "资讯", href: "/page/links", summary: "", icon: "", external: false, kind: "nav" },
       { id: "fffad771-48f4-810c-987c-000c02fa3dea", title: "RSS", href: "/rss.xml", summary: "", icon: "", external: false, kind: "rss" },
     ], source: "notion" });
   } finally { globalThis.fetch = originalFetch; }

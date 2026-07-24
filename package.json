@@ -1,7 +1,21 @@
 {
-  "name": "site-creator-vinext-starter",
-  "version": "0.1.0",
-  "private": true,
+  "name": "blogincf",
+  "version": "1.0.0",
+  "private": false,
+  "description": "A Notion-powered blog rendered entirely on Cloudflare Workers.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/louis16s/bloginCF.git"
+  },
+  "keywords": ["notion", "cloudflare-workers", "blog", "vinext", "notionnext"],
+  "cloudflare": {
+    "bindings": {
+      "NOTION_TOKEN": {
+        "description": "Notion Integration token with read access to the blog database."
+      }
+    }
+  },
   "engines": {
     "node": ">=22.13.0"
   },
@@ -11,7 +25,8 @@
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
     "test": "pnpm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "deploy": "pnpm run build && wrangler deploy --config wrangler.jsonc"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

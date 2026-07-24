@@ -9,6 +9,7 @@ import {
   ArrowSquareOut,
   Info,
   List,
+  Newspaper,
   Rss,
   Wrench,
 } from "@phosphor-icons/react";
@@ -32,8 +33,9 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState }: SidebarPro
   const navLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "nav" && !link.title.includes("归档") && !link.href.includes("#archive")), [resolvedLinks]);
   const rssLink = resolvedLinks.find((link) => link.kind === "rss");
   const aboutLink = navLinks.find((link) => link.href.includes("#about") || link.title.includes("关于"));
+  const newsLink = navLinks.find((link) => link.href.includes("/page/links") || link.title.includes("资讯"));
   const sitemapLink = navLinks.find((link) => link.href.includes("sitemap") || link.title.includes("地图"));
-  const assignedNavIds = new Set([aboutLink?.id, sitemapLink?.id].filter(Boolean));
+  const assignedNavIds = new Set([aboutLink?.id, newsLink?.id, sitemapLink?.id].filter(Boolean));
   const extraNavLinks = navLinks.filter((link) => !assignedNavIds.has(link.id));
   const resolvedSyncState = syncState || articlePageSync.state;
   const resolvedPostCount = typeof postCount === "number" ? postCount : articlePageSync.count;
@@ -74,6 +76,11 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState }: SidebarPro
           ) : (
             <Link href={aboutLink.href}><Info aria-hidden size={19} weight="regular" />{aboutLink.title || "关于我"}</Link>
           ))}
+          {newsLink && (newsLink.external ? (
+            <a href={newsLink.href} target="_blank" rel="noreferrer"><Newspaper aria-hidden size={19} weight="regular" />{newsLink.title || "资讯"}</a>
+          ) : (
+            <Link href={newsLink.href}><Newspaper aria-hidden size={19} weight="regular" />{newsLink.title || "资讯"}</Link>
+          ))}
           {extraNavLinks.map((link) => link.external ? (
             <a href={link.href} target="_blank" rel="noreferrer" key={link.id}><ArrowSquareOut aria-hidden size={19} />{link.title}</a>
           ) : (
@@ -113,6 +120,11 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState }: SidebarPro
             ) : (
               <Link href={aboutLink.href}>{aboutLink.title || "关于我"}</Link>
             ))}
+            {newsLink && (newsLink.external ? (
+              <a href={newsLink.href} target="_blank" rel="noreferrer">{newsLink.title || "资讯"}<small>外部</small></a>
+            ) : (
+              <Link href={newsLink.href}>{newsLink.title || "资讯"}</Link>
+            ))}
             {extraNavLinks.map((link) => link.external ? (
               <a href={link.href} target="_blank" rel="noreferrer" key={link.id}>{link.title}<small>外部</small></a>
             ) : (
@@ -142,7 +154,6 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState }: SidebarPro
           <span>{countLabel}</span>
           <span className={`source ${resolvedSyncState === "live" ? "live" : ""}`}>{syncLabel}</span>
         </div>
-        <p>在 <a href="https://www.notion.so/" target="_blank" rel="noreferrer">Notion</a> 创造，Cloudflare 带它兜风。</p>
       </div>
     </aside>
   );

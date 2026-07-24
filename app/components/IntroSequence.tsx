@@ -38,7 +38,7 @@ export function IntroSequence() {
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img className="intro-camera" src="/rangefinder-intro.webp" alt="" width="1280" height="853" fetchPriority="high" />
         <span className="intro-lens-flash" />
-        <div className="intro-caption"><span>LOUIS16S · FRAME 01</span><strong>正在对焦生活</strong></div>
+        <div className="intro-caption"><strong>LOUIS16S</strong><span>正在对焦生活</span></div>
         <span className="intro-progress" />
       </div>
     </div>
