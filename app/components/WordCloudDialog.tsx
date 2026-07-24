@@ -81,10 +81,10 @@ export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts
         <header className="word-cloud-dialog-head">
           <div>
             <p>PUBLIC ARTICLE CORPUS</p>
-            <h2 id="word-cloud-title">文章词云</h2>
+            <h2 id="word-cloud-title">词云</h2>
             <span>只统计公开文章的标题和正文，不读取分类、标签、摘要或密码文章。</span>
           </div>
-          <button ref={closeButton} className="word-cloud-close" type="button" onClick={onClose} aria-label="关闭文章词云"><X aria-hidden size={20} /></button>
+          <button ref={closeButton} className="word-cloud-close" type="button" onClick={onClose} aria-label="关闭词云"><X aria-hidden size={20} /></button>
         </header>
 
         <div className="word-cloud-controls" role="group" aria-label="词云排列方式">

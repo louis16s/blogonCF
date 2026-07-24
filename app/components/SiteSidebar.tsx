@@ -8,6 +8,7 @@ import {
   Compass,
   ArrowSquareOut,
   FolderOpen,
+  GithubLogo,
   Info,
   List,
   Newspaper,
@@ -32,7 +33,7 @@ type SidebarProps = {
 export function SiteSidebar({ siteLinks = [], postCount, syncState, categories = [], activeCategory, onCategoryChange }: SidebarProps) {
   const resolvedLinks = useSiteNavigation(siteLinks);
   const toolsDisclosure = usePersistedDisclosure({ key: "blog.sidebar.tools.v1", legacyKey: "blog-sidebar-tools-open" });
-  const categoriesDisclosure = usePersistedDisclosure({ key: "blog.sidebar.categories.v1" });
+  const categoriesDisclosure = usePersistedDisclosure({ key: "blog.sidebar.categories.v2", defaultOpen: false });
   const [articlePageSync, setArticlePageSync] = useState<{ count?: number; state: ContentSyncState }>({ state: "loading" });
   const toolLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "tool"), [resolvedLinks]);
   const navLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "nav" && !link.title.includes("归档") && !link.href.includes("#archive")), [resolvedLinks]);
@@ -47,7 +48,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
   const countLabel = resolvedSyncState === "live" && typeof resolvedPostCount === "number"
     ? `${resolvedPostCount} 篇公开文章`
     : resolvedSyncState === "loading" ? "正在读取公开文章" : "内容源暂时不可用";
-  const syncLabel = resolvedSyncState === "live" ? "Notion 实时同步" : resolvedSyncState === "loading" ? "正在同步" : "同步中断";
+  const syncLabel = resolvedSyncState === "live" ? "Notion 实时同步中" : resolvedSyncState === "loading" ? "正在同步" : "同步中断";
 
   useEffect(() => {
     if (typeof postCount === "number" || syncState) return;
@@ -75,7 +76,6 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
         </Link>
 
         <nav className="sidebar-nav" aria-label="主导航">
-          <Link href="/#word-cloud"><Cloud aria-hidden size={19} weight="regular" />文章词云</Link>
           {aboutLink && (aboutLink.external ? (
             <a href={aboutLink.href} target="_blank" rel="noreferrer"><Info aria-hidden size={19} weight="regular" />{aboutLink.title || "关于我"}</a>
           ) : (
@@ -86,6 +86,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           ) : (
             <Link href={newsLink.href}><Newspaper aria-hidden size={19} weight="regular" />{newsLink.title || "资讯"}</Link>
           ))}
+          {rssLink && <Link href={rssLink.href}><Rss aria-hidden size={19} />RSS 订阅</Link>}
           {extraNavLinks.map((link) => link.external ? (
             <a href={link.href} target="_blank" rel="noreferrer" key={link.id}><ArrowSquareOut aria-hidden size={19} />{link.title}</a>
           ) : (
@@ -110,6 +111,8 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           </details>
         )}
 
+        <Link className="sidebar-cloud-link" href="/#word-cloud"><Cloud aria-hidden size={19} weight="regular" />词云</Link>
+
         <details className="mobile-menu">
           <summary><List aria-hidden size={18} /><span>菜单</span><CaretDown className="section-caret" aria-hidden size={13} /></summary>
           <nav
@@ -119,7 +122,6 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
               if (event.target instanceof Element && event.target.closest("a, button")) event.currentTarget.closest("details")?.removeAttribute("open");
             }}
           >
-            <Link href="/#word-cloud">文章词云</Link>
             {aboutLink && (aboutLink.external ? (
               <a href={aboutLink.href} target="_blank" rel="noreferrer">{aboutLink.title || "关于我"}<small>Notion</small></a>
             ) : (
@@ -130,6 +132,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
             ) : (
               <Link href={newsLink.href}>{newsLink.title || "资讯"}</Link>
             ))}
+            {rssLink && <Link href={rssLink.href}>RSS 订阅</Link>}
             {extraNavLinks.map((link) => link.external ? (
               <a href={link.href} target="_blank" rel="noreferrer" key={link.id}>{link.title}<small>外部</small></a>
             ) : (
@@ -143,7 +146,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
                 ))}
               </div>
             )}
-            {rssLink && <Link href={rssLink.href}>RSS 订阅</Link>}
+            <Link href="/#word-cloud">词云</Link>
             {categories.length > 0 && onCategoryChange && (
               <div className="mobile-menu-group mobile-category-list">
                 <p>文章分类</p>
@@ -156,10 +159,10 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
               <span>{countLabel}</span>
               <span className={`source ${resolvedSyncState === "live" ? "live" : ""}`}>{syncLabel}</span>
             </div>
+            <a href="https://github.com/louis16s/blogonCF" target="_blank" rel="noreferrer">blogonCF<small>GitHub</small></a>
           </nav>
         </details>
 
-        {rssLink && <Link className="rss-link" href={rssLink.href}><Rss aria-hidden size={20} />{rssLink.title || "RSS 订阅"}</Link>}
         {categories.length > 0 && onCategoryChange && (
           <details
             className="sidebar-section sidebar-categories"
@@ -181,6 +184,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           <span>{countLabel}</span>
           <span className={`source ${resolvedSyncState === "live" ? "live" : ""}`}>{syncLabel}</span>
         </div>
+        <a className="sidebar-repo-link" href="https://github.com/louis16s/blogonCF" target="_blank" rel="noreferrer"><GithubLogo aria-hidden size={14} />blogonCF</a>
       </div>
     </aside>
   );

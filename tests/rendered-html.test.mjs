@@ -131,6 +131,7 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(sidebar, />RSS 订阅</);
   assert.match(sidebar, />文章分类/);
   assert.match(sidebar, /className="sidebar-section sidebar-categories"/);
+  assert.match(sidebar, /key: "blog\.sidebar\.categories\.v2", defaultOpen: false/);
   assert.match(sidebar, /categories\.map\(\(item\)/);
   assert.match(blog, /categories=\{categories\}/);
   assert.match(blog, /onCategoryChange=\{selectCategory\}/);
@@ -142,7 +143,10 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(footer, /在 <a href="https:\/\/www\.notion\.so\/"/);
   assert.match(footer, /Notion<\/a> 创造，Cloudflare 带它兜风。/);
   assert.match(sidebar, /\$\{resolvedPostCount\} 篇公开文章/);
-  assert.match(sidebar, /Notion 实时同步/);
+  assert.match(sidebar, /Notion 实时同步中/);
+  assert.match(sidebar, /href="https:\/\/github\.com\/louis16s\/blogonCF"[\s\S]*>blogonCF/);
+  assert.ok(sidebar.indexOf("newsLink.href") < sidebar.indexOf("rssLink.href"), "RSS should follow the news link");
+  assert.ok(sidebar.indexOf("sidebar-tools") < sidebar.indexOf('className="sidebar-cloud-link"'), "word cloud should follow tools");
   assert.doesNotMatch(sidebar, /©/);
   assert.doesNotMatch(blog, /className="sync-meta"/);
   assert.doesNotMatch(sidebar, /className="mobile-tools"/);
@@ -159,7 +163,7 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(blog, /<ContentFooter id="about" siteConfig=\{siteConfig\} postCount=\{posts\.length\}/);
   assert.doesNotMatch(blog, /最近常出现|buildWordCloud\(posts\)/);
   assert.match(blog, /<WordCloudDialog open=\{wordCloudOpen\}/);
-  assert.match(sidebar, /href="\/#word-cloud"/);
+  assert.match(sidebar, /href="\/#word-cloud"[\s\S]*>词云<\/Link>/);
   assert.match(blog, /post\.icon \|\| "📝"/, "article cards should render the Notion page emoji");
   assert.doesNotMatch(blog, /categoryIcons|post-icon|Heart|MapTrifold/, "category guesses must not replace Notion icons");
   assert.doesNotMatch(sidebar, />站点地图</, "the XML sitemap should not be presented as visitor navigation");
@@ -270,6 +274,10 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   assert.doesNotMatch(sidebar, /className="mobile-tools"/);
   assert.match(blog, /className="theme-label"/);
   assert.match(blog, /className="welcome-tagline"/);
+  assert.match(css, /\.welcome \{ min-height: 42px;/);
+  assert.match(css, /\.search-box \{ width: 270px; height: 42px;/);
+  assert.match(css, /\.icon-button \{ width: 42px; height: 42px;/);
+  assert.match(css, /\.sidebar-sync-meta \{[^}]*padding-top: 12px;[^}]*border-top: 1px solid var\(--line\);/);
   assert.match(css, /\.sidebar-main \{[^}]*overflow: visible;/);
   assert.match(css, /\.site-sidebar \{ position: sticky; top: 14px; z-index: 200;/);
   assert.match(css, /\.blog-main, \.article-shell \{ position: relative; z-index: 1;/);
