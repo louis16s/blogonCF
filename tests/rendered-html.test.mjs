@@ -131,7 +131,7 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(sidebar, />RSS 订阅</);
   assert.match(sidebar, /className="mobile-menu-group"/);
   assert.match(sidebar, /aboutLink && \(aboutLink\.external/);
-  assert.match(sidebar, /target="_blank" rel="noreferrer".*aboutLink\.title/s);
+  assert.match(sidebar, /<Link href=\{aboutLink\.href\}>.*aboutLink\.title/s);
   assert.match(sidebar, /在 <a href="https:\/\/www\.notion\.so\/"/);
   assert.match(sidebar, /Notion<\/a> 创造，Cloudflare 带它兜风。/);
   assert.match(sidebar, /\$\{resolvedPostCount\} 篇公开文章/);
@@ -343,6 +343,62 @@ test("article raw HTML contains live title, summary, and public Notion content",
     assert.match(html, /服务端正文内容/);
     assert.doesNotMatch(html, /正在从 Notion 读取文章/);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("about and other Published Notion pages render inside the site shell", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const pageId = "118ad771-48f4-8006-8e05-f46d51bd244c";
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes(`/blocks/${pageId}/children`)) return Response.json({ results: [
+      { id: "about-paragraph", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: "这是本站渲染的关于我正文。", annotations: { bold: true } }] } },
+    ], has_more: false });
+    if (url.includes("/data_sources/source-id/query")) {
+      const body = JSON.parse(init.body);
+      assert.ok(body.filter.and.some((item) => item.property === "type" && item.select?.equals === "Page"));
+      return Response.json({ results: [{ id: pageId, icon: { type: "emoji", emoji: "👋" }, properties: {
+        type: { select: { name: "Page" } }, status: { select: { name: "Published" } },
+        title: { title: [{ plain_text: "关于我_" }] }, slug: { rich_text: [{ plain_text: "me" }] }, summary: { rich_text: [{ plain_text: "关于 louis16s" }] }, icon: { rich_text: [] },
+      } }], has_more: false });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  try {
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
+    const response = await worker.fetch(new Request("http://localhost/about", { headers: { accept: "text/html" } }), env, context);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /<title>关于我 · louis16s&#x27; blog<\/title>/);
+    assert.match(html, /LOUIS16S · PAGE/);
+    assert.match(html, /关于 louis16s/);
+    assert.match(html, /这是本站渲染的关于我正文。/);
+    assert.match(html, /← 返回全部文章/);
+    assert.doesNotMatch(html, /href="https:\/\/www\.notion\.so\/118ad771/);
+
+    const api = await worker.fetch(new Request("http://localhost/api/content/page/about"), env, context);
+    assert.equal(api.status, 200);
+    assert.equal(api.headers.get("cache-control"), "no-store");
+    const payload = await api.json();
+    assert.equal(payload.post.title, "关于我");
+    assert.equal(payload.post.slug, "me");
+    assert.equal(payload.blocks[0].richText[0].text, "这是本站渲染的关于我正文。");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("site page routing keeps all Published Page content internal while tools remain external", async () => {
+  const [workerSource, pageScreen, aboutRoute, genericRoute] = await Promise.all([
+    readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/SiteContentPage.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/about/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/page/[slug]/page.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(workerSource, /menuType === "Page"[\s\S]*\? isAbout \? "\/about" : pageSlug \? `\/page\//);
+  assert.match(workerSource, /menuType === "Menu" && linkedNotionPageId \? `\/page\//);
+  assert.match(workerSource, /menuType === "Menu" \|\| menuType === "Page" \? "nav" as const : "tool"/);
+  assert.match(pageScreen, /contentKind="page"/);
+  assert.match(aboutRoute, /SiteContentPage slug="about"/);
+  assert.match(genericRoute, /SiteContentPage slug=\{decoded\}/);
 });
 
 test("locked article raw HTML renders only its password gate", async () => {
@@ -599,7 +655,7 @@ test("content endpoint maps only the filtered Notion response and disables cachi
     const payload = await response.json();
     assert.equal(payload.posts[0].slug, "public-post");
     assert.deepEqual(payload.posts[0].tags, ["旅行"]);
-    assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://hd.530555.xyz", "tool"], ["带跳转的工具", "https://annotated.example", "tool"], ["历史归档", "/#archive", "nav"], ["关于我", "https://www.notion.so/118ad77148f480068e05f46d51bd244c", "nav"]]);
+    assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://hd.530555.xyz", "tool"], ["带跳转的工具", "https://annotated.example", "tool"], ["历史归档", "/#archive", "nav"], ["关于我", "/about", "nav"]]);
     assert.deepEqual(payload.config, { author: "Notion 作者", since: "2019" });
     assert.doesNotMatch(JSON.stringify(payload), /不得输出|禁用作者/);
     assert.deepEqual(requestBody.filter.and.map((item) => item.property), ["type", "status"]);
@@ -623,7 +679,8 @@ test("navigation endpoint returns only live Notion-configured jump links", async
     assert.deepEqual(await response.json(), { links: [
       { id: "tool", title: "导航工具", href: "https://nav.example", summary: "", icon: "🧭", external: true, kind: "tool" },
       { id: "uppercase-url", title: "URL 属性工具", href: "https://uppercase.example/tool", summary: "", icon: "", external: true, kind: "tool" },
-      { id: "118ad771-48f4-8006-8e05-f46d51bd244c", title: "关于我", href: "https://www.notion.so/118ad77148f480068e05f46d51bd244c", summary: "", icon: "", external: true, kind: "nav" },
+      { id: "118ad771-48f4-8006-8e05-f46d51bd244c", title: "关于我", href: "/about", summary: "", icon: "", external: false, kind: "nav" },
+      { id: "fffad771-48f4-810c-987c-000c02fa3dea", title: "RSS", href: "/rss.xml", summary: "", icon: "", external: false, kind: "rss" },
     ], source: "notion" });
   } finally { globalThis.fetch = originalFetch; }
 });
@@ -864,7 +921,7 @@ test("published posts without a slug remain reachable through their Notion page 
 
 test("article renderer opens child pages internally instead of linking to Notion", async () => {
   const article = await readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8");
-  assert.match(article, /fetch\("\/api\/content\/child"/);
+  assert.match(article, /contentKind === "page" \? "\/api\/content\/page-child" : "\/api\/content\/child"/);
   assert.match(article, /history\.pushState/);
   assert.match(article, /case "child_page": return block\.pageId/);
   assert.doesNotMatch(article, /case "child_page"[^\n]+notion\.so/);

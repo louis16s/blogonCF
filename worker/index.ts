@@ -42,10 +42,15 @@ const worker = {
     if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") return notionWordCloud(env);
     if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
+    if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request);
     if (url.pathname === "/_notion/image" && (request.method === "GET" || request.method === "HEAD")) return notionImage(request);
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
       const slug = decodeURIComponent(url.pathname.slice("/api/content/post/".length));
       return notionPost(env, slug, request);
+    }
+    if (url.pathname.startsWith("/api/content/page/") && request.method === "GET") {
+      const slug = decodeURIComponent(url.pathname.slice("/api/content/page/".length));
+      return notionSitePage(env, slug);
     }
     if (url.pathname === "/api/health") return Response.json({ ok: true, notionConfigured: Boolean(env.NOTION_TOKEN) }, { headers: { "cache-control": "no-store" } });
 
@@ -62,6 +67,20 @@ const worker = {
     if (request.method === "GET" && url.pathname.startsWith("/blog/")) {
       const slug = decodeURIComponent(url.pathname.slice("/blog/".length));
       const payload = await articlePayloadForRender(env, slug, request);
+      const key = storeArticlePayload(payload);
+      const headers = new Headers(request.headers);
+      headers.set("x-blog-article-context", key);
+      try {
+        const rendered = await handler.fetch(new Request(request, { headers }), env, ctx);
+        return payload.status && payload.status >= 400 && rendered.status < 400
+          ? new Response(rendered.body, { status: payload.status, headers: rendered.headers })
+          : rendered;
+      }
+      finally { clearArticlePayload(key); }
+    }
+    if (request.method === "GET" && (url.pathname === "/about" || url.pathname.startsWith("/page/"))) {
+      const slug = url.pathname === "/about" ? "about" : decodeURIComponent(url.pathname.slice("/page/".length));
+      const payload = await sitePagePayloadForRender(env, slug);
       const key = storeArticlePayload(payload);
       const headers = new Headers(request.headers);
       headers.set("x-blog-article-context", key);
@@ -112,6 +131,12 @@ async function articlePayloadForRender(env: Env, slug: string, request: Request)
   return { ...payload, status: response.status };
 }
 
+async function sitePagePayloadForRender(env: Env, slug: string): Promise<ArticlePayload> {
+  const response = await notionSitePage(env, slug);
+  const payload = await response.json().catch(() => ({ error: "页面暂时无法读取" })) as ArticlePayload;
+  return { ...payload, status: response.status };
+}
+
 async function homePayloadForRender(env: Env): Promise<HomePayload> {
   const response = await notionPosts(env);
   if (!response.ok) return { posts: [], links: [], config: defaultSiteConfig() };
@@ -128,7 +153,7 @@ async function notionPosts(env: Env): Promise<Response> {
   try {
     const [pages, linkPages, config] = await Promise.all([queryPosts(env, undefined, 100), querySiteLinks(env), queryPublicSiteConfig(env).catch(() => defaultSiteConfig())]);
     const posts = pages.map(toPost).filter((post) => post.slug);
-    const links = linkPages.map(toSiteLink).filter((link) => link.href);
+    const links = toSiteLinks(linkPages);
     return Response.json({ posts, links, config, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
@@ -145,7 +170,7 @@ async function notionNavigation(env: Env): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   try {
     const linkPages = await querySiteLinks(env);
-    const links = linkPages.map(toSiteLink).filter((link) => link.href);
+    const links = toSiteLinks(linkPages);
     return Response.json({ links, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
@@ -215,6 +240,23 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
   } catch (reason) { return notionError(reason); }
 }
 
+async function notionSitePage(env: Env, slug: string): Promise<Response> {
+  if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  if (!slug || slug.length > 180) return error(400, "Invalid page slug");
+  try {
+    const page = await findSitePage(env, slug);
+    if (!page) return error(404, "Page not found");
+    const blockState = newBlockReadState();
+    const blocks = await getBlockChildren(env, page.id, blockState, 0);
+    return Response.json({
+      post: toSitePagePost(page),
+      locked: false,
+      blocks,
+      truncated: blockState.truncated,
+    }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+  } catch (reason) { return notionError(reason); }
+}
+
 async function notionChildPage(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; password?: unknown; trail?: unknown };
@@ -257,14 +299,47 @@ async function notionChildPage(env: Env, request: Request): Promise<Response> {
   } catch (reason) { return notionError(reason); }
 }
 
+async function notionSitePageChild(env: Env, request: Request): Promise<Response> {
+  if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown };
+  const slug = typeof body.slug === "string" ? body.slug : "";
+  const pageId = normalizeNotionId(body.pageId);
+  const trail = Array.isArray(body.trail) ? body.trail.map(normalizeNotionId).filter(Boolean).slice(0, 8) : [];
+  if (!slug || slug.length > 180 || !pageId) return error(400, "Invalid child page request");
+  try {
+    const parent = await findSitePage(env, slug);
+    if (!parent) return error(404, "Page not found");
+    const childPage = await authorizedChildPage(env, parent, [...trail.filter((id) => id !== pageId), pageId]);
+    if (!childPage) return error(404, "Child page not found");
+    const blockState = newBlockReadState();
+    const blocks = await getBlockChildren(env, childPage.id, blockState, 0);
+    return Response.json({ child: {
+      id: childPage.id,
+      title: notionPageTitle(childPage) || "未命名子页面",
+      icon: childPage.icon?.type === "emoji" ? childPage.icon.emoji : undefined,
+      blocks,
+      truncated: blockState.truncated,
+    } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+  } catch (reason) { return notionError(reason); }
+}
+
 async function notionSitemap(env: Env): Promise<Response> {
   const base = "https://bblog.530555.xyz";
   let posts: ReturnType<typeof toPost>[] = [];
+  let pages: ReturnType<typeof toSitePagePost>[] = [];
   if (env.NOTION_TOKEN) {
-    try { posts = (await queryPosts(env, undefined, 100)).map(toPost).filter((post) => post.slug); }
+    try {
+      const [postPages, sitePages] = await Promise.all([queryPosts(env, undefined, 100), querySitePages(env, undefined, 100)]);
+      posts = postPages.map(toPost).filter((post) => post.slug);
+      pages = sitePages.map(toSitePagePost).filter((page) => page.slug);
+    }
     catch (reason) { console.error(reason instanceof Error ? reason.message : "Sitemap Notion request failed"); }
   }
-  const urls = [`<url><loc>${base}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`, ...posts.map((post) => `<url><loc>${base}/blog/${encodeURIComponent(post.slug)}</loc>${post.date ? `<lastmod>${escapeXml(post.date)}</lastmod>` : ""}<changefreq>weekly</changefreq><priority>0.7</priority></url>`)].join("");
+  const urls = [
+    `<url><loc>${base}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`,
+    ...posts.map((post) => `<url><loc>${base}/blog/${encodeURIComponent(post.slug)}</loc>${post.date ? `<lastmod>${escapeXml(post.date)}</lastmod>` : ""}<changefreq>weekly</changefreq><priority>0.7</priority></url>`),
+    ...pages.map((page) => `<url><loc>${base}${sitePagePath(page)}</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>`),
+  ].join("");
   return new Response(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>`, { headers: { "content-type": "application/xml; charset=utf-8", "cache-control": env.NOTION_TOKEN ? "no-store" : "public, max-age=60" } });
 }
 
@@ -301,6 +376,39 @@ async function queryPosts(env: Env, slug?: string, pageSize = 100): Promise<any[
     cursor = !slug && payload.has_more && typeof payload.next_cursor === "string" ? payload.next_cursor : undefined;
   } while (cursor);
   return results;
+}
+
+async function querySitePages(env: Env, slug?: string, pageSize = 100): Promise<any[]> {
+  const filters: any[] = [
+    { property: "type", select: { equals: "Page" } },
+    { property: "status", select: { equals: "Published" } },
+  ];
+  if (slug) filters.push({ property: "slug", rich_text: { equals: slug } });
+  const results: any[] = [];
+  let cursor: string | undefined;
+  do {
+    const payload = await notionFetch(env, `/data_sources/${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID}/query`, {
+      method: "POST",
+      body: JSON.stringify({ filter: { and: filters }, sorts: [{ property: "date", direction: "descending" }], page_size: pageSize, ...(cursor ? { start_cursor: cursor } : {}) }),
+    });
+    if (Array.isArray(payload.results)) results.push(...payload.results.filter((page: any) => page.properties?.type?.select?.name === "Page"));
+    cursor = !slug && payload.has_more && typeof payload.next_cursor === "string" ? payload.next_cursor : undefined;
+  } while (cursor);
+  return results;
+}
+
+async function findSitePage(env: Env, slug: string): Promise<any | null> {
+  const requestedSlug = slug === "about" ? "me" : slug;
+  const bySlug = await querySitePages(env, requestedSlug, 1);
+  if (bySlug[0]) return bySlug[0];
+  const pageId = normalizeNotionId(slug);
+  const published = await querySitePages(env, undefined, 100);
+  if (pageId) return published.find((page) => normalizeNotionId(page.id) === pageId) || null;
+  if (slug === "about") return published.find((page) => {
+    const pageTitle = title(page.properties?.title).replace(/_+$/, "");
+    return pageTitle.includes("关于");
+  }) || null;
+  return null;
 }
 
 async function findPost(env: Env, slug: string): Promise<any | null> {
@@ -417,23 +525,46 @@ function toPost(page: any) {
   };
 }
 
+function toSitePagePost(page: any) {
+  const properties = page.properties || {};
+  return {
+    id: page.id,
+    title: (title(properties.title) || "未命名页面").replace(/_+$/, ""),
+    slug: plain(properties.slug) || page.id,
+    summary: plain(properties.summary),
+    category: "页面",
+    tags: [],
+    date: "",
+    icon: page.icon?.type === "emoji" ? page.icon.emoji : plain(properties.icon),
+    locked: false,
+  };
+}
+
+function sitePagePath(page: ReturnType<typeof toSitePagePost>): string {
+  return page.slug === "me" || page.title.includes("关于") ? "/about" : `/page/${encodeURIComponent(page.slug)}`;
+}
+
 function toSiteLink(page: any) {
   const properties = page.properties || {};
   const menuType = properties.type?.select?.name;
   const linkTitle = (title(properties.title) || "未命名链接").replace(/_+$/, "");
   const pageSlug = plain(properties.slug).trim();
-  const isAboutPage = menuType === "Page" && (pageSlug === "me" || linkTitle.includes("关于"));
+  const isAbout = pageSlug === "me" || linkTitle.includes("关于");
   const configuredTarget = [properties.slug, ...Object.values(properties).filter((property) => property !== properties.slug)]
     .map(notionPropertyLink)
     .find(Boolean) || pageSlug;
-  const notionPageId = isAboutPage ? normalizeNotionId(page.id) : "";
-  const pageTarget = notionPageId ? `https://www.notion.so/${notionPageId.replaceAll("-", "")}` : "";
-  const target = pageTarget || configuredTarget;
-  const external = /^https?:\/\//i.test(target);
+  const target = configuredTarget;
+  const linkedNotionPageId = notionPageIdFromUrl(target);
+  const pageHref = menuType === "Page"
+    ? isAbout ? "/about" : pageSlug ? `/page/${encodeURIComponent(pageSlug)}` : `/page/${encodeURIComponent(page.id)}`
+    : menuType === "Menu" && isAbout ? "/about"
+    : menuType === "Menu" && linkedNotionPageId ? `/page/${encodeURIComponent(linkedNotionPageId)}`
+    : "";
+  const external = !pageHref && /^https?:\/\//i.test(target);
   const internal = /^\/(?!\/)/.test(target);
   const rss = /^\/?rss(?:\/feed\.xml|\.xml)?\/?$/i.test(target)
-    || /^rss(?:\s|$)/i.test(title(properties.title));
-  const href = menuType === "Page" && !isAboutPage ? "" : rss ? "/rss.xml" : external || internal ? normalizeInternalNavigationTarget(target) : "";
+    || /^rss(?:\s|$)/i.test(linkTitle);
+  const href = rss ? "/rss.xml" : pageHref || (external || internal ? normalizeInternalNavigationTarget(target) : "");
   return {
     id: page.id,
     title: linkTitle,
@@ -443,6 +574,17 @@ function toSiteLink(page: any) {
     external,
     kind: rss ? "rss" as const : menuType === "Menu" || menuType === "Page" ? "nav" as const : "tool" as const,
   };
+}
+
+function toSiteLinks(pages: any[]) {
+  const seen = new Set<string>();
+  return pages.map(toSiteLink).filter((link) => {
+    if (!link.href) return false;
+    const identity = `${link.kind}:${link.href}`;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
 }
 
 function notionPropertyLink(property: any): string {

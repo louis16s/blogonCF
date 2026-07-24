@@ -20,6 +20,7 @@ async function withHeicDecodeSlot<T>(task: () => Promise<T>): Promise<T> {
 
 type ArticleClientProps = {
   slug: string;
+  contentKind?: "post" | "page";
   initialPost?: Post;
   initialBlocks?: ContentBlock[];
   initialLocked?: boolean;
@@ -28,7 +29,7 @@ type ArticleClientProps = {
   initialTruncated?: boolean;
 };
 
-export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false }: ArticleClientProps) {
+export function ArticleClient({ slug, contentKind = "post", initialPost, initialBlocks = [], initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false }: ArticleClientProps) {
   const [post, setPost] = useState<Post | undefined>(initialPost);
   const [blocks, setBlocks] = useState<ContentBlock[]>(initialBlocks);
   const [locked, setLocked] = useState(initialLocked);
@@ -43,6 +44,8 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
   const childTrailRef = useRef<ChildPage[]>([]);
   const childRequestRef = useRef<AbortController | null>(null);
   const skipInitialRefresh = useRef(initialFetched);
+  const contentEndpoint = contentKind === "page" ? "/api/content/page" : "/api/content/post";
+  const childEndpoint = contentKind === "page" ? "/api/content/page-child" : "/api/content/child";
 
   const loadChild = useCallback((pageId: string, passwordOverride?: string, updateHistory = true) => {
     childRequestRef.current?.abort();
@@ -50,7 +53,7 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
     childRequestRef.current = controller;
     setChildLoading(true); setChildError("");
     const password = passwordOverride ?? passwordRef.current;
-    fetch("/api/content/child", {
+    fetch(childEndpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ slug, pageId, password, trail: childTrailRef.current.map((item) => item.id) }),
@@ -74,11 +77,11 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
       })
       .catch((reason) => { if (reason.name !== "AbortError") setChildError(reason.message || "子页面暂时无法读取"); })
       .finally(() => { if (childRequestRef.current === controller) setChildLoading(false); });
-  }, [slug]);
+  }, [childEndpoint, slug]);
 
   const load = (password?: string) => {
     setLoading(true); setError("");
-    fetch(`/api/content/post/${encodeURIComponent(slug)}`, password ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) } : undefined)
+    fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, password ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) } : undefined)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
@@ -93,7 +96,7 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
     const controller = new AbortController();
     const refresh = () => {
       const password = passwordRef.current;
-      return fetch(`/api/content/post/${encodeURIComponent(slug)}`, password ? { method: "POST", signal: controller.signal, cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) } : { signal: controller.signal, cache: "no-store" })
+      return fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, password ? { method: "POST", signal: controller.signal, cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) } : { signal: controller.signal, cache: "no-store" })
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
@@ -108,7 +111,7 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
     const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
-  }, [slug]);
+  }, [contentEndpoint, slug]);
 
   useEffect(() => {
     const syncChildFromUrl = () => {
@@ -146,11 +149,16 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
     setChildError("");
   };
 
-  if (loading && !post) return <p className="article-state">正在从 Notion 读取文章…</p>;
-  if (!post) return <p className="article-state">{error || "没有找到这篇文章。"}</p>;
+  if (loading && !post) return <p className="article-state">正在从 Notion 读取{contentKind === "page" ? "页面" : "文章"}…</p>;
+  if (!post) return <p className="article-state">{error || (contentKind === "page" ? "没有找到这个页面。" : "没有找到这篇文章。")}</p>;
 
   return <>
-    <header className="article-head"><p className="eyebrow">{post.category} · {post.date}</p><h1>{post.title}</h1><p>{post.summary}</p><div className="tags">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div></header>
+    <header className="article-head">
+      <p className="eyebrow">{contentKind === "page" ? "LOUIS16S · PAGE" : `${post.category} · ${post.date}`}</p>
+      <h1>{contentKind === "page" && post.icon ? <span className="page-title-icon" aria-hidden>{post.icon}</span> : null}{post.title}</h1>
+      {post.summary ? <p>{post.summary}</p> : null}
+      {post.tags.length ? <div className="tags">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
+    </header>
     {locked ? <PasswordForm onSubmit={load} error={error} /> : childTrail.length ? <ChildDocument child={childTrail.at(-1)!} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} loading={childLoading} error={childError} /> : blocks.length ? <div className="notion-content"><Blocks blocks={blocks} onOpenChild={loadChild} />{truncated ? <ContentLimitNotice /> : null}{childLoading ? <p className="child-page-status" role="status">正在读取子页面…</p> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
   </>;
 }
@@ -158,7 +166,7 @@ export function ArticleClient({ slug, initialPost, initialBlocks = [], initialLo
 function ChildDocument({ child, parentTitle, onBack, onOpenChild, loading, error }: { child: ChildPage; parentTitle: string; onBack: () => void; onOpenChild: (pageId: string) => void; loading: boolean; error: string }) {
   return <section className="child-document" aria-labelledby={`child-${child.id}`}>
     <nav className="child-document-nav" aria-label="子页面导航"><button type="button" onClick={onBack}><ArrowLeft aria-hidden size={16} />返回 {parentTitle}</button><span>Notion 子页面</span></nav>
-    <header className="child-document-head"><p className="eyebrow">PRIVATE SUBPAGE</p><h2 id={`child-${child.id}`}>{child.icon ? <span aria-hidden>{child.icon}</span> : null}{child.title}</h2></header>
+    <header className="child-document-head"><p className="eyebrow">NOTION SUBPAGE</p><h2 id={`child-${child.id}`}>{child.icon ? <span aria-hidden>{child.icon}</span> : null}{child.title}</h2></header>
     <div className="notion-content"><Blocks blocks={child.blocks} onOpenChild={onOpenChild} /></div>
     {child.truncated ? <ContentLimitNotice /> : null}
     {loading ? <p className="child-page-status" role="status">正在读取子页面…</p> : null}

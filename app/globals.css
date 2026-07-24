@@ -242,6 +242,7 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .article-head { padding-bottom: 37px; border-bottom: 1px solid var(--line); }
 .eyebrow { margin: 0 0 17px; color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
 .article-head h1 { margin: 0; font-size: clamp(38px, 5.4vw, 68px); line-height: 1.08; letter-spacing: -.045em; }
+.page-title-icon { display: inline-block; margin-right: .22em; font-size: .72em; vertical-align: .08em; }
 .article-head>p:not(.eyebrow) { max-width: 680px; margin: 24px 0 0; color: var(--muted); font-size: 17px; line-height: 1.75; }
 .tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
 .tags span { padding: 5px 9px; color: var(--muted); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 999px; font-size: 11px; }

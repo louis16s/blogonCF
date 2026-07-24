@@ -1,0 +1,36 @@
+import type { Metadata } from "next";
+import { headers } from "next/headers";
+import { notFound } from "next/navigation";
+import { cache } from "react";
+import { SiteContentPage } from "../../components/SiteContentPage";
+import { readArticlePayload, type ArticlePayload } from "../../../server/article-context";
+
+const getSitePage = cache(async (slug: string): Promise<{ payload?: ArticlePayload; fetched: boolean }> => {
+  void slug;
+  const key = (await headers()).get("x-blog-article-context");
+  const payload = readArticlePayload(key);
+  return { payload: payload || { error: "页面暂时无法读取" }, fetched: true };
+});
+
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
+  const { slug } = await params;
+  const decoded = decodeURIComponent(slug);
+  const { payload } = await getSitePage(decoded);
+  const title = payload?.post?.title || decoded;
+  const description = payload?.post?.summary || "louis16s 的 Notion 页面";
+  return {
+    title,
+    description,
+    alternates: { canonical: `/page/${encodeURIComponent(decoded)}` },
+    openGraph: { type: "website", title, description, url: `/page/${encodeURIComponent(decoded)}` },
+    twitter: { card: "summary_large_image", title, description },
+  };
+}
+
+export default async function NotionPage({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params;
+  const decoded = decodeURIComponent(slug);
+  const { payload, fetched } = await getSitePage(decoded);
+  if (payload?.status === 404) notFound();
+  return <SiteContentPage slug={decoded} payload={payload} fetched={fetched} />;
+}
