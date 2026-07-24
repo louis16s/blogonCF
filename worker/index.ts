@@ -27,6 +27,7 @@ const MAX_BLOCKS = 10_000;
 const MAX_BLOCK_DEPTH = 12;
 const MAX_WORD_CLOUD_BLOCKS_PER_POST = 800;
 const WORD_CLOUD_CACHE_TTL_MS = 10 * 60 * 1000;
+const LEGACY_EMOJI_PATTERN = /^(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*)$/u;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
 const wordCloudCache = new Map<string, { expiresAt: number; payload: WordCloudPayload }>();
 
@@ -441,11 +442,17 @@ async function querySiteLinks(env: Env): Promise<any[]> {
 }
 
 async function queryPublicSiteConfig(env: Env) {
-  const payload = await notionFetch(env, `/data_sources/${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}/query`, {
-    method: "POST",
-    body: JSON.stringify({ page_size: 100 }),
-  });
-  return toPublicSiteConfig(Array.isArray(payload.results) ? payload.results : []);
+  const pages: any[] = [];
+  let cursor: string | undefined;
+  do {
+    const payload = await notionFetch(env, `/data_sources/${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}/query`, {
+      method: "POST",
+      body: JSON.stringify({ page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) }),
+    });
+    if (Array.isArray(payload.results)) pages.push(...payload.results);
+    cursor = payload.has_more && typeof payload.next_cursor === "string" ? payload.next_cursor : undefined;
+  } while (cursor);
+  return toPublicSiteConfig(pages);
 }
 
 type BlockReadState = { remaining: number; truncated: boolean };
@@ -520,7 +527,7 @@ function toPost(page: any) {
     category: properties.category?.select?.name || "未分类",
     tags: (properties.tags?.multi_select || []).map((tag: any) => tag.name).filter(Boolean),
     date: properties.date?.date?.start || page.created_time?.slice(0, 10) || "",
-    icon: page.icon?.type === "emoji" ? page.icon.emoji : plain(properties.icon),
+    icon: notionDisplayEmoji(page),
     locked: Boolean(plain(properties.password)),
   };
 }
@@ -535,7 +542,7 @@ function toSitePagePost(page: any) {
     category: "页面",
     tags: [],
     date: "",
-    icon: page.icon?.type === "emoji" ? page.icon.emoji : plain(properties.icon),
+    icon: notionDisplayEmoji(page),
     locked: false,
   };
 }
@@ -570,7 +577,7 @@ function toSiteLink(page: any) {
     title: linkTitle,
     href,
     summary: plain(properties.summary),
-    icon: page.icon?.type === "emoji" ? page.icon.emoji : plain(properties.icon),
+    icon: notionDisplayEmoji(page),
     external,
     kind: rss ? "rss" as const : menuType === "Menu" || menuType === "Page" ? "nav" as const : "tool" as const,
   };
@@ -640,6 +647,12 @@ function notionPropertyLink(property: any): string {
     if (safe) return safe;
   }
   return "";
+}
+
+function notionDisplayEmoji(page: any): string {
+  if (page.icon?.type === "emoji" && typeof page.icon.emoji === "string") return page.icon.emoji;
+  const legacyIcon = plain(page.properties?.icon).trim();
+  return LEGACY_EMOJI_PATTERN.test(legacyIcon) ? legacyIcon : "";
 }
 
 function safeNavigationTarget(value: unknown): string {
@@ -722,7 +735,7 @@ function toPublicSiteConfig(pages: any[]) {
   const config = defaultSiteConfig();
   for (const page of pages) {
     const properties = page.properties || {};
-    if (properties["启用"]?.checkbox === false) continue;
+    if (properties["启用"]?.checkbox !== true) continue;
     const key = title(properties["配置名"]).replaceAll("`", "").trim().toLocaleUpperCase();
     const value = plain(properties["配置值"]).trim();
     if (key === "AUTHOR" && value) config.author = value.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 80) || config.author;

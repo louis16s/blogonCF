@@ -359,9 +359,9 @@ test("about and other Published Notion pages render inside the site shell", asyn
     if (url.includes("/data_sources/source-id/query")) {
       const body = JSON.parse(init.body);
       assert.ok(body.filter.and.some((item) => item.property === "type" && item.select?.equals === "Page"));
-      return Response.json({ results: [{ id: pageId, icon: { type: "emoji", emoji: "👋" }, properties: {
+      return Response.json({ results: [{ id: pageId, properties: {
         type: { select: { name: "Page" } }, status: { select: { name: "Published" } },
-        title: { title: [{ plain_text: "关于我_" }] }, slug: { rich_text: [{ plain_text: "me" }] }, summary: { rich_text: [{ plain_text: "关于 louis16s" }] }, icon: { rich_text: [] },
+        title: { title: [{ plain_text: "关于我_" }] }, slug: { rich_text: [{ plain_text: "me" }] }, summary: { rich_text: [{ plain_text: "关于 louis16s" }] }, icon: { rich_text: [{ plain_text: "fas fa-info" }] },
       } }], has_more: false });
     }
     throw new Error(`Unexpected request: ${url}`);
@@ -377,6 +377,7 @@ test("about and other Published Notion pages render inside the site shell", asyn
     assert.match(html, /这是本站渲染的关于我正文。/);
     assert.match(html, /← 返回全部文章/);
     assert.doesNotMatch(html, /href="https:\/\/www\.notion\.so\/118ad771/);
+    assert.doesNotMatch(html, /fas fa-info/);
 
     const api = await worker.fetch(new Request("http://localhost/api/content/page/about"), env, context);
     assert.equal(api.status, 200);
@@ -384,6 +385,7 @@ test("about and other Published Notion pages render inside the site shell", asyn
     const payload = await api.json();
     assert.equal(payload.post.title, "关于我");
     assert.equal(payload.post.slug, "me");
+    assert.equal(payload.post.icon, "");
     assert.equal(payload.blocks[0].richText[0].text, "这是本站渲染的关于我正文。");
   } finally { globalThis.fetch = originalFetch; }
 });
@@ -690,6 +692,28 @@ test("navigation endpoint returns only live Notion-configured jump links", async
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("legacy icon properties accept one emoji and reject icon classes or mixed text", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ results: [
+    { id: "native", icon: { type: "emoji", emoji: "📷" }, properties: { title: { title: [{ plain_text: "原生图标" }] }, slug: { rich_text: [{ plain_text: "https://native.example" }] }, icon: { rich_text: [{ plain_text: "fas fa-camera" }] } } },
+    { id: "legacy", properties: { title: { title: [{ plain_text: "旧字段 Emoji" }] }, slug: { rich_text: [{ plain_text: "https://legacy.example" }] }, icon: { rich_text: [{ plain_text: "👨‍💻" }] } } },
+    { id: "class", properties: { title: { title: [{ plain_text: "图标类" }] }, slug: { rich_text: [{ plain_text: "https://class.example" }] }, icon: { rich_text: [{ plain_text: "fas fa-info" }] } } },
+    { id: "mixed", properties: { title: { title: [{ plain_text: "混合文本" }] }, slug: { rich_text: [{ plain_text: "https://mixed.example" }] }, icon: { rich_text: [{ plain_text: "fas fa-info 😀" }] } } },
+  ] });
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/navigation"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.links.map((link) => [link.id, link.icon]), [
+      ["native", "📷"],
+      ["legacy", "👨‍💻"],
+      ["class", ""],
+      ["mixed", ""],
+    ]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("public config endpoint exposes only the AUTHOR and SINCE allowlist", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
@@ -699,6 +723,7 @@ test("public config endpoint exposes only the AUTHOR and SINCE allowlist", async
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "louis16s" }] } } },
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "SINCE" }] }, "配置值": { rich_text: [{ plain_text: "2020" }] } } },
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "SECRET" }] }, "配置值": { rich_text: [{ plain_text: "never-leak" }] } } },
+      { properties: { "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "缺少启用字段" }] } } },
     ] });
   };
   try {
@@ -706,6 +731,35 @@ test("public config endpoint exposes only the AUTHOR and SINCE allowlist", async
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.deepEqual(await response.json(), { config: { author: "louis16s", since: "2020" }, source: "notion" });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("public config endpoint follows pagination before resolving AUTHOR and SINCE", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (_input, init) => {
+    calls += 1;
+    const body = JSON.parse(init.body);
+    if (calls === 1) {
+      assert.equal(body.start_cursor, undefined);
+      return Response.json({
+        results: [{ properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "分页作者" }] } } }],
+        has_more: true,
+        next_cursor: "config-page-2",
+      });
+    }
+    assert.equal(body.start_cursor, "config-page-2");
+    return Response.json({
+      results: [{ properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "SINCE" }] }, "配置值": { rich_text: [{ plain_text: "始于 2018" }] } } }],
+      has_more: false,
+    });
+  };
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/config"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_CONFIG_DATA_SOURCE_ID: "config-source" }, context);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { config: { author: "分页作者", since: "2018" }, source: "notion" });
+    assert.equal(calls, 2);
   } finally { globalThis.fetch = originalFetch; }
 });
 

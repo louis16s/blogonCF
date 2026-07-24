@@ -2,7 +2,9 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "blogincf",
   "main": "dist/server/index.js",
-  "compatibility_date": "2026-07-24",
+  // Keep this within the compatibility range supported by the pinned
+  // Cloudflare Vite/Miniflare runtime so `pnpm dev` and production agree.
+  "compatibility_date": "2026-05-15",
   "compatibility_flags": ["nodejs_compat"],
   "no_bundle": true,
   "assets": {
