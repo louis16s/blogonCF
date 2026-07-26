@@ -579,6 +579,54 @@ test("word-cloud endpoint reads public titles and bodies without leaking propert
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("news pages turn Notion-configured public feed URLs into safe RSS and Atom entries", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("/data_sources/source-id/query")) return Response.json({ results: [{ id: "news-page", properties: {
+      title: { title: [{ plain_text: "资讯" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] }, type: { select: { name: "Page" } }, status: { select: { name: "Published" } }, date: { date: null },
+    } }], has_more: false });
+    if (url.includes("/blocks/news-page/children")) return Response.json({ results: [
+      { id: "feed-link", type: "bookmark", has_children: false, bookmark: { url: "https://feeds.example.test/feed.xml", caption: [] } },
+      { id: "unsafe-link", type: "bookmark", has_children: false, bookmark: { url: "http://127.0.0.1/private.xml", caption: [] } },
+    ], has_more: false });
+    if (url === "https://feeds.example.test/feed.xml") return new Response(`<?xml version="1.0"?><rss><channel><title>示例订阅</title><item><title>第一篇动态</title><link>https://example.test/posts/1</link><pubDate>Sat, 25 Jul 2026 12:00:00 GMT</pubDate><description><![CDATA[<b>正文摘要</b>]]></description></item></channel></rss>`, { headers: { "content-type": "application/rss+xml" } });
+    throw new Error(`Unexpected request: ${url} ${init.method || "GET"}`);
+  };
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/rss-feeds?slug=links"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.feeds.length, 1);
+    assert.equal(payload.feeds[0].title, "示例订阅");
+    assert.deepEqual(payload.feeds[0].items[0], {
+      id: "https://feeds.example.test/feed.xml#https://example.test/posts/1",
+      title: "第一篇动态",
+      url: "https://example.test/posts/1",
+      published: "Sat, 25 Jul 2026 12:00:00 GMT",
+      summary: "正文摘要",
+    });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("search prewarms its public body index and waits with skeletons before an empty result", async () => {
+  const [worker, blog, article, css] = await Promise.all([
+    readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(worker, /url\.searchParams\.get\("warm"\) === "1"/);
+  assert.match(blog, /\/api\/content\/search\?warm=1/);
+  assert.match(blog, /!visible\.length && searching && <div className="search-skeleton"/);
+  assert.match(blog, /!visible\.length && !searching && \(/);
+  assert.match(css, /\.search-skeleton/);
+  assert.match(worker, /\/api\/content\/rss-feeds/);
+  assert.match(article, /\/api\/content\/rss-feeds\?slug=/);
+  assert.match(article, /RSS READER/);
+});
+
 test("sitemap is generated from current Published posts and safely degrades", async () => {
   const worker = await loadWorker();
   const safe = await worker.fetch(new Request("http://localhost/sitemap.xml"), { ASSETS: assets }, context);

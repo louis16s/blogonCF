@@ -27,14 +27,19 @@ const MAX_BLOCKS = 10_000;
 const MAX_BLOCK_DEPTH = 12;
 const MAX_INDEX_BLOCKS_PER_POST = 800;
 const WORD_CLOUD_CACHE_TTL_MS = 10 * 60 * 1000;
+const RSS_FEED_CACHE_TTL_MS = 15 * 60 * 1000;
+const MAX_RSS_FEEDS = 8;
 const LEGACY_EMOJI_PATTERN = /^(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*)$/u;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
 const wordCloudCache = new Map<string, { expiresAt: number; payload: WordCloudPayload }>();
 const publicCorpusCache = new Map<string, { expiresAt: number; corpus: PublicCorpus }>();
+const rssFeedCache = new Map<string, { expiresAt: number; feed: ExternalFeed | null }>();
 
 type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "notion" };
 type SearchDocument = ReturnType<typeof toPost> & { body: string; searchBody: string };
 type PublicCorpus = { documents: SearchDocument[]; partial: boolean };
+type ExternalFeedItem = { id: string; title: string; url: string; published: string; summary: string };
+type ExternalFeed = { url: string; title: string; source: string; items: ExternalFeedItem[] };
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -45,6 +50,7 @@ const worker = {
     if (url.pathname === "/api/content/navigation" && request.method === "GET") return notionNavigation(env);
     if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
     if (url.pathname === "/api/content/search" && request.method === "GET") return notionSearch(env, url);
+    if (url.pathname === "/api/content/rss-feeds" && request.method === "GET") return notionExternalRss(env, url);
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") return notionWordCloud(env);
     if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
     if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request);
@@ -205,10 +211,12 @@ async function notionWordCloud(env: Env): Promise<Response> {
 async function notionSearch(env: Env, url: URL): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   const query = normalizeSearchText(url.searchParams.get("q") || "");
-  if (!query) return Response.json({ matches: [], partial: false, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+  const warming = url.searchParams.get("warm") === "1";
+  if (!query && !warming) return Response.json({ matches: [], partial: false, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   if (query.length > 100) return error(400, "Search query is too long");
   try {
     const corpus = await getPublicCorpus(env);
+    if (warming) return Response.json({ matches: [], warmed: true, partial: corpus.partial, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
     const matches = corpus.documents
       .filter((document) => normalizeSearchText([
         document.title,
@@ -220,6 +228,119 @@ async function notionSearch(env: Env, url: URL): Promise<Response> {
       .map((document) => document.id);
     return Response.json({ matches, partial: corpus.partial, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
+}
+
+async function notionExternalRss(env: Env, url: URL): Promise<Response> {
+  if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  const slug = url.searchParams.get("slug") || "";
+  if (!slug || slug.length > 180) return error(400, "Invalid page slug");
+  try {
+    const page = await findSitePage(env, slug);
+    if (!page) return error(404, "Page not found");
+    const state = newBlockReadState();
+    const blocks = await getBlockChildren(env, page.id, state, 0);
+    const urls = extractExternalUrls(blocks).slice(0, MAX_RSS_FEEDS);
+    const feeds = (await mapWithConcurrency(urls, 3, (feedUrl) => fetchExternalFeed(feedUrl)))
+      .filter((feed): feed is ExternalFeed => Boolean(feed));
+    return Response.json({ feeds, partial: state.truncated, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
+  } catch (reason) { return notionError(reason); }
+}
+
+function extractExternalUrls(blocks: any[]): string[] {
+  const urls = new Set<string>();
+  const add = (value: unknown) => {
+    if (typeof value !== "string" || !isSafeExternalUrl(value)) return;
+    urls.add(value.trim());
+  };
+  const visit = (items: any[]) => {
+    for (const block of items || []) {
+      add(block.url);
+      for (const item of block.richText || []) {
+        add(item.href);
+        for (const match of String(item.text || "").matchAll(/https?:\/\/[^\s<>()]+/gi)) add(match[0]);
+      }
+      if (Array.isArray(block.children)) visit(block.children);
+    }
+  };
+  visit(blocks);
+  return [...urls];
+}
+
+function isSafeExternalUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+    const host = parsed.hostname.toLocaleLowerCase();
+    if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) return false;
+    if (/^(?:0|10|127)\.|^169\.254\.|^172\.(?:1[6-9]|2\d|3[0-1])\.|^192\.168\./.test(host)) return false;
+    if (host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:")) return false;
+    return true;
+  } catch { return false; }
+}
+
+async function fetchExternalFeed(feedUrl: string): Promise<ExternalFeed | null> {
+  const cached = rssFeedCache.get(feedUrl);
+  if (cached && cached.expiresAt > Date.now()) return cached.feed;
+  let current = feedUrl;
+  try {
+    for (let redirect = 0; redirect < 3; redirect++) {
+      const response = await fetch(current, { redirect: "manual", headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9" } });
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get("location");
+        if (!location) break;
+        const next = new URL(location, current).toString();
+        if (!isSafeExternalUrl(next)) break;
+        current = next;
+        continue;
+      }
+      if (!response.ok) break;
+      const length = Number(response.headers.get("content-length") || "0");
+      if (length > 1_000_000) break;
+      const xml = await response.text();
+      if (xml.length > 1_000_000) break;
+      const feed = parseExternalFeed(xml, current);
+      rssFeedCache.set(feedUrl, { expiresAt: Date.now() + RSS_FEED_CACHE_TTL_MS, feed });
+      return feed;
+    }
+  } catch (reason) { console.warn(reason instanceof Error ? reason.message : "External RSS fetch failed"); }
+  rssFeedCache.set(feedUrl, { expiresAt: Date.now() + RSS_FEED_CACHE_TTL_MS, feed: null });
+  return null;
+}
+
+function parseExternalFeed(xml: string, feedUrl: string): ExternalFeed | null {
+  const isAtom = /<feed\b/i.test(xml);
+  const chunks = [...xml.matchAll(isAtom ? /<entry\b[^>]*>([\s\S]*?)<\/entry>/gi : /<item\b[^>]*>([\s\S]*?)<\/item>/gi)].map((match) => match[1]);
+  if (!chunks.length) return null;
+  const source = externalSource(feedUrl);
+  const feedTitle = xmlField(xml, "title") || source;
+  const items = chunks.slice(0, 15).map((chunk, index) => {
+    const url = isAtom ? atomLink(chunk) : xmlField(chunk, "link");
+    const title = xmlField(chunk, "title") || "未命名动态";
+    const published = xmlField(chunk, isAtom ? "updated" : "pubDate") || xmlField(chunk, isAtom ? "published" : "dc:date");
+    const summary = xmlField(chunk, isAtom ? "summary" : "description") || xmlField(chunk, isAtom ? "content" : "content:encoded");
+    return { id: `${feedUrl}#${url || index}`, title, url: isSafeExternalUrl(url) ? url : feedUrl, published, summary };
+  }).filter((item) => item.title);
+  return items.length ? { url: feedUrl, title: feedTitle, source, items } : null;
+}
+
+function atomLink(xml: string): string {
+  const match = xml.match(/<link\b[^>]*\bhref=["']([^"']+)["'][^>]*>/i);
+  return match?.[1] ? decodeXml(match[1]) : "";
+}
+
+function xmlField(xml: string, tag: string): string {
+  const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = xml.match(new RegExp(`<${escaped}\\b[^>]*>([\\s\\S]*?)<\\/${escaped}>`, "i"));
+  return match?.[1] ? decodeXml(match[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, "$1").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()) : "";
+}
+
+function decodeXml(value: string): string {
+  return value.replace(/&#x([\da-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16))).replace(/&#(\d+);/g, (_, decimal) => String.fromCodePoint(Number(decimal))).replace(/&(?:amp|lt|gt|quot|apos);/gi, (entity) => ({ "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'" }[entity.toLocaleLowerCase()] || entity));
+}
+
+function externalSource(value: string): string {
+  try { return new URL(value).hostname.replace(/^www\./i, ""); }
+  catch { return "RSS"; }
 }
 
 async function getPublicCorpus(env: Env): Promise<PublicCorpus> {

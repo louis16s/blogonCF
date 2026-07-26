@@ -104,9 +104,17 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
         .then((response) => response.ok ? response.json() : Promise.reject())
         .then((data) => setContentSearch({ query: needle, ids: Array.isArray(data.matches) ? data.matches : [] }))
         .catch(() => { if (!controller.signal.aborted) setContentSearch({ query: needle, ids: [] }); });
-    }, 220);
+    }, 120);
     return () => { controller.abort(); window.clearTimeout(timer); };
   }, [deferredQuery]);
+
+  useEffect(() => {
+    if (!posts.length) return;
+    const warm = () => { void fetch("/api/content/search?warm=1", { cache: "no-store" }); };
+    const idle = window.requestIdleCallback?.(warm, { timeout: 2_000 });
+    const timer = idle === undefined ? window.setTimeout(warm, 900) : undefined;
+    return () => { if (idle !== undefined) window.cancelIdleCallback(idle); if (timer !== undefined) window.clearTimeout(timer); };
+  }, [posts.length]);
 
   const normalizedQuery = normalizeSearchText(deferredQuery);
   const searching = Boolean(normalizedQuery && contentSearch.query !== normalizedQuery);
@@ -187,7 +195,8 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
             </section>
           ))}
 
-          {!visible.length && (
+          {!visible.length && searching && <div className="search-skeleton" aria-label="正在检索正文" aria-busy="true"><i /><i /><i /><i /></div>}
+          {!visible.length && !searching && (
             <div className="empty">
               <FileText aria-hidden size={30} />
               <p>{syncState === "loading" ? "正在从 Notion 读取文章…" : syncState === "unavailable" ? "内容源暂时不可用。" : "没有找到匹配的文章。"}</p>

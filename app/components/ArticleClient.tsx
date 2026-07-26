@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ArrowSquareOut, CaretRight, FileText } from "@phosphor-icons/react";
+import { ArrowLeft, ArrowSquareOut, CaretRight, FileText, Rss } from "@phosphor-icons/react";
 import { FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import type { ChildPage, ContentBlock, Post } from "../data/types";
 
@@ -29,6 +29,8 @@ type ArticleClientProps = {
   initialTruncated?: boolean;
 };
 
+type ExternalFeed = { url: string; title: string; source: string; items: Array<{ id: string; title: string; url: string; published: string; summary: string }> };
+
 export function ArticleClient({ slug, contentKind = "post", initialPost, initialBlocks = [], initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false }: ArticleClientProps) {
   const [post, setPost] = useState<Post | undefined>(initialPost);
   const [blocks, setBlocks] = useState<ContentBlock[]>(initialBlocks);
@@ -39,6 +41,8 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const [childTrail, setChildTrail] = useState<ChildPage[]>([]);
   const [childLoading, setChildLoading] = useState(false);
   const [childError, setChildError] = useState("");
+  const [feeds, setFeeds] = useState<ExternalFeed[]>([]);
+  const [feedsLoading, setFeedsLoading] = useState(false);
   const passwordRef = useRef("");
   const childIdRef = useRef("");
   const childTrailRef = useRef<ChildPage[]>([]);
@@ -134,6 +138,19 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
 
   useEffect(() => () => childRequestRef.current?.abort(), []);
 
+  const isNewsPage = contentKind === "page" && /资讯|news|links/i.test(`${slug} ${post?.title || ""}`);
+  useEffect(() => {
+    if (!isNewsPage) return;
+    const controller = new AbortController();
+    const loadingTimer = window.setTimeout(() => setFeedsLoading(true), 80);
+    fetch(`/api/content/rss-feeds?slug=${encodeURIComponent(slug)}`, { signal: controller.signal, cache: "no-store" })
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((data) => { if (!controller.signal.aborted) setFeeds(Array.isArray(data.feeds) ? data.feeds : []); })
+      .catch(() => { if (!controller.signal.aborted) setFeeds([]); })
+      .finally(() => { window.clearTimeout(loadingTimer); if (!controller.signal.aborted) setFeedsLoading(false); });
+    return () => { window.clearTimeout(loadingTimer); controller.abort(); };
+  }, [isNewsPage, slug]);
+
   const closeChild = () => {
     setChildTrail((current) => {
       const next = current.slice(0, -1);
@@ -159,8 +176,22 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       {post.summary ? <p>{post.summary}</p> : null}
       {post.tags.length ? <div className="tags">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
     </header>
-    {locked ? <PasswordForm onSubmit={load} error={error} /> : childTrail.length ? <ChildDocument child={childTrail.at(-1)!} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} loading={childLoading} error={childError} /> : blocks.length ? <div className="notion-content"><Blocks blocks={blocks} onOpenChild={loadChild} />{truncated ? <ContentLimitNotice /> : null}{childLoading ? <p className="child-page-status" role="status">正在读取子页面…</p> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
+    {locked ? <PasswordForm onSubmit={load} error={error} /> : childTrail.length ? <ChildDocument child={childTrail.at(-1)!} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} loading={childLoading} error={childError} /> : blocks.length ? <div className="notion-content"><Blocks blocks={blocks} onOpenChild={loadChild} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childLoading ? <p className="child-page-status" role="status">正在读取子页面…</p> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
   </>;
+}
+
+function ExternalRssFeeds({ feeds, loading }: { feeds: ExternalFeed[]; loading: boolean }) {
+  if (loading) return <section className="external-feeds is-loading" aria-label="正在读取订阅" aria-busy="true"><div /><div /><div /></section>;
+  if (!feeds.length) return null;
+  return <section className="external-feeds" aria-labelledby="external-feeds-title">
+    <header><p className="eyebrow"><Rss aria-hidden size={14} /> RSS READER</p><h2 id="external-feeds-title">订阅动态</h2></header>
+    {feeds.flatMap((feed) => feed.items.map((item) => <a className="external-feed-item" key={item.id} href={item.url} target="_blank" rel="noreferrer"><span><small>{feed.title || feed.source}{item.published ? ` · ${formatFeedDate(item.published)}` : ""}</small><strong>{item.title}</strong>{item.summary ? <em>{item.summary}</em> : null}</span><ArrowSquareOut aria-hidden size={16} /></a>))}
+  </section>;
+}
+
+function formatFeedDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "short", day: "numeric" }).format(date);
 }
 
 function ChildDocument({ child, parentTitle, onBack, onOpenChild, loading, error }: { child: ChildPage; parentTitle: string; onBack: () => void; onOpenChild: (pageId: string) => void; loading: boolean; error: string }) {
