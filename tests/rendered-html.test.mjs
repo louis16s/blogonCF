@@ -116,6 +116,9 @@ test("overview renders every article immediately while retaining search and cate
   assert.doesNotMatch(blog, /items\.slice\(/);
   assert.match(blog, /\{items\.map\(\(post, index\)/);
   assert.doesNotMatch(blog, /<p>\{post\.summary/);
+  assert.match(blog, /\/api\/content\/search\?q=/);
+  assert.match(blog, /contentMatches\.has\(post\.id\)/);
+  assert.match(blog, /placeholder="搜索标题、正文…"/);
   assert.doesNotMatch(blog, /resource-strip|工具与订阅/);
   assert.match(blog, /siteLinks=\{siteLinks\}/);
   const [sidebar, navigationHook] = await Promise.all([
@@ -515,6 +518,7 @@ test("word-cloud endpoint reads public titles and bodies without leaking propert
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
   const blockReads = [];
+  let throttled = false;
   const page = (id, titleText, password = "") => ({ id, properties: {
     title: { title: [{ plain_text: titleText }] },
     slug: { rich_text: [{ plain_text: id }] },
@@ -533,6 +537,10 @@ test("word-cloud endpoint reads public titles and bodies without leaking propert
     ], has_more: false });
     if (url.includes("/blocks/")) {
       blockReads.push(url);
+      if (url.includes("public-one") && !throttled) {
+        throttled = true;
+        return Response.json({ message: "rate limited" }, { status: 429, headers: { "retry-after": "0" } });
+      }
       const text = url.includes("public-one") ? "cloudflare cloudflare" : "山海 cloudflare";
       return Response.json({ results: [
         { id: `${blockReads.length}-paragraph`, type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: text, annotations: {} }] } },
@@ -551,8 +559,23 @@ test("word-cloud endpoint reads public titles and bodies without leaking propert
     assert.ok(payload.words.some((item) => item.word === "山海" && item.postIds.includes("public-one")));
     assert.ok(payload.words.some((item) => item.word === "cloudflare"));
     assert.doesNotMatch(JSON.stringify(payload), /摘要禁词|分类禁词|标签禁词|私密标题|locked-one|secret|forbidden_code|forbidden_caption/);
-    assert.equal(blockReads.length, 2);
+    assert.equal(blockReads.length, 3, "a rate-limited block request should be retried");
     assert.ok(blockReads.every((url) => !url.includes("locked-one")), "locked pages must be excluded before any body request");
+
+    const bodySearch = await worker.fetch(new Request("http://localhost/api/content/search?q=cloudflare"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(bodySearch.status, 200);
+    assert.equal(bodySearch.headers.get("cache-control"), "no-store");
+    assert.deepEqual((await bodySearch.json()).matches.sort(), ["public-one", "public-two"]);
+
+    const codeSearch = await worker.fetch(new Request("http://localhost/api/content/search?q=forbidden_code"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.deepEqual((await codeSearch.json()).matches.sort(), ["public-one", "public-two"], "code is searchable even though it stays out of the word cloud");
+
+    const propertySearch = await worker.fetch(new Request("http://localhost/api/content/search?q=标签禁词"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.deepEqual((await propertySearch.json()).matches.sort(), ["public-one", "public-two"]);
+
+    const lockedSearch = await worker.fetch(new Request("http://localhost/api/content/search?q=私密标题"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.deepEqual((await lockedSearch.json()).matches, [], "locked article content and properties must stay out of the public index");
+    assert.equal(blockReads.length, 3, "word cloud and search should share one cached corpus");
   } finally { globalThis.fetch = originalFetch; }
 });
 

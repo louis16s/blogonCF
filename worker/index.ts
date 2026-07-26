@@ -5,7 +5,7 @@ import handler from "vinext/server/app-router-entry";
 import { clearPasswordAttempts, getPasswordAttemptStatus, recordPasswordFailure } from "../db/rate-limit";
 import { clearArticlePayload, storeArticlePayload, type ArticlePayload } from "../server/article-context";
 import { clearHomePayload, storeHomePayload, type HomePayload } from "../server/home-context";
-import { buildWordCloud } from "../shared/wordCloud.js";
+import { buildWordCloud, normalizeSearchText } from "../shared/wordCloud.js";
 
 interface Env {
   ASSETS: Fetcher;
@@ -25,13 +25,16 @@ const NOTION_VERSION = "2026-03-11";
 const NOTION_IMAGE_HOSTS = new Set(["prod-files-secure.s3.us-west-2.amazonaws.com"]);
 const MAX_BLOCKS = 10_000;
 const MAX_BLOCK_DEPTH = 12;
-const MAX_WORD_CLOUD_BLOCKS_PER_POST = 800;
+const MAX_INDEX_BLOCKS_PER_POST = 800;
 const WORD_CLOUD_CACHE_TTL_MS = 10 * 60 * 1000;
 const LEGACY_EMOJI_PATTERN = /^(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*)$/u;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
 const wordCloudCache = new Map<string, { expiresAt: number; payload: WordCloudPayload }>();
+const publicCorpusCache = new Map<string, { expiresAt: number; corpus: PublicCorpus }>();
 
 type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "notion" };
+type SearchDocument = ReturnType<typeof toPost> & { body: string; searchBody: string };
+type PublicCorpus = { documents: SearchDocument[]; partial: boolean };
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -41,6 +44,7 @@ const worker = {
     if (url.pathname === "/api/content/posts" && request.method === "GET") return notionPosts(env);
     if (url.pathname === "/api/content/navigation" && request.method === "GET") return notionNavigation(env);
     if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
+    if (url.pathname === "/api/content/search" && request.method === "GET") return notionSearch(env, url);
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") return notionWordCloud(env);
     if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
     if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request);
@@ -186,25 +190,61 @@ async function notionWordCloud(env: Env): Promise<Response> {
   }
 
   try {
-    const pages = await queryPosts(env, undefined, 100);
-    const publicPages = pages.filter((page) => !plain(page.properties?.password));
-    let partial = false;
-    const documents = (await mapWithConcurrency(publicPages, 3, async (page) => {
-      try {
-        const state: BlockReadState = { remaining: MAX_WORD_CLOUD_BLOCKS_PER_POST, truncated: false };
-        const blocks = await getBlockChildren(env, page.id, state, 0);
-        if (state.truncated) partial = true;
-        return { id: page.id, title: title(page.properties?.title) || "未命名文章", body: blockText(blocks) };
-      } catch (reason) {
-        partial = true;
-        console.warn(reason instanceof Error ? reason.message : "Word cloud article read failed");
-        return null;
-      }
-    })).filter((document): document is { id: string; title: string; body: string } => Boolean(document));
-    const payload: WordCloudPayload = { words: buildWordCloud(documents), sourceCount: documents.length, partial, source: "notion" };
+    const corpus = await getPublicCorpus(env);
+    const payload: WordCloudPayload = {
+      words: buildWordCloud(corpus.documents.map(({ id, title, body }) => ({ id, title, body }))),
+      sourceCount: corpus.documents.length,
+      partial: corpus.partial,
+      source: "notion",
+    };
     wordCloudCache.set(cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, payload });
     return Response.json(payload, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
   } catch (reason) { return notionError(reason); }
+}
+
+async function notionSearch(env: Env, url: URL): Promise<Response> {
+  if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  const query = normalizeSearchText(url.searchParams.get("q") || "");
+  if (!query) return Response.json({ matches: [], partial: false, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+  if (query.length > 100) return error(400, "Search query is too long");
+  try {
+    const corpus = await getPublicCorpus(env);
+    const matches = corpus.documents
+      .filter((document) => normalizeSearchText([
+        document.title,
+        document.summary,
+        document.category,
+        ...document.tags,
+        document.searchBody,
+      ].join("\n")).includes(query))
+      .map((document) => document.id);
+    return Response.json({ matches, partial: corpus.partial, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+  } catch (reason) { return notionError(reason); }
+}
+
+async function getPublicCorpus(env: Env): Promise<PublicCorpus> {
+  const cacheKey = env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID;
+  const cached = publicCorpusCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.corpus;
+
+  const pages = await queryPosts(env, undefined, 100);
+  const publicPages = pages.filter((page) => !plain(page.properties?.password));
+  let partial = false;
+  const documents = await mapWithConcurrency(publicPages, 2, async (page) => {
+    try {
+      const state: BlockReadState = { remaining: MAX_INDEX_BLOCKS_PER_POST, truncated: false };
+      const blocks = await getBlockChildren(env, page.id, state, 0);
+      if (state.truncated) partial = true;
+      return { ...toPost(page), body: blockText(blocks), searchBody: blockText(blocks, true) };
+    } catch (reason) {
+      partial = true;
+      console.warn(reason instanceof Error ? reason.message : "Public article index read failed");
+      return { ...toPost(page), body: "", searchBody: "" };
+    }
+  });
+  const corpus = { documents, partial };
+  publicCorpusCache.set(cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, corpus });
+  return corpus;
 }
 
 async function notionPost(env: Env, slug: string, request: Request): Promise<Response> {
@@ -495,11 +535,11 @@ async function mapWithConcurrency<T, U>(items: T[], concurrency: number, mapper:
   return results;
 }
 
-function blockText(blocks: any[]): string {
+function blockText(blocks: any[], includeCode = false): string {
   const fragments: string[] = [];
   const visit = (items: any[]) => {
     for (const block of items || []) {
-      if (block.type === "code") continue;
+      if (block.type === "code" && !includeCode) continue;
       const rich = Array.isArray(block.richText) ? block.richText.map((item: any) => item.text || "").join("") : "";
       if (rich) fragments.push(rich);
       if (typeof block.caption === "string" && block.caption) fragments.push(block.caption);
@@ -511,10 +551,17 @@ function blockText(blocks: any[]): string {
 }
 
 async function notionFetch(env: Env, path: string, init: RequestInit = {}): Promise<any> {
-  const response = await fetch(`https://api.notion.com/v1${path}`, { ...init, headers: { authorization: `Bearer ${env.NOTION_TOKEN}`, "notion-version": NOTION_VERSION, "content-type": "application/json", ...init.headers } });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`Notion ${response.status}: ${payload.message || "request failed"}`);
-  return payload;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const response = await fetch(`https://api.notion.com/v1${path}`, { ...init, headers: { authorization: `Bearer ${env.NOTION_TOKEN}`, "notion-version": NOTION_VERSION, "content-type": "application/json", ...init.headers } });
+    const payload = await response.json().catch(() => ({}));
+    if (response.ok) return payload;
+    if (response.status !== 429 || attempt === 4) throw new Error(`Notion ${response.status}: ${payload.message || "request failed"}`);
+    const retryHeader = response.headers.get("retry-after");
+    const retryAfter = retryHeader === null ? Number.NaN : Number(retryHeader);
+    const delay = Number.isFinite(retryAfter) ? Math.max(0, retryAfter * 1000) : 350 * (attempt + 1);
+    await new Promise((resolve) => setTimeout(resolve, Math.min(delay, 3_000)));
+  }
+  throw new Error("Notion request failed after retries");
 }
 
 function toPost(page: any) {

@@ -27,6 +27,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
   const [category, setCategory] = useState(ALL);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
+  const [contentSearch, setContentSearch] = useState<{ query: string; ids: string[] }>({ query: "", ids: [] });
   const [dark, setDark] = useState(false);
   const [themeReady, setThemeReady] = useState(false);
   const [wordCloudOpen, setWordCloudOpen] = useState(false);
@@ -94,6 +95,22 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
     return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [refreshKey]);
 
+  useEffect(() => {
+    const needle = normalizeSearchText(deferredQuery);
+    if (!needle) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      fetch(`/api/content/search?q=${encodeURIComponent(needle)}`, { signal: controller.signal, cache: "no-store" })
+        .then((response) => response.ok ? response.json() : Promise.reject())
+        .then((data) => setContentSearch({ query: needle, ids: Array.isArray(data.matches) ? data.matches : [] }))
+        .catch(() => { if (!controller.signal.aborted) setContentSearch({ query: needle, ids: [] }); });
+    }, 220);
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [deferredQuery]);
+
+  const normalizedQuery = normalizeSearchText(deferredQuery);
+  const searching = Boolean(normalizedQuery && contentSearch.query !== normalizedQuery);
+
   const categories = useMemo(() => {
     const found = Array.from(new Set(posts.map((post) => post.category).filter(Boolean)));
     found.sort((a, b) => {
@@ -107,10 +124,13 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
     return [ALL, ...found];
   }, [posts]);
   const visible = useMemo(() => {
-    const needle = normalizeSearchText(deferredQuery);
+    const needle = normalizedQuery;
+    const contentMatches = contentSearch.query === needle ? new Set(contentSearch.ids) : new Set<string>();
     return posts.filter((post) => (category === ALL || post.category === category)
-      && (!needle || normalizeSearchText([post.title, post.summary, post.category, ...post.tags].join(" ")).includes(needle)));
-  }, [posts, category, deferredQuery]);
+      && (!needle
+        || normalizeSearchText([post.title, post.summary, post.category, ...post.tags].join(" ")).includes(needle)
+        || contentMatches.has(post.id)));
+  }, [posts, category, normalizedQuery, contentSearch]);
 
   const groups = useMemo(() => {
     const map = new Map<string, Post[]>();
@@ -145,9 +165,9 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
           </div>
 
           <div className="toolbar-actions">
-            <label className="search-box">
+            <label className={`search-box${searching ? " searching" : ""}`}>
               <span className="sr-only">搜索文章</span>
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、标签…" />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、正文…" aria-busy={searching} />
               <MagnifyingGlass aria-hidden size={20} />
             </label>
             <button className="icon-button" type="button" onClick={() => setDark((value) => !value)} aria-label={dark ? "切换为浅色模式" : "切换为深色模式"}>

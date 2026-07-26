@@ -158,11 +158,13 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .source::before { content: ""; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: #b7b7b7; box-shadow: 0 0 0 3px color-mix(in srgb, #b7b7b7 14%, transparent); transform-origin: center; }
 .source.live::before { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 14%, transparent); animation: notion-live-pulse 1.8s ease-in-out infinite; }
 @keyframes notion-live-pulse { 0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 14%, transparent); } 50% { opacity: .48; transform: scale(.82); box-shadow: 0 0 0 6px color-mix(in srgb, var(--green) 5%, transparent); } }
+@keyframes search-pulse { to { color: var(--accent); transform: scale(1.1); } }
 .toolbar-actions { display: flex; align-items: center; gap: 10px; }
 .search-box { width: 270px; height: 42px; display: flex; align-items: center; gap: 10px; padding: 0 14px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--surface) 96%, var(--accent-soft)); box-shadow: var(--shadow); color: var(--muted); }
 .search-box:focus-within { border-color: var(--line-strong); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 6%, transparent); }
 .search-box input { min-width: 0; flex: 1; background: transparent; color: var(--ink); border: 0; outline: none; font-size: 13px; }
 .search-box input::placeholder { color: var(--subtle); }
+.search-box.searching svg { animation: search-pulse .8s ease-in-out infinite alternate; }
 .icon-button { width: 42px; height: 42px; display: grid; place-items: center; background: color-mix(in srgb, var(--surface) 96%, var(--accent-soft)); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); cursor: pointer; }
 .icon-button:hover { background: var(--surface-soft); }
 
