@@ -29,11 +29,6 @@
   "observability": {
     "enabled": true
   },
-  "routes": [
-    { "pattern": "1.530555.xyz/*", "zone_name": "530555.xyz" },
-    { "pattern": "blog.530555.xyz/*", "zone_name": "530555.xyz" },
-    { "pattern": "www.530555.xyz/*", "zone_name": "530555.xyz" }
-  ],
   "rules": [
     {
       "type": "ESModule",

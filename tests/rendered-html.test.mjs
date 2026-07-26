@@ -89,12 +89,13 @@ test("homepage raw HTML contains the live Notion article index, tools, and foote
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("client refresh failures clear previously verified list and article content", async () => {
+test("client refresh failures preserve the last verified public list while article failures clear protected content", async () => {
   const [blog, article] = await Promise.all([
     readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(blog, /\.catch\(\(\) => \{ setPosts\(\[\]\); setSiteLinks\(\[\]\); setSiteConfig\(DEFAULT_SITE_CONFIG\); setSyncState\("unavailable"\); \}\)/);
+  assert.match(blog, /\.catch\(\(\) => setSyncState\("unavailable"\)\)/);
+  assert.doesNotMatch(blog, /\.catch\(\(\) => \{ setPosts\(\[\]\)/);
   assert.match(article, /passwordRef\.current = ""; setPost\(undefined\); setBlocks\(\[\]\); setLocked\(false\)/);
 });
 
@@ -114,6 +115,7 @@ test("overview renders every article immediately while retaining search and cate
   ]);
   assert.doesNotMatch(blog, /items\.slice\(/);
   assert.match(blog, /\{items\.map\(\(post, index\)/);
+  assert.doesNotMatch(blog, /<p>\{post\.summary/);
   assert.doesNotMatch(blog, /resource-strip|工具与订阅/);
   assert.match(blog, /siteLinks=\{siteLinks\}/);
   const [sidebar, navigationHook] = await Promise.all([

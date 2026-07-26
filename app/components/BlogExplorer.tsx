@@ -30,6 +30,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
   const [dark, setDark] = useState(false);
   const [themeReady, setThemeReady] = useState(false);
   const [wordCloudOpen, setWordCloudOpen] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     const syncFromHash = () => setWordCloudOpen(window.location.hash === "#word-cloud");
@@ -50,6 +51,11 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
       document.removeEventListener("click", openFromMenu);
     };
   }, []);
+
+  const retrySync = () => {
+    setSyncState("loading");
+    setRefreshKey((value) => value + 1);
+  };
 
   const closeWordCloud = useCallback(() => {
     if (window.location.hash === "#word-cloud") window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
@@ -80,13 +86,13 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
     const refresh = () => fetch("/api/content/posts", { signal: controller.signal, cache: "no-store" })
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((data) => { if (Array.isArray(data.posts)) { setPosts(data.posts); setSiteLinks(Array.isArray(data.links) ? data.links : []); if (data.config?.author && data.config?.since) setSiteConfig(data.config); setSyncState("live"); } })
-      .catch(() => { setPosts([]); setSiteLinks([]); setSiteConfig(DEFAULT_SITE_CONFIG); setSyncState("unavailable"); });
+      .catch(() => setSyncState("unavailable"));
     refresh();
     const timer = window.setInterval(refresh, 60_000);
     const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
-  }, []);
+  }, [refreshKey]);
 
   const categories = useMemo(() => {
     const found = Array.from(new Set(posts.map((post) => post.category).filter(Boolean)));
@@ -135,6 +141,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
         <header className="blog-toolbar">
           <div className="welcome-block">
             <p className="welcome"><Sparkle aria-hidden size={19} weight="fill" /><span>blog 复活啦！<span className="welcome-tagline">是新的一年真好啊，绝胜烟柳满皇都！</span></span></p>
+            {syncState === "unavailable" && posts.length > 0 && <button className="sync-warning" type="button" onClick={retrySync}>显示最近内容 · 重试同步</button>}
           </div>
 
           <div className="toolbar-actions">
@@ -163,7 +170,8 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
           {!visible.length && (
             <div className="empty">
               <FileText aria-hidden size={30} />
-              <p>{syncState === "loading" ? "正在从 Notion 读取文章…" : syncState === "unavailable" ? "内容源暂时不可用，请稍后刷新。" : "没有找到匹配的文章。"}</p>
+              <p>{syncState === "loading" ? "正在从 Notion 读取文章…" : syncState === "unavailable" ? "内容源暂时不可用。" : "没有找到匹配的文章。"}</p>
+              {syncState === "unavailable" && <button type="button" onClick={retrySync}>重新连接</button>}
             </div>
           )}
         </section>
@@ -176,14 +184,13 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
 
 function PostCard({ post, index }: { post: Post; index: number }) {
   return (
-    <article className="post-card" style={{ "--card-order": Math.min(index, 8) } as CSSProperties}>
+    <article className="post-card" title={post.summary || undefined} style={{ "--card-order": Math.min(index, 8) } as CSSProperties}>
       <span className="post-emoji" aria-label={post.icon ? `Notion 图标 ${post.icon}` : "默认文章图标"}>{post.icon || "📝"}</span>
       <div className="post-card-body">
         <div className="post-card-title">
           <h3><Link href={`/blog/${encodeURIComponent(post.slug)}`}>{post.title}</Link></h3>
           {post.locked && <span className="lock-badge" title="这篇文章需要密码"><LockSimple aria-label="需密码" size={15} weight="fill" /></span>}
         </div>
-        <p>{post.summary || (post.tags.length ? post.tags.join(" · ") : "一篇来自 Notion 的记录")}</p>
         <time dateTime={post.date}>{formatDate(post.date)}</time>
       </div>
       <Link className="card-link" href={`/blog/${encodeURIComponent(post.slug)}`} aria-label={`阅读 ${post.title}`} />

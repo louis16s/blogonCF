@@ -21,7 +21,7 @@
 
 ## 一键部署
 
-点击上方 **Deploy to Cloudflare**。Cloudflare 会复制此仓库、创建 Worker、自动准备配置中声明的 D1 数据库，并启用后续 Git 推送自动部署。
+点击上方 **Deploy to Cloudflare**。Cloudflare 会复制 `louis16s/blogonCF`、创建 Worker、自动准备配置中声明的 D1 数据库，并启用后续 Git 推送自动部署。部署命令会自动执行 D1 迁移，无需手工建表。
 
 部署完成后，在 Cloudflare Dashboard 的 Worker 设置中添加：
 
@@ -35,7 +35,7 @@
 
 > 不要把 Notion Token、Cloudflare Token 或 GitHub Token 写进 `wrangler.jsonc`、`.env.example`、提交记录或 Issue。
 
-Cloudflare 的一键部署会从公开仓库创建副本并配置 Workers Builds；D1 等受支持资源可根据 Wrangler 配置自动创建。详见 [Deploy to Cloudflare 官方文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/)。
+Cloudflare 的一键部署会从公开仓库创建副本并配置 Workers Builds；D1 等受支持资源可根据 Wrangler 配置自动创建并替换示例资源 ID。详见 [Deploy to Cloudflare 官方文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/)。若是把仓库连接到已有 Worker，Worker 名称需与 `wrangler.jsonc` 中的 `blogincf` 一致，构建目录应为仓库根目录。
 
 ## 手动部署
 

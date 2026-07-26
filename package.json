@@ -6,7 +6,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/louis16s/bloginCF.git"
+    "url": "https://github.com/louis16s/blogonCF.git"
   },
   "keywords": ["notion", "cloudflare-workers", "blog", "vinext", "notionnext"],
   "cloudflare": {
@@ -26,7 +26,9 @@
     "test": "pnpm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern work --ignore-pattern outputs",
     "db:generate": "drizzle-kit generate",
-    "deploy": "pnpm run build && wrangler deploy --config wrangler.jsonc"
+    "db:migrate": "wrangler d1 migrations apply DB --remote --config wrangler.jsonc",
+    "deploy:worker": "pnpm run db:migrate && wrangler deploy --config wrangler.jsonc",
+    "deploy": "pnpm run build && pnpm run deploy:worker"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
