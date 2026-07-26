@@ -18,7 +18,7 @@
     {
       "binding": "DB",
       "database_name": "blogincf-rate-limit",
-      "database_id": "00000000-0000-4000-8000-000000000000",
+      "database_id": "3d6065d5-35ca-47ec-a121-f3d9d9b0293c",
       "migrations_dir": "drizzle"
     }
   ],
@@ -29,6 +29,11 @@
   "observability": {
     "enabled": true
   },
+  "routes": [
+    { "pattern": "1.530555.xyz/*", "zone_name": "530555.xyz" },
+    { "pattern": "blog.530555.xyz/*", "zone_name": "530555.xyz" },
+    { "pattern": "www.530555.xyz/*", "zone_name": "530555.xyz" }
+  ],
   "rules": [
     {
       "type": "ESModule",
