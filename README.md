@@ -2,7 +2,7 @@
 
 把 Notion 数据库直接变成运行在 Cloudflare Workers 上的完整博客。文章、独立页面、导航、小工具、RSS、站点地图和站点信息均从 Notion 读取，无需 Vercel，也不需要把访客送回 Notion 阅读正文。
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/louis16s/blogonCF)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https%3A%2F%2Fgithub.com%2Flouis16s%2FblogonCF.git)
 
 线上示例：[1.530555.xyz](https://1.530555.xyz)
 
@@ -21,9 +21,24 @@
 
 ## 一键部署
 
-点击上方 **Deploy to Cloudflare**。Cloudflare 会复制 `louis16s/blogonCF`、创建 Worker、自动准备配置中声明的 D1 数据库，并启用后续 Git 推送自动部署。部署命令会自动执行 D1 迁移，无需手工建表。
+### 方式 A：网页按钮
 
-部署完成后，在 Cloudflare Dashboard 的 Worker 设置中添加：
+点击上方 **Deploy to Cloudflare**。Cloudflare 会复制公开仓库、创建 Worker、准备 D1，并在部署页面要求填写 Notion 配置。按钮使用完整、已编码的 `.git` 地址，避免 Dashboard 手工输入时的 URL 识别问题。
+
+如果 Cloudflare 页面提示“无法获取存储库内容”，这通常是其 GitHub App 授权或 Git 接入层的问题，不代表仓库不可访问。可重新安装 Cloudflare Workers & Pages GitHub App，或直接使用下面不依赖 GitHub App 的官方 CLI 方式。
+
+### 方式 B：两条命令（推荐备用）
+
+需要本机安装 Node.js 和 pnpm。第一条命令通过 Cloudflare 官方 C3 的 tar 模式下载公开模板，不经过 Dashboard 的 Git 克隆：
+
+```bash
+pnpm create cloudflare@latest my-blog --template github:louis16s/blogonCF --template-mode tar --no-agents --no-deploy --no-open --git
+cd my-blog && pnpm setup:cloudflare
+```
+
+`setup:cloudflare` 只询问 Worker 名称和两个 Notion Data Source ID，随后自动登录 Cloudflare、创建或复用 D1、写入配置、执行迁移、构建并部署。最后按 Wrangler 提示粘贴一次 `NOTION_TOKEN` 即可。
+
+网页部署时会显示以下配置：
 
 | 名称 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
@@ -31,13 +46,15 @@
 | `NOTION_DATA_SOURCE_ID` | Variable | 建议 | 博客数据库的 Data Source ID；省略时使用项目默认示例值 |
 | `NOTION_CONFIG_DATA_SOURCE_ID` | Variable | 可选 | NotionNext 配置中心的 Data Source ID |
 
-随后把两个数据库共享给同一个 Notion Integration，再重新部署一次即可。
+无论使用哪种方式，都要把文章数据库和可选的配置数据库共享给同一个 Notion Integration。
 
 > 不要把 Notion Token、Cloudflare Token 或 GitHub Token 写进 `wrangler.jsonc`、`.env.example`、提交记录或 Issue。
 
-Cloudflare 的一键部署会从公开仓库创建副本并配置 Workers Builds；D1 等受支持资源可根据 Wrangler 配置自动创建并替换示例资源 ID。详见 [Deploy to Cloudflare 官方文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/)。若是把仓库连接到已有 Worker，Worker 名称需与 `wrangler.jsonc` 中的 `blogincf` 一致，构建目录应为仓库根目录。
+Cloudflare 的一键部署会从公开仓库创建副本并配置 Workers Builds；D1 等受支持资源可根据 Wrangler 配置自动创建并替换示例资源 ID。详见 [Deploy to Cloudflare 官方文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/) 和 [C3 远程模板文档](https://developers.cloudflare.com/workers/get-started/guide/)。若是把仓库连接到已有 Worker，Worker 名称需与 `wrangler.jsonc` 中的 `blogincf` 一致，构建目录应为仓库根目录。
 
 ## 手动部署
+
+以下内容只用于需要完全手工控制资源的情况；一般使用上面的两条命令即可。
 
 ### 1. 准备环境
 
@@ -92,10 +109,10 @@ pnpm wrangler secret put NOTION_TOKEN
 
 ```bash
 pnpm test
-pnpm deploy
+pnpm release
 ```
 
-`pnpm deploy` 会先构建 vinext Worker，再通过 Wrangler 发布。静态资源通过 `ASSETS` binding 提供，服务端页面和 Notion 网关由 Worker 处理。
+`pnpm release` 会先构建 vinext Worker，再执行 D1 迁移并通过 Wrangler 发布。Cloudflare Workers Builds 会分别调用 `pnpm build` 与 `pnpm deploy`，不会重复构建。
 
 ## Notion 数据库约定
 
@@ -162,7 +179,9 @@ pnpm dev
 | `pnpm build` | 生成 `dist/server` 与 `dist/client` |
 | `pnpm test` | 完整构建并运行接口、渲染和安全测试 |
 | `pnpm lint` | 运行 ESLint |
-| `pnpm deploy` | 构建并部署到 Cloudflare |
+| `pnpm deploy` | 迁移 D1 并部署已经构建的产物（供 Workers Builds 使用） |
+| `pnpm release` | 本地完整构建并部署 |
+| `pnpm setup:cloudflare` | 新账号交互式初始化并部署 |
 | `pnpm db:generate` | 数据库结构变化后生成 D1 迁移 |
 
 ## 自定义域名

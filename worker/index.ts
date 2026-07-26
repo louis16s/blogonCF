@@ -13,7 +13,7 @@ interface Env {
   NOTION_TOKEN?: string;
   NOTION_DATA_SOURCE_ID?: string;
   NOTION_CONFIG_DATA_SOURCE_ID?: string;
-  IMAGES: {
+  IMAGES?: {
     input(stream: ReadableStream): { transform(options: Record<string, unknown>): { output(options: { format: string; quality: number }): Promise<{ response(): Response }> } };
   };
 }
@@ -60,6 +60,7 @@ const worker = {
       return handleImageOptimization(request, {
         fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
         transformImage: async (body, { width, format, quality }) => {
+          if (!env.IMAGES) return new Response(body);
           const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
           return result.response();
         },
