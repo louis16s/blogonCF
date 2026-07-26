@@ -127,6 +127,8 @@ test("overview renders every article immediately while retaining search and cate
   assert.doesNotMatch(sidebar, /categories\.slice/);
   assert.match(sidebar, /className="mobile-menu"/);
   assert.match(sidebar, />菜单</);
+  assert.match(sidebar, /mobile-menu-disclosure mobile-category-list/);
+  assert.doesNotMatch(sidebar, /mobile-category-list" open/);
   assert.doesNotMatch(sidebar, /文章归档|历史归档/);
   assert.match(sidebar, />RSS 订阅</);
   assert.match(sidebar, />文章分类/);
@@ -136,7 +138,7 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(blog, /categories=\{categories\}/);
   assert.match(blog, /onCategoryChange=\{selectCategory\}/);
   assert.doesNotMatch(blog, /className="filter-row"|className="filters"/);
-  assert.match(sidebar, /className="mobile-menu-group"/);
+  assert.match(sidebar, /className="mobile-menu-group mobile-menu-disclosure"/);
   assert.match(sidebar, /aboutLink && \(aboutLink\.external/);
   assert.match(sidebar, /<Link href=\{aboutLink\.href\}>.*aboutLink\.title/s);
   assert.doesNotMatch(sidebar, /Notion<\/a> 创造，Cloudflare 带它兜风。/);
@@ -266,7 +268,7 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   assert.match(sidebar, /<span>菜单<\/span>/);
   assert.doesNotMatch(sidebar, /文章归档|历史归档|快速访问/);
   assert.match(sidebar, />RSS 订阅<\/Link>/);
-  assert.match(sidebar, /<p>小工具<\/p>/);
+  assert.match(sidebar, /<summary><span>小工具<\/span><small>\{toolLinks\.length\}<\/small>/);
   assert.match(sidebar, /<small>外部<\/small>/);
   assert.match(sidebar, /aboutLink && \(aboutLink\.external/, "unconfigured About links must not be invented on mobile");
   assert.doesNotMatch(sidebar, /href="\/#about"/);
@@ -282,9 +284,10 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   assert.match(css, /\.site-sidebar \{ position: sticky; top: 14px; z-index: 200;/);
   assert.match(css, /\.blog-main, \.article-shell \{ position: relative; z-index: 1;/);
   assert.match(css, /\.mobile-menu>summary \{ min-height: 44px;/);
-  assert.match(css, /\.mobile-menu-list a \{ min-height: 44px;/);
+  assert.match(css, /\.mobile-menu-list a \{ min-height: 38px;/);
   assert.match(css, /\.mobile-menu:not\(\[open\]\) \.mobile-menu-list \{ display: none; \}/);
-  assert.match(css, /\.mobile-category-list button \{ min-height: 42px;/);
+  assert.match(css, /\.mobile-category-list button \{ min-height: 38px;/);
+  assert.match(css, /\.footer-signature \{ align-self: flex-end; margin-left: auto; \}/);
 });
 
 test("intro bootstrap plays on reload and respects reduced motion", () => {

@@ -119,7 +119,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
             className="mobile-menu-list"
             aria-label="移动端菜单"
             onClick={(event) => {
-              if (event.target instanceof Element && event.target.closest("a, button")) event.currentTarget.closest("details")?.removeAttribute("open");
+              if (event.target instanceof Element && event.target.closest("a, button")) event.currentTarget.closest(".mobile-menu")?.removeAttribute("open");
             }}
           >
             {aboutLink && (aboutLink.external ? (
@@ -139,21 +139,25 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
               <Link href={link.href} key={link.id}>{link.title}</Link>
             ))}
             {toolLinks.length > 0 && (
-              <div className="mobile-menu-group">
-                <p>小工具</p>
-                {toolLinks.map((link) => (
-                  <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id}>{link.title}{link.external && <small>外部</small>}</a>
-                ))}
-              </div>
+              <details className="mobile-menu-group mobile-menu-disclosure">
+                <summary><span>小工具</span><small>{toolLinks.length}</small><CaretDown className="section-caret" aria-hidden size={13} /></summary>
+                <div className="mobile-menu-disclosure-content">
+                  {toolLinks.map((link) => (
+                    <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id}>{link.title}{link.external && <small>外部</small>}</a>
+                  ))}
+                </div>
+              </details>
             )}
             <Link href="/#word-cloud">词云</Link>
             {categories.length > 0 && onCategoryChange && (
-              <div className="mobile-menu-group mobile-category-list">
-                <p>文章分类</p>
-                {categories.map((item) => (
-                  <button type="button" className={item === activeCategory ? "active" : ""} aria-pressed={item === activeCategory} onClick={() => onCategoryChange(item)} key={item}>{item}</button>
-                ))}
-              </div>
+              <details className="mobile-menu-group mobile-menu-disclosure mobile-category-list">
+                <summary><span>文章分类</span><small>{Math.max(0, categories.length - 1)}</small><CaretDown className="section-caret" aria-hidden size={13} /></summary>
+                <div className="mobile-menu-disclosure-content">
+                  {categories.map((item) => (
+                    <button type="button" className={item === activeCategory ? "active" : ""} aria-pressed={item === activeCategory} onClick={() => onCategoryChange(item)} key={item}>{item}</button>
+                  ))}
+                </div>
+              </details>
             )}
             <div className="mobile-menu-status" aria-live="polite">
               <span>{countLabel}</span>
