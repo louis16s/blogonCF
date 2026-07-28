@@ -1,7 +1,8 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useCallback, useDeferredValue, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   FileText,
   LockSimple,
@@ -13,11 +14,20 @@ import {
 import { DEFAULT_SITE_CONFIG, type Post, type SiteConfig, type SiteLink } from "../data/types";
 import { ContentFooter } from "./ContentFooter";
 import { SiteSidebar } from "./SiteSidebar";
-import { WordCloudDialog } from "./WordCloudDialog";
+import { createSharedRequest } from "./clientState";
+import { CONTENT_REFRESH_INTERVAL_MS } from "./siteBootstrap";
 import { normalizeSearchText } from "../../shared/wordCloud.js";
 
 const ALL = "全部";
 const preferredCategories = ["心情随笔", "嵌入式开发", "小软件工程", "相机分享", "旅行游记", "输入密码"];
+const WordCloudDialog = dynamic(() => import("./WordCloudDialog").then((module) => module.WordCloudDialog), {
+  loading: () => null,
+  ssr: false,
+});
+const warmSearchIndex = createSharedRequest(async () => {
+  const response = await fetch("/api/content/search?warm=1", { cache: "no-store" });
+  if (!response.ok) throw new Error("Search index warm-up failed");
+});
 
 export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConfig = DEFAULT_SITE_CONFIG }: { initialPosts?: Post[]; initialLinks?: SiteLink[]; initialConfig?: SiteConfig }) {
   const [posts, setPosts] = useState<Post[]>(initialPosts);
@@ -32,6 +42,8 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
   const [themeReady, setThemeReady] = useState(false);
   const [wordCloudOpen, setWordCloudOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const skipInitialRefresh = useRef(initialPosts.length > 0);
+  const lastRefreshAt = useRef(0);
 
   useEffect(() => {
     const syncFromHash = () => setWordCloudOpen(window.location.hash === "#word-cloud");
@@ -84,13 +96,37 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
 
   useEffect(() => {
     const controller = new AbortController();
-    const refresh = () => fetch("/api/content/posts", { signal: controller.signal, cache: "no-store" })
-      .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((data) => { if (Array.isArray(data.posts)) { setPosts(data.posts); setSiteLinks(Array.isArray(data.links) ? data.links : []); if (data.config?.author && data.config?.since) setSiteConfig(data.config); setSyncState("live"); } })
-      .catch(() => setSyncState("unavailable"));
-    refresh();
-    const timer = window.setInterval(refresh, 60_000);
-    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    let inFlight = false;
+    const refresh = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const response = await fetch("/api/content/posts", { signal: controller.signal });
+        if (!response.ok) throw new Error("Content refresh failed");
+        const data = await response.json();
+        if (Array.isArray(data.posts)) {
+          setPosts(data.posts);
+          setSiteLinks(Array.isArray(data.links) ? data.links : []);
+          if (data.config?.author && data.config?.since) setSiteConfig(data.config);
+          setSyncState("live");
+        }
+      } catch {
+        if (!controller.signal.aborted) setSyncState("unavailable");
+      } finally {
+        inFlight = false;
+        lastRefreshAt.current = Date.now();
+      }
+    };
+    if (skipInitialRefresh.current) {
+      skipInitialRefresh.current = false;
+      lastRefreshAt.current = Date.now();
+    } else {
+      void refresh();
+    }
+    const timer = window.setInterval(refresh, CONTENT_REFRESH_INTERVAL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && Date.now() - lastRefreshAt.current >= CONTENT_REFRESH_INTERVAL_MS) void refresh();
+    };
     document.addEventListener("visibilitychange", onVisible);
     return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [refreshKey]);
@@ -107,14 +143,6 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
     }, 120);
     return () => { controller.abort(); window.clearTimeout(timer); };
   }, [deferredQuery]);
-
-  useEffect(() => {
-    if (!posts.length) return;
-    const warm = () => { void fetch("/api/content/search?warm=1", { cache: "no-store" }); };
-    const idle = window.requestIdleCallback?.(warm, { timeout: 2_000 });
-    const timer = idle === undefined ? window.setTimeout(warm, 900) : undefined;
-    return () => { if (idle !== undefined) window.cancelIdleCallback(idle); if (timer !== undefined) window.clearTimeout(timer); };
-  }, [posts.length]);
 
   const normalizedQuery = normalizeSearchText(deferredQuery);
   const searching = Boolean(normalizedQuery && contentSearch.query !== normalizedQuery);
@@ -175,7 +203,13 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
           <div className="toolbar-actions">
             <label className={`search-box${searching ? " searching" : ""}`}>
               <span className="sr-only">搜索文章</span>
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、正文…" aria-busy={searching} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onFocus={() => { void warmSearchIndex().catch(() => undefined); }}
+                placeholder="搜索标题、正文…"
+                aria-busy={searching}
+              />
               <MagnifyingGlass aria-hidden size={20} />
             </label>
             <button className="icon-button" type="button" onClick={() => setDark((value) => !value)} aria-label={dark ? "切换为浅色模式" : "切换为深色模式"}>

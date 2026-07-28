@@ -1,4 +1,4 @@
-# bloginCF
+# blogonCF
 
 把 Notion 数据库直接变成运行在 Cloudflare Workers 上的完整博客。文章、独立页面、导航、小工具、RSS、站点地图和站点信息均从 Notion 读取，无需 Vercel，也不需要把访客送回 Notion 阅读正文。
 
@@ -201,6 +201,17 @@ pnpm dev
 ## 自定义域名
 
 在 Cloudflare Dashboard 打开 Worker 的 **Settings → Domains & Routes → Add → Custom Domain**，选择已托管在同一 Cloudflare 账号中的域名。项目本身不固定域名，RSS 和站点地图会基于请求 Host 生成绝对地址。
+
+## 数据与性能架构
+
+- 首页由 Worker 并行读取文章、菜单和公共配置后直接 SSR，不等待浏览器二次拼装。
+- Cloudflare Cache API 与 Worker 内存会共同对公共 bootstrap 做 45 秒跨实例缓存和并发请求去重；上游短暂失败时最多保留 5 分钟的最近公开列表。
+- 访客响应使用重新校验策略，避免 Cloudflare 区域缓存规则把 Notion 内容固定数小时；45 秒缓存只存在于 Worker 内部。
+- 浏览器端的侧栏、文章统计和页脚配置共用一个 `/api/content/posts` 请求，避免文章页重复请求三个接口。
+- 首页与文章页面每 5 分钟检查一次更新；页面重新可见时，只有缓存已经过期才同步。
+- 全文索引仅在访客聚焦搜索框后预热，普通首页访问不会读取所有文章正文。
+- 词云组件和 HEIC 解码器按需加载；内容哈希静态资源由 Cloudflare 长期缓存。
+- 密码校验、密码文章正文和错误响应始终使用 `no-store`，不会进入公共缓存。
 
 ## 安全设计
 

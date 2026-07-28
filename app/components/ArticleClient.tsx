@@ -3,6 +3,7 @@
 import { ArrowLeft, ArrowRight, ArrowSquareOut, CaretRight, Eye, EyeSlash, FileText, LockKey, Rss } from "@phosphor-icons/react";
 import { FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import type { ChildPage, ContentBlock, Post } from "../data/types";
+import { CONTENT_REFRESH_INTERVAL_MS } from "./siteBootstrap";
 
 const HEIC_DECODE_CONCURRENCY = 3;
 let activeHeicDecodes = 0;
@@ -48,6 +49,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const childTrailRef = useRef<ChildPage[]>([]);
   const childRequestRef = useRef<AbortController | null>(null);
   const skipInitialRefresh = useRef(initialFetched);
+  const lastRefreshAt = useRef(0);
   const contentEndpoint = contentKind === "page" ? "/api/content/page" : "/api/content/post";
   const childEndpoint = contentKind === "page" ? "/api/content/page-child" : "/api/content/child";
 
@@ -98,21 +100,40 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
 
   useEffect(() => {
     const controller = new AbortController();
-    const refresh = () => {
+    let inFlight = false;
+    const refresh = async () => {
+      if (inFlight) return;
+      inFlight = true;
       const password = passwordRef.current;
-      return fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, password ? { method: "POST", signal: controller.signal, cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) } : { signal: controller.signal, cache: "no-store" })
-      .then(async (response) => {
+      try {
+        const response = await fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, password ? { method: "POST", signal: controller.signal, cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) } : { signal: controller.signal, cache: "no-store" });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
-        setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setTruncated(Boolean(data.truncated));
-      })
-      .catch((reason) => { if (reason.name !== "AbortError") { passwordRef.current = ""; setPost(undefined); setBlocks([]); setLocked(false); setError(reason.message || "文章不存在、已撤回或暂时无法读取"); } })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+        setPost(data.post);
+        setLocked(Boolean(data.locked));
+        setBlocks(data.blocks || []);
+        setTruncated(Boolean(data.truncated));
+        setError("");
+      } catch (reason) {
+        if (reason instanceof Error && reason.name !== "AbortError") {
+          passwordRef.current = "";
+          setError("实时同步暂时不可用，正在显示最近内容。");
+        }
+      } finally {
+        inFlight = false;
+        lastRefreshAt.current = Date.now();
+        if (!controller.signal.aborted) setLoading(false);
+      }
     };
-    if (skipInitialRefresh.current) skipInitialRefresh.current = false;
+    if (skipInitialRefresh.current) {
+      skipInitialRefresh.current = false;
+      lastRefreshAt.current = Date.now();
+    }
     else void refresh();
-    const timer = window.setInterval(refresh, 60_000);
-    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    const timer = window.setInterval(refresh, CONTENT_REFRESH_INTERVAL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && Date.now() - lastRefreshAt.current >= CONTENT_REFRESH_INTERVAL_MS) void refresh();
+    };
     document.addEventListener("visibilitychange", onVisible);
     return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [contentEndpoint, slug]);

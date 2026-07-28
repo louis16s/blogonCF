@@ -17,6 +17,7 @@ import {
 } from "@phosphor-icons/react";
 import type { SiteLink } from "../data/types";
 import { usePersistedDisclosure } from "./usePersistedDisclosure";
+import { loadSiteBootstrap } from "./siteBootstrap";
 import { useSiteNavigation } from "./useSiteNavigation";
 
 export type ContentSyncState = "loading" | "live" | "unavailable";
@@ -52,17 +53,19 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
 
   useEffect(() => {
     if (typeof postCount === "number" || syncState) return;
-    const controller = new AbortController();
-    fetch("/api/content/posts", { signal: controller.signal, cache: "no-store" })
-      .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((data) => setArticlePageSync({
-        count: Array.isArray(data.posts) ? data.posts.length : 0,
+    let active = true;
+    loadSiteBootstrap()
+      .then(({ posts }) => {
+        if (!active) return;
+        setArticlePageSync({
+        count: posts.length,
         state: "live",
-      }))
+        });
+      })
       .catch(() => {
-        if (!controller.signal.aborted) setArticlePageSync({ state: "unavailable" });
+        if (active) setArticlePageSync({ state: "unavailable" });
       });
-    return () => controller.abort();
+    return () => { active = false; };
   }, [postCount, syncState]);
 
   return (

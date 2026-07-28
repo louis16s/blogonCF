@@ -53,7 +53,7 @@ test("server-renders a safe loading state without stale Notion content", async (
   assert.match(html, /prefers-reduced-motion/);
   assert.ok(html.indexOf("prefers-reduced-motion") < html.indexOf("site-intro"), "pre-paint decision must run before the intro markup");
   assert.doesNotMatch(html, /2026槟城/);
-  assert.match(html, /https:\/\/1\.530555\.xyz\/og\.png/);
+  assert.match(html, /https:\/\/1\.530555\.xyz\/og\.jpg/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/);
 });
 
@@ -89,14 +89,46 @@ test("homepage raw HTML contains the live Notion article index, tools, and foote
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("client refresh failures preserve the last verified public list while article failures clear protected content", async () => {
+test("public site bootstrap deduplicates upstream Notion reads within its freshness window", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  let upstreamCalls = 0;
+  globalThis.fetch = async (input, init = {}) => {
+    upstreamCalls += 1;
+    const url = String(input);
+    const body = String(init.body || "");
+    if (url.includes("/data_sources/config-source/query")) return Response.json({ results: [] });
+    if (body.includes('"Menu"')) return Response.json({ results: [] });
+    return Response.json({ results: [{ id: "cached-post", properties: {
+      title: { title: [{ plain_text: "缓存文章" }] }, slug: { rich_text: [{ plain_text: "cached" }] }, summary: { rich_text: [] },
+      category: { select: { name: "开发" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
+    } }] });
+  };
+  try {
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "cache-source", NOTION_CONFIG_DATA_SOURCE_ID: "config-source" };
+    const first = await worker.fetch(new Request("http://localhost/api/content/posts"), env, context);
+    const second = await worker.fetch(new Request("http://localhost/api/content/posts"), env, context);
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal((await second.json()).posts[0].slug, "cached");
+    assert.equal(upstreamCalls, 3, "posts, navigation, and config should each be read only once");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("social preview image is correctly sized and kept below the initial multi-megabyte asset", async () => {
+  const image = await readFile(new URL("../public/og.jpg", import.meta.url));
+  assert.ok(image.length < 250_000, `expected an optimized social image, received ${image.length} bytes`);
+});
+
+test("client refresh failures preserve the last verified homepage and article content", async () => {
   const [blog, article] = await Promise.all([
     readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(blog, /\.catch\(\(\) => setSyncState\("unavailable"\)\)/);
+  assert.match(blog, /setSyncState\("unavailable"\)/);
   assert.doesNotMatch(blog, /\.catch\(\(\) => \{ setPosts\(\[\]\)/);
-  assert.match(article, /passwordRef\.current = ""; setPost\(undefined\); setBlocks\(\[\]\); setLocked\(false\)/);
+  assert.match(article, /实时同步暂时不可用，正在显示最近内容/);
+  assert.doesNotMatch(article, /setPost\(undefined\)|setBlocks\(\[\]\)|setLocked\(false\)/);
 });
 
 test("HEIC decoding survives signed URL refreshes without repeated work", async () => {
@@ -105,7 +137,7 @@ test("HEIC decoding survives signed URL refreshes without repeated work", async 
   assert.match(article, /sourceRef\.current = src/);
   assert.match(article, /return `\$\{block\.id\}:\$\{source\.hostname\}\$\{source\.pathname\}`/);
   assert.match(article, /\}, \[identity\]\)/);
-  assert.match(article, /if \(skipInitialRefresh\.current\) skipInitialRefresh\.current = false/);
+  assert.match(article, /if \(skipInitialRefresh\.current\) \{[\s\S]*skipInitialRefresh\.current = false/);
 });
 
 test("overview renders every article immediately while retaining search and category filters", async () => {
@@ -128,7 +160,7 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(sidebar, /小工具/);
   assert.match(sidebar, /link\.kind === "tool"/);
   assert.doesNotMatch(sidebar, /快速访问|blog-sidebar-quick-open|quick-links/);
-  assert.match(navigationHook, /\/api\/content\/navigation/);
+  assert.match(navigationHook, /loadSiteBootstrap/);
   assert.doesNotMatch(sidebar, /categories\.slice/);
   assert.match(sidebar, /className="mobile-menu"/);
   assert.match(sidebar, />菜单</);
@@ -637,6 +669,8 @@ test("search prewarms its public body index and waits with skeletons before an e
   ]);
   assert.match(worker, /url\.searchParams\.get\("warm"\) === "1"/);
   assert.match(blog, /\/api\/content\/search\?warm=1/);
+  assert.match(blog, /onFocus=\{\(\) => \{ void warmSearchIndex\(\)/);
+  assert.doesNotMatch(blog, /requestIdleCallback/, "body indexing should start from search intent, not every homepage visit");
   assert.match(blog, /!visible\.length && searching && <div className="search-skeleton"/);
   assert.match(blog, /!visible\.length && !searching && \(/);
   assert.match(css, /\.search-skeleton/);
@@ -758,7 +792,7 @@ test("Notion image gateway rejects non-image upstream payloads", async () => {
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("content endpoint maps only the filtered Notion response and disables caching", async () => {
+test("content endpoint maps only filtered metadata while keeping browser responses fresh", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
   let requestBody;
@@ -788,9 +822,10 @@ test("content endpoint maps only the filtered Notion response and disables cachi
     } }] });
   };
   try {
-    const response = await worker.fetch(new Request("http://localhost/api/content/posts"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
+    const response = await worker.fetch(new Request("http://localhost/api/content/posts"), env, context);
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("cache-control"), "no-cache, max-age=0, must-revalidate");
     const payload = await response.json();
     assert.equal(payload.posts[0].slug, "public-post");
     assert.deepEqual(payload.posts[0].tags, ["旅行"]);
@@ -800,6 +835,9 @@ test("content endpoint maps only the filtered Notion response and disables cachi
     assert.deepEqual(payload.config.footerQuotes, [{ lead: "第一句", sub: "第二句" }, { lead: "第三句", sub: "第四句" }]);
     assert.doesNotMatch(JSON.stringify(payload), /不得输出|禁用作者/);
     assert.deepEqual(requestBody.filter.and.map((item) => item.property), ["type", "status"]);
+    const head = await worker.fetch(new Request("http://localhost/api/content/posts", { method: "HEAD" }), env, context);
+    assert.equal(head.status, 200);
+    assert.equal(await head.text(), "");
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -817,7 +855,7 @@ test("navigation endpoint returns only live Notion-configured jump links", async
   try {
     const response = await worker.fetch(new Request("http://localhost/api/content/navigation"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("cache-control"), "no-cache, max-age=0, must-revalidate");
     assert.deepEqual(await response.json(), { links: [
       { id: "tool", title: "导航工具", href: "https://nav.example", summary: "", icon: "🧭", external: true, kind: "tool" },
       { id: "uppercase-url", title: "URL 属性工具", href: "https://uppercase.example/tool", summary: "", icon: "", external: true, kind: "tool" },
@@ -865,7 +903,7 @@ test("public config endpoint exposes only the public footer, author, and year al
   try {
     const response = await worker.fetch(new Request("http://localhost/api/content/config"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_CONFIG_DATA_SOURCE_ID: "config-source" }, context);
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("cache-control"), "no-cache, max-age=0, must-revalidate");
     const payload = await response.json();
     assert.equal(payload.source, "notion");
     assert.equal(payload.config.author, "louis16s");

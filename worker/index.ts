@@ -28,25 +28,31 @@ const MAX_BLOCK_DEPTH = 12;
 const MAX_INDEX_BLOCKS_PER_POST = 800;
 const WORD_CLOUD_CACHE_TTL_MS = 10 * 60 * 1000;
 const RSS_FEED_CACHE_TTL_MS = 15 * 60 * 1000;
+const SITE_BOOTSTRAP_CACHE_TTL_MS = 45 * 1000;
+const SITE_BOOTSTRAP_STALE_TTL_MS = 5 * 60 * 1000;
 const MAX_RSS_FEEDS = 8;
 const LEGACY_EMOJI_PATTERN = /^(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*)$/u;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
+const publicContentHeaders = { ...jsonHeaders, "cache-control": "no-cache, max-age=0, must-revalidate" };
+const edgeBootstrapHeaders = { ...jsonHeaders, "cache-control": "public, max-age=45, stale-while-revalidate=120" };
 const wordCloudCache = new Map<string, { expiresAt: number; payload: WordCloudPayload }>();
 const publicCorpusCache = new Map<string, { expiresAt: number; corpus: PublicCorpus }>();
 const rssFeedCache = new Map<string, { expiresAt: number; feed: ExternalFeed | null }>();
+const siteBootstrapCache = new Map<string, { freshUntil: number; staleUntil: number; payload?: HomePayload; pending?: Promise<HomePayload> }>();
 
 type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "notion" };
 type SearchDocument = ReturnType<typeof toPost> & { body: string; searchBody: string };
 type PublicCorpus = { documents: SearchDocument[]; partial: boolean };
 type ExternalFeedItem = { id: string; title: string; url: string; published: string; summary: string };
 type ExternalFeed = { url: string; title: string; source: string; items: ExternalFeedItem[] };
+type WorkerCacheStorage = CacheStorage & { default?: Cache };
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/sitemap.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionSitemap(env));
     if (url.pathname === "/rss.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionRss(env));
-    if (url.pathname === "/api/content/posts" && request.method === "GET") return notionPosts(env);
+    if (url.pathname === "/api/content/posts" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionPosts(env, request, ctx));
     if (url.pathname === "/api/content/navigation" && request.method === "GET") return notionNavigation(env);
     if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
     if (url.pathname === "/api/content/search" && request.method === "GET") return notionSearch(env, url);
@@ -105,7 +111,7 @@ const worker = {
       finally { clearArticlePayload(key); }
     }
     if (request.method === "GET" && url.pathname === "/") {
-      const payload = await homePayloadForRender(env);
+      const payload = await homePayloadForRender(env, request, ctx);
       const key = storeHomePayload(payload);
       const headers = new Headers(request.headers);
       headers.set("x-blog-home-context", key);
@@ -149,8 +155,85 @@ async function sitePagePayloadForRender(env: Env, slug: string): Promise<Article
   return { ...payload, status: response.status };
 }
 
-async function homePayloadForRender(env: Env): Promise<HomePayload> {
-  const response = await notionPosts(env);
+function siteBootstrapCacheKey(env: Env): string {
+  return `${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID}:${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}`;
+}
+
+async function querySiteBootstrap(env: Env): Promise<HomePayload> {
+  const [pages, linkPages, config] = await Promise.all([
+    queryPosts(env, undefined, 100),
+    querySiteLinks(env),
+    queryPublicSiteConfig(env).catch(() => defaultSiteConfig()),
+  ]);
+  return {
+    posts: pages.map(toPost).filter((post) => post.slug),
+    links: toSiteLinks(linkPages),
+    config,
+  };
+}
+
+async function getSiteBootstrap(env: Env): Promise<HomePayload> {
+  if (!env.NOTION_TOKEN) throw new Error("Notion connection is not configured");
+  const key = siteBootstrapCacheKey(env);
+  const now = Date.now();
+  const cached = siteBootstrapCache.get(key);
+  if (cached?.payload && cached.freshUntil > now) return cached.payload;
+  if (cached?.pending) return cached.pending;
+
+  const pending = querySiteBootstrap(env)
+    .then((payload) => {
+      siteBootstrapCache.set(key, {
+        payload,
+        freshUntil: Date.now() + SITE_BOOTSTRAP_CACHE_TTL_MS,
+        staleUntil: Date.now() + SITE_BOOTSTRAP_STALE_TTL_MS,
+      });
+      if (siteBootstrapCache.size > 8) {
+        const oldestKey = siteBootstrapCache.keys().next().value;
+        if (oldestKey && oldestKey !== key) siteBootstrapCache.delete(oldestKey);
+      }
+      return payload;
+    })
+    .catch((reason) => {
+      if (cached?.payload && cached.staleUntil > now) {
+        siteBootstrapCache.set(key, {
+          payload: cached.payload,
+          freshUntil: now + 10_000,
+          staleUntil: cached.staleUntil,
+        });
+        return cached.payload;
+      }
+      siteBootstrapCache.delete(key);
+      throw reason;
+    });
+
+  siteBootstrapCache.set(key, {
+    payload: cached?.payload,
+    freshUntil: cached?.freshUntil || 0,
+    staleUntil: cached?.staleUntil || 0,
+    pending,
+  });
+  return pending;
+}
+
+function defaultWorkerCache(): Cache | undefined {
+  return (globalThis as typeof globalThis & { caches?: WorkerCacheStorage }).caches?.default;
+}
+
+function siteBootstrapEdgeKey(env: Env, request: Request): Request {
+  const url = new URL(request.url);
+  url.protocol = "https:";
+  url.hostname = "1.530555.xyz";
+  url.pathname = "/__blog-cache/site-bootstrap";
+  url.search = "";
+  url.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
+  url.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
+  return new Request(url.toString(), { method: "GET" });
+}
+
+async function homePayloadForRender(env: Env, request: Request, ctx: ExecutionContext): Promise<HomePayload> {
+  if (!env.NOTION_TOKEN) return { posts: [], links: [], config: defaultSiteConfig() };
+  const endpoint = new URL("/api/content/posts", request.url);
+  const response = await notionPosts(env, new Request(endpoint, { headers: request.headers }), ctx);
   if (!response.ok) return { posts: [], links: [], config: defaultSiteConfig() };
   const payload = await response.json().catch(() => ({})) as Partial<HomePayload>;
   return {
@@ -160,13 +243,30 @@ async function homePayloadForRender(env: Env): Promise<HomePayload> {
   };
 }
 
-async function notionPosts(env: Env): Promise<Response> {
+async function notionPosts(env: Env, request?: Request, ctx?: ExecutionContext): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   try {
-    const [pages, linkPages, config] = await Promise.all([queryPosts(env, undefined, 100), querySiteLinks(env), queryPublicSiteConfig(env).catch(() => defaultSiteConfig())]);
-    const posts = pages.map(toPost).filter((post) => post.slug);
-    const links = toSiteLinks(linkPages);
-    return Response.json({ posts, links, config, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    const cache = request ? defaultWorkerCache() : undefined;
+    const cacheKey = request && cache ? siteBootstrapEdgeKey(env, request) : undefined;
+    if (cache && cacheKey) {
+      const cached = await cache.match(cacheKey).catch(() => undefined);
+      if (cached) {
+        const headers = new Headers(cached.headers);
+        headers.set("cache-control", publicContentHeaders["cache-control"]);
+        headers.set("x-blog-cache", "hit");
+        return new Response(cached.body, { status: cached.status, headers });
+      }
+    }
+    const payload = await getSiteBootstrap(env);
+    const body = { ...payload, source: "notion" };
+    const response = Response.json(body, { headers: { ...publicContentHeaders, "x-blog-cache": "miss" } });
+    if (cache && cacheKey && ctx) {
+      const edgeResponse = Response.json(body, { headers: edgeBootstrapHeaders });
+      ctx.waitUntil(cache.put(cacheKey, edgeResponse).catch((reason) => {
+        console.warn(reason instanceof Error ? reason.message : "Site bootstrap cache write failed");
+      }));
+    }
+    return response;
   } catch (reason) { return notionError(reason); }
 }
 
@@ -174,7 +274,7 @@ async function notionSiteConfig(env: Env): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   try {
     const config = await queryPublicSiteConfig(env);
-    return Response.json({ config, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    return Response.json({ config, source: "notion" }, { headers: publicContentHeaders });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -183,7 +283,7 @@ async function notionNavigation(env: Env): Promise<Response> {
   try {
     const linkPages = await querySiteLinks(env);
     const links = toSiteLinks(linkPages);
-    return Response.json({ links, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    return Response.json({ links, source: "notion" }, { headers: publicContentHeaders });
   } catch (reason) { return notionError(reason); }
 }
 
