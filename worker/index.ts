@@ -225,6 +225,7 @@ function siteBootstrapEdgeKey(env: Env, request: Request): Request {
   url.hostname = "1.530555.xyz";
   url.pathname = "/__blog-cache/site-bootstrap";
   url.search = "";
+  url.searchParams.set("schema", "2");
   url.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
   url.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
   return new Request(url.toString(), { method: "GET" });
@@ -788,16 +789,19 @@ async function notionFetch(env: Env, path: string, init: RequestInit = {}): Prom
 function toPost(page: any) {
   const properties = page.properties || {};
   const slug = plain(properties.slug) || page.id;
+  const locked = Boolean(plain(properties.password));
   return {
     id: page.id,
     title: title(properties.title) || "未命名文章",
     slug,
-    summary: plain(properties.summary),
+    // Keep every user-controlled metadata field out of the public response for
+    // locked posts. A Notion summary can accidentally duplicate the password.
+    summary: locked ? "" : plain(properties.summary),
     category: properties.category?.select?.name || "未分类",
     tags: (properties.tags?.multi_select || []).map((tag: any) => tag.name).filter(Boolean),
     date: properties.date?.date?.start || page.created_time?.slice(0, 10) || "",
     icon: notionDisplayEmoji(page),
-    locked: Boolean(plain(properties.password)),
+    locked,
   };
 }
 

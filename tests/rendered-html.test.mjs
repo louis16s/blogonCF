@@ -72,7 +72,7 @@ test("homepage raw HTML contains the live Notion article index, tools, and foote
     } }] });
     return Response.json({ results: [
       { id: "penang", icon: { type: "emoji", emoji: "🌴" }, properties: { title: { title: [{ plain_text: "2026槟城" }] }, slug: { rich_text: [{ plain_text: "Penang" }] }, summary: { rich_text: [] }, category: { select: { name: "旅行游记" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] } } },
-      { id: "locked", properties: { title: { title: [{ plain_text: "Y-1" }] }, slug: { rich_text: [{ plain_text: "Y-1" }] }, summary: { rich_text: [] }, category: { select: { name: "输入密码" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "hidden" }] } } },
+      { id: "locked", properties: { title: { title: [{ plain_text: "Y-1" }] }, slug: { rich_text: [{ plain_text: "Y-1" }] }, summary: { rich_text: [{ plain_text: "hidden" }] }, category: { select: { name: "输入密码" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "hidden" }] } } },
       { id: "77777777-7777-4777-8777-777777777777", properties: { title: { title: [{ plain_text: "nikon F3p" }] }, slug: { rich_text: [] }, summary: { rich_text: [] }, category: { select: { name: "相机分享" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] } } },
     ] });
   };
@@ -82,6 +82,7 @@ test("homepage raw HTML contains the live Notion article index, tools, and foote
     assert.match(html, /2026槟城/);
     assert.match(html, /🌴/, "Notion page emoji should be present in the rendered article card");
     assert.match(html, /Y-1/);
+    assert.doesNotMatch(html, />hidden</, "locked article metadata must not reveal a password-like summary");
     assert.match(html, /nikon F3p/);
     assert.match(html, /测试工具/);
     assert.match(html, /测试作者/);
