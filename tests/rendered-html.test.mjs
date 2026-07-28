@@ -164,7 +164,8 @@ test("overview renders every article immediately while retaining search and cate
   assert.doesNotMatch(blog, /同步 Notion 中的跳转菜单/);
   assert.doesNotMatch(blog, /首页全部展开/);
   assert.match(footer, /这里收录着 \$\{postCount\} 个文章。不赶时间，慢慢翻。/);
-  assert.match(footer, /偶尔拍照，或是写代码，剩下的时间用来对焦生活。/);
+  assert.match(footer, /config\.footerQuotes/);
+  assert.match(footer, /Math\.random\(\) \* quotes\.length/);
   assert.match(footer, /© \{config\.author\} \{years\}/);
   assert.doesNotMatch(footer, /© \{config\.author\} · \{years\}/);
   assert.match(blog, /<ContentFooter id="about" siteConfig=\{siteConfig\} postCount=\{posts\.length\}/);
@@ -384,6 +385,23 @@ test("article raw HTML contains live title, summary, and public Notion content",
     assert.doesNotMatch(html, /正在从 Notion 读取文章/);
     assert.doesNotMatch(html, /site-intro|网站开场动画|rangefinder-intro/, "article routes must not render the homepage intro");
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("article header stays compact and the password form supports keyboard submission", async () => {
+  const [article, css] = await Promise.all([
+    readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(article, /className="article-title-row"/);
+  assert.match(article, /className="article-summary"/);
+  assert.match(article, /<form className="password-card" onSubmit=\{submit\}>/);
+  assert.match(article, /enterKeyHint="go"/);
+  assert.match(article, /type="submit"/);
+  assert.match(article, /按 Enter 也可以直接解锁/);
+  assert.match(article, /autoFocus/);
+  assert.match(css, /\.article-title-row \{ display: grid;/);
+  assert.match(css, /\.password-card-fields \{ display: grid;/);
+  assert.match(css, /\.password-card \.password-submit/);
 });
 
 test("about and other Published Notion pages render inside the site shell", async () => {
@@ -749,6 +767,7 @@ test("content endpoint maps only the filtered Notion response and disables cachi
     if (String(input).includes("fffad771-48f4-8181-b48e-000b8cf60e1b")) return Response.json({ results: [
       { id: "author", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "Notion 作者" }] }, "其他私密项": { rich_text: [{ plain_text: "不得输出" }] } } },
       { id: "since", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "`SINCE`" }] }, "配置值": { rich_text: [{ plain_text: "始于 2019 年" }] } } },
+      { id: "quotes", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "FOOTER_QUOTES" }] }, "配置值": { rich_text: [{ plain_text: "第一句｜第二句\n第三句 | 第四句" }] } } },
       { id: "disabled", properties: { "启用": { checkbox: false }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "禁用作者" }] } } },
     ] });
     assert.match(String(input), /\/v1\/data_sources\/source-id\/query$/);
@@ -776,7 +795,9 @@ test("content endpoint maps only the filtered Notion response and disables cachi
     assert.equal(payload.posts[0].slug, "public-post");
     assert.deepEqual(payload.posts[0].tags, ["旅行"]);
     assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://hd.530555.xyz", "tool"], ["带跳转的工具", "https://annotated.example", "tool"], ["历史归档", "/#archive", "nav"], ["关于我", "/about", "nav"], ["资讯", "/page/links", "nav"]]);
-    assert.deepEqual(payload.config, { author: "Notion 作者", since: "2019" });
+    assert.equal(payload.config.author, "Notion 作者");
+    assert.equal(payload.config.since, "2019");
+    assert.deepEqual(payload.config.footerQuotes, [{ lead: "第一句", sub: "第二句" }, { lead: "第三句", sub: "第四句" }]);
     assert.doesNotMatch(JSON.stringify(payload), /不得输出|禁用作者/);
     assert.deepEqual(requestBody.filter.and.map((item) => item.property), ["type", "status"]);
   } finally { globalThis.fetch = originalFetch; }
@@ -829,7 +850,7 @@ test("legacy icon properties accept one emoji and reject icon classes or mixed t
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("public config endpoint exposes only the AUTHOR and SINCE allowlist", async () => {
+test("public config endpoint exposes only the public footer, author, and year allowlist", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input) => {
@@ -845,7 +866,12 @@ test("public config endpoint exposes only the AUTHOR and SINCE allowlist", async
     const response = await worker.fetch(new Request("http://localhost/api/content/config"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_CONFIG_DATA_SOURCE_ID: "config-source" }, context);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("cache-control"), "no-store");
-    assert.deepEqual(await response.json(), { config: { author: "louis16s", since: "2020" }, source: "notion" });
+    const payload = await response.json();
+    assert.equal(payload.source, "notion");
+    assert.equal(payload.config.author, "louis16s");
+    assert.equal(payload.config.since, "2020");
+    assert.ok(payload.config.footerQuotes.length >= 6);
+    assert.doesNotMatch(JSON.stringify(payload), /never-leak|缺少启用字段/);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -873,7 +899,10 @@ test("public config endpoint follows pagination before resolving AUTHOR and SINC
   try {
     const response = await worker.fetch(new Request("http://localhost/api/content/config"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_CONFIG_DATA_SOURCE_ID: "config-source" }, context);
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { config: { author: "分页作者", since: "2018" }, source: "notion" });
+    const payload = await response.json();
+    assert.equal(payload.config.author, "分页作者");
+    assert.equal(payload.config.since, "2018");
+    assert.ok(payload.config.footerQuotes.length >= 6);
     assert.equal(calls, 2);
   } finally { globalThis.fetch = originalFetch; }
 });

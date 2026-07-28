@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ArrowSquareOut, CaretRight, FileText, Rss } from "@phosphor-icons/react";
+import { ArrowLeft, ArrowRight, ArrowSquareOut, CaretRight, Eye, EyeSlash, FileText, LockKey, Rss } from "@phosphor-icons/react";
 import { FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import type { ChildPage, ContentBlock, Post } from "../data/types";
 
@@ -172,11 +172,13 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   return <>
     <header className="article-head">
       <p className="eyebrow">{contentKind === "page" ? "LOUIS16S · PAGE" : `${post.category} · ${post.date}`}</p>
-      <h1>{contentKind === "page" && post.icon ? <span className="page-title-icon" aria-hidden>{post.icon}</span> : null}{post.title}</h1>
-      {post.summary ? <p>{post.summary}</p> : null}
+      <div className="article-title-row">
+        <h1>{contentKind === "page" && post.icon ? <span className="page-title-icon" aria-hidden>{post.icon}</span> : null}{post.title}</h1>
+        {post.summary ? <p className="article-summary">{post.summary}</p> : null}
+      </div>
       {post.tags.length ? <div className="tags">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
     </header>
-    {locked ? <PasswordForm onSubmit={load} error={error} /> : childTrail.length ? <ChildDocument child={childTrail.at(-1)!} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} loading={childLoading} error={childError} /> : blocks.length ? <div className="notion-content"><Blocks blocks={blocks} onOpenChild={loadChild} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childLoading ? <p className="child-page-status" role="status">正在读取子页面…</p> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
+    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childTrail.length ? <ChildDocument child={childTrail.at(-1)!} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} loading={childLoading} error={childError} /> : blocks.length ? <div className="notion-content"><Blocks blocks={blocks} onOpenChild={loadChild} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childLoading ? <p className="child-page-status" role="status">正在读取子页面…</p> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
   </>;
 }
 
@@ -209,10 +211,26 @@ function ContentLimitNotice() {
   return <p className="content-limit-notice" role="status">这篇 Notion 内容超出单次同步上限，当前页面可能未完整显示。请稍后重试或拆分页面。</p>;
 }
 
-function PasswordForm({ onSubmit, error }: { onSubmit: (value: string) => void; error: string }) {
+function PasswordForm({ onSubmit, error, loading }: { onSubmit: (value: string) => void; error: string; loading: boolean }) {
   const [password, setPassword] = useState("");
-  const submit = (event: FormEvent) => { event.preventDefault(); onSubmit(password); };
-  return <form className="password-card" onSubmit={submit}><p className="eyebrow">PRIVATE NOTE</p><h2>这篇文章需要密码</h2><label>访问密码<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label><button>解锁文章</button>{error && <p role="alert">{error}</p>}</form>;
+  const [visible, setVisible] = useState(false);
+  const submit = (event: FormEvent) => { event.preventDefault(); if (!loading) onSubmit(password); };
+  return <form className="password-card" onSubmit={submit}>
+    <div className="password-card-head">
+      <span className="password-lock" aria-hidden><LockKey size={22} weight="duotone" /></span>
+      <div><p className="eyebrow">PRIVATE NOTE</p><h2>这篇文章需要密码</h2><p>输入访问密码，按 Enter 也可以直接解锁。</p></div>
+    </div>
+    <div className="password-card-fields">
+      <label htmlFor="article-password">访问密码</label>
+      <div className="password-input-wrap">
+        <input id="article-password" type={visible ? "text" : "password"} autoComplete="current-password" enterKeyHint="go" autoFocus value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby="password-hint" required />
+        <button className="password-visibility" type="button" onClick={() => setVisible((value) => !value)} aria-label={visible ? "隐藏密码" : "显示密码"}>{visible ? <EyeSlash aria-hidden size={19} /> : <Eye aria-hidden size={19} />}</button>
+      </div>
+      <button className="password-submit" type="submit" disabled={loading}>{loading ? "正在验证…" : <><span>解锁文章</span><ArrowRight aria-hidden size={17} /></>}</button>
+    </div>
+    <p id="password-hint" className="password-hint">密码只用于本次验证，不会保存在浏览器中。</p>
+    {error && <p className="password-error" role="alert">{error}</p>}
+  </form>;
 }
 
 function Blocks({ blocks, onOpenChild }: { blocks: ContentBlock[]; onOpenChild: (pageId: string) => void }) {

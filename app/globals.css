@@ -267,17 +267,18 @@ html[data-intro="playing"] .site-intro { display: grid; }
 
 .article-toolbar { max-width: 920px; display: flex; align-items: center; justify-content: space-between; margin: 0 auto; padding: 8px 0 24px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); }
 .article-toolbar a:hover { color: var(--ink); }
-.article-shell article { max-width: 820px; min-height: 70vh; margin: auto; padding: 58px 0 80px; }
+.article-shell article { max-width: 820px; min-height: 70vh; margin: auto; padding: 38px 0 70px; }
 .article-shell>.content-footer { max-width: 920px; margin-inline: auto; }
-.article-head { padding-bottom: 37px; border-bottom: 1px solid var(--line); }
-.eyebrow { margin: 0 0 17px; color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
-.article-head h1 { margin: 0; font-size: clamp(38px, 5.4vw, 68px); line-height: 1.08; letter-spacing: -.045em; }
+.article-head { padding-bottom: 22px; border-bottom: 1px solid var(--line); }
+.eyebrow { margin: 0 0 10px; color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+.article-title-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(110px, 31%); align-items: end; gap: 18px; }
+.article-head h1 { min-width: 0; margin: 0; overflow-wrap: anywhere; font-size: clamp(34px, 4.6vw, 56px); line-height: 1.06; letter-spacing: -.043em; }
 .page-title-icon { display: inline-block; margin-right: .22em; font-size: .72em; vertical-align: .08em; }
-.article-head>p:not(.eyebrow) { max-width: 680px; margin: 24px 0 0; color: var(--muted); font-size: 17px; line-height: 1.75; }
-.tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.article-summary { margin: 0 0 .28em; color: var(--muted); font-size: 12px; line-height: 1.55; text-align: right; }
+.tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
 .tags span { padding: 5px 9px; color: var(--muted); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 999px; font-size: 11px; }
 .article-state { max-width: 820px; min-height: 50vh; margin: auto; padding: 70px 0; color: var(--muted); }
-.notion-content { padding-top: 43px; color: color-mix(in srgb, var(--ink) 90%, var(--muted)); font-family: ui-serif, Georgia, "Songti SC", serif; font-size: 17px; line-height: 1.9; }
+.notion-content { padding-top: 34px; color: color-mix(in srgb, var(--ink) 90%, var(--muted)); font-family: ui-serif, Georgia, "Songti SC", serif; font-size: 17px; line-height: 1.9; }
 .notion-content h2, .notion-content h3, .notion-content h4 { margin: 1.8em 0 .7em; color: var(--ink); font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; line-height: 1.3; letter-spacing: -.025em; }
 .notion-content h2 { font-size: 34px; }.notion-content h3 { font-size: 27px; }.notion-content h4 { font-size: 21px; }
 .notion-content p { margin: 1.05em 0; }
@@ -336,12 +337,24 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .notion-color-gray { color: #787774; }.notion-color-brown { color: #9f6b53; }.notion-color-orange { color: #d9730d; }.notion-color-yellow { color: #cb912f; }.notion-color-green { color: #448361; }.notion-color-blue { color: #337ea9; }.notion-color-purple { color: #9065b0; }.notion-color-pink { color: #c14c8a; }.notion-color-red { color: #d44c47; }
 .notion-color-gray_background { background: #f1f1ef; }.notion-color-brown_background { background: #f4eeee; }.notion-color-orange_background { background: #fbecdd; }.notion-color-yellow_background { background: #fbf3db; }.notion-color-green_background { background: #edf3ec; }.notion-color-blue_background { background: #e7f3f8; }.notion-color-purple_background { background: #f4f0f7; }.notion-color-pink_background { background: #f9eef3; }.notion-color-red_background { background: #fdebec; }
 [data-theme="dark"] .notion-color-gray_background, [data-theme="dark"] .notion-color-brown_background, [data-theme="dark"] .notion-color-orange_background, [data-theme="dark"] .notion-color-yellow_background, [data-theme="dark"] .notion-color-green_background, [data-theme="dark"] .notion-color-blue_background, [data-theme="dark"] .notion-color-purple_background, [data-theme="dark"] .notion-color-pink_background, [data-theme="dark"] .notion-color-red_background { background: color-mix(in srgb, currentColor 13%, transparent); }
-.password-card { max-width: 520px; margin: 50px auto; padding: 29px; background: var(--surface); border: 1px solid var(--line); border-radius: 13px; box-shadow: var(--shadow); }
-.password-card h2 { margin: 0 0 24px; font-size: 28px; letter-spacing: -.03em; }
-.password-card label { display: grid; gap: 8px; color: var(--muted); font-size: 13px; }
-.password-card input { padding: 12px; color: var(--ink); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; outline: none; }
-.password-card input:focus { border-color: var(--line-strong); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 6%, transparent); }
-.password-card button { margin-top: 14px; padding: 11px 17px; color: var(--bg); background: var(--ink); border: 0; border-radius: 8px; cursor: pointer; }
+.password-card { max-width: 610px; margin: 34px auto; padding: 24px; background: linear-gradient(145deg, color-mix(in srgb, var(--surface) 97%, var(--accent-soft)), var(--surface)); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 16px 42px rgba(31, 29, 25, .07); }
+.password-card-head { display: flex; align-items: flex-start; gap: 13px; }
+.password-lock { flex: 0 0 auto; width: 42px; height: 42px; display: grid; place-items: center; color: var(--accent); background: var(--accent-soft); border-radius: 12px; }
+.password-card-head .eyebrow { margin-bottom: 5px; }
+.password-card h2 { margin: 0; font-size: 24px; line-height: 1.2; letter-spacing: -.03em; }
+.password-card-head p:last-child { margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.password-card-fields { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 9px; margin-top: 20px; }
+.password-card-fields>label { grid-column: 1 / -1; color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .04em; }
+.password-input-wrap { position: relative; min-width: 0; }
+.password-card input { width: 100%; height: 46px; padding: 0 44px 0 13px; color: var(--ink); background: color-mix(in srgb, var(--surface-soft) 82%, transparent); border: 1px solid var(--line-strong); border-radius: 10px; outline: none; font-size: 16px; transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease; }
+.password-card input:focus { background: var(--surface); border-color: var(--ink); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 7%, transparent); }
+.password-card .password-visibility { position: absolute; top: 3px; right: 3px; width: 40px; height: 40px; display: grid; place-items: center; margin: 0; padding: 0; color: var(--muted); background: transparent; border: 0; border-radius: 8px; cursor: pointer; }
+.password-card .password-visibility:hover, .password-card .password-visibility:focus-visible { color: var(--ink); background: var(--surface-soft); outline: none; }
+.password-card .password-submit { min-width: 132px; height: 46px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; margin: 0; padding: 0 16px; color: var(--bg); background: var(--ink); border: 0; border-radius: 10px; cursor: pointer; font-weight: 650; transition: transform .18s var(--ease-out), opacity .18s ease; }
+.password-card .password-submit:hover:not(:disabled) { transform: translateY(-1px); }
+.password-card .password-submit:disabled { cursor: wait; opacity: .62; }
+.password-hint { margin: 10px 0 0; color: var(--subtle); font-size: 10px; line-height: 1.5; }
+.password-error { margin: 12px 0 0; padding: 9px 11px; color: #a5423e; background: color-mix(in srgb, #c9544d 8%, var(--surface)); border: 1px solid color-mix(in srgb, #c9544d 24%, var(--line)); border-radius: 8px; font-size: 12px; }
 
 @media (max-width: 1180px) {
   .post-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -417,14 +430,20 @@ html[data-intro="playing"] .site-intro { display: grid; }
   .post-card { min-height: 72px; padding: 11px 12px 10px; }
   .article-toolbar { padding-top: 0; }
   .article-toolbar span { display: none; }
-  .article-shell article { padding: 42px 0 60px; }
-  .article-head h1 { font-size: 38px; }
+  .article-shell article { padding: 29px 0 54px; }
+  .article-title-row { grid-template-columns: minmax(0, 1fr) minmax(90px, 33%); gap: 10px; }
+  .article-head h1 { font-size: 32px; }
+  .article-summary { margin-bottom: .18em; font-size: 10px; line-height: 1.45; }
   .notion-content { font-size: 16px; }
   .notion-embed iframe { min-height: 260px; }
   .child-document-nav { align-items: flex-start; flex-direction: column; gap: 8px; }
   .child-document-head { padding-top: 32px; }
   .content-footer { align-items: flex-start; flex-direction: column; }
   .footer-signature { align-self: flex-end; margin-left: auto; }
+  .password-card { margin: 25px auto; padding: 18px; border-radius: 14px; }
+  .password-card h2 { font-size: 21px; }
+  .password-card-fields { grid-template-columns: 1fr; }
+  .password-card .password-submit { width: 100%; min-width: 0; }
   .intro-stage { width: min(92vw, 620px); }
   .intro-camera { transform-origin: 53% 55%; }
 }

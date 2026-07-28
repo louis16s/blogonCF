@@ -173,8 +173,11 @@ https://example.org/rss
 
 - `AUTHOR`：页脚作者
 - `SINCE`：创始年份
+- `FOOTER_QUOTES`：页脚随机短句；每行一组，主句与副句用 `｜` 分隔
 
 配置项需要启用；年份会从文本中提取四位数。未配置时使用项目默认值。
+
+`type` 应保持为单选（Select）。NotionNext 会分别读取 `Menu` 作为入口、`Page` 作为正文，再通过相同 slug 或页面链接把两条记录配对。不要把 `type` 改成 Multi-select；NotionNext 和本项目都按单个 `select.name` 判断类型，多选会破坏现有兼容。
 
 ## 本地开发
 
