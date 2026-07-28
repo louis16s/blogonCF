@@ -177,8 +177,8 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(blog, /onCategoryChange=\{selectCategory\}/);
   assert.doesNotMatch(blog, /className="filter-row"|className="filters"/);
   assert.match(sidebar, /className="mobile-menu-group mobile-menu-disclosure"/);
-  assert.match(sidebar, /aboutLink && \(aboutLink\.external/);
-  assert.match(sidebar, /<Link href=\{aboutLink\.href\}>.*aboutLink\.title/s);
+  assert.match(sidebar, /aboutLink && \(\s*<a href=\{aboutLink\.href\}/);
+  assert.match(sidebar, /<a href=\{aboutLink\.href\}.*aboutLink\.title/s);
   assert.doesNotMatch(sidebar, /Notion<\/a> 创造，Cloudflare 带它兜风。/);
   assert.match(footer, /在 <a href="https:\/\/www\.notion\.so\/"/);
   assert.match(footer, /Notion<\/a> 创造，Cloudflare 带它兜风。/);
@@ -309,7 +309,7 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   assert.match(sidebar, />RSS 订阅<\/Link>/);
   assert.match(sidebar, /<summary><span>小工具<\/span><small>\{toolLinks\.length\}<\/small>/);
   assert.match(sidebar, /<small>外部<\/small>/);
-  assert.match(sidebar, /aboutLink && \(aboutLink\.external/, "unconfigured About links must not be invented on mobile");
+  assert.match(sidebar, /aboutLink && \(\s*<a href=\{aboutLink\.href\}/, "unconfigured About links must not be invented on mobile");
   assert.doesNotMatch(sidebar, /href="\/#about"/);
   assert.match(sidebar, /event\.target instanceof Element && event\.target\.closest\("a, button"\)/, "mobile menu should close after a destination or category is chosen");
   assert.doesNotMatch(sidebar, /className="mobile-tools"/);
@@ -483,6 +483,12 @@ test("about and other Published Notion pages render inside the site shell", asyn
     assert.equal(payload.blocks[0].richText[0].text, "这是本站渲染的关于我正文。");
     assert.equal(payload.blocks[1].caption, "爱范儿");
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("about navigation uses a document link to avoid Safari soft-router URL errors", async () => {
+  const sidebar = await readFile(new URL("../app/components/SiteSidebar.tsx", import.meta.url), "utf8");
+  assert.match(sidebar, /<a href=\{aboutLink\.href\} target=\{aboutLink\.external \? "_blank" : undefined\}/);
+  assert.doesNotMatch(sidebar, /<Link href=\{aboutLink\.href\}/);
 });
 
 test("site page routing keeps all Published Page content internal while tools remain external", async () => {

@@ -79,11 +79,11 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
         </Link>
 
         <nav className="sidebar-nav" aria-label="主导航">
-          {aboutLink && (aboutLink.external ? (
-            <a href={aboutLink.href} target="_blank" rel="noreferrer"><Info aria-hidden size={19} weight="regular" />{aboutLink.title || "关于我"}</a>
-          ) : (
-            <Link href={aboutLink.href}><Info aria-hidden size={19} weight="regular" />{aboutLink.title || "关于我"}</Link>
-          ))}
+          {aboutLink && (
+            <a href={aboutLink.href} target={aboutLink.external ? "_blank" : undefined} rel={aboutLink.external ? "noreferrer" : undefined}>
+              <Info aria-hidden size={19} weight="regular" />{aboutLink.title || "关于我"}
+            </a>
+          )}
           {newsLink && (newsLink.external ? (
             <a href={newsLink.href} target="_blank" rel="noreferrer"><Newspaper aria-hidden size={19} weight="regular" />{newsLink.title || "资讯"}</a>
           ) : (
@@ -125,11 +125,11 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
               if (event.target instanceof Element && event.target.closest("a, button")) event.currentTarget.closest(".mobile-menu")?.removeAttribute("open");
             }}
           >
-            {aboutLink && (aboutLink.external ? (
-              <a href={aboutLink.href} target="_blank" rel="noreferrer">{aboutLink.title || "关于我"}<small>Notion</small></a>
-            ) : (
-              <Link href={aboutLink.href}>{aboutLink.title || "关于我"}</Link>
-            ))}
+            {aboutLink && (
+              <a href={aboutLink.href} target={aboutLink.external ? "_blank" : undefined} rel={aboutLink.external ? "noreferrer" : undefined}>
+                {aboutLink.title || "关于我"}{aboutLink.external ? <small>外部</small> : null}
+              </a>
+            )}
             {newsLink && (newsLink.external ? (
               <a href={newsLink.href} target="_blank" rel="noreferrer">{newsLink.title || "资讯"}<small>外部</small></a>
             ) : (
