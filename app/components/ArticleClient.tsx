@@ -32,6 +32,18 @@ type ArticleClientProps = {
 
 type ExternalFeed = { url: string; title: string; source: string; items: Array<{ id: string; title: string; url: string; published: string; summary: string }> };
 
+async function requestChildPage(endpoint: string, payload: Record<string, unknown>, signal: AbortSignal): Promise<ChildPage> {
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "子页面读取失败");
+  return data.child;
+}
+
 export function ArticleClient({ slug, contentKind = "post", initialPost, initialBlocks = [], initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false }: ArticleClientProps) {
   const [post, setPost] = useState<Post | undefined>(initialPost);
   const [blocks, setBlocks] = useState<ContentBlock[]>(initialBlocks);
@@ -41,6 +53,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const [truncated, setTruncated] = useState(initialTruncated);
   const [childTrail, setChildTrail] = useState<ChildPage[]>([]);
   const [childLoading, setChildLoading] = useState(false);
+  const [childOpening, setChildOpening] = useState(false);
   const [childError, setChildError] = useState("");
   const [feeds, setFeeds] = useState<ExternalFeed[]>([]);
   const [feedsLoading, setFeedsLoading] = useState(false);
@@ -57,32 +70,69 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     childRequestRef.current?.abort();
     const controller = new AbortController();
     childRequestRef.current = controller;
-    setChildLoading(true); setChildError("");
+    setChildLoading(true); setChildOpening(true); setChildError("");
     const password = passwordOverride ?? passwordRef.current;
-    fetch(childEndpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ slug, pageId, password, trail: childTrailRef.current.map((item) => item.id) }),
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "子页面读取失败");
-        childIdRef.current = data.child.id;
+    requestChildPage(childEndpoint, { slug, pageId, password, trail: childTrailRef.current.map((item) => item.id) }, controller.signal)
+      .then((child) => {
+        childIdRef.current = child.id;
         setChildTrail((current) => {
-          const previous = current.findIndex((item) => item.id === data.child.id);
-          const next = previous >= 0 ? current.slice(0, previous + 1) : [...current, data.child];
+          const previous = current.findIndex((item) => item.id === child.id);
+          const next = previous >= 0 ? current.slice(0, previous + 1) : [...current, child];
           childTrailRef.current = next;
           return next;
         });
         if (updateHistory) {
           const url = new URL(window.location.href);
-          url.searchParams.set("child", data.child.id);
-          window.history.pushState({ child: data.child.id }, "", url);
+          url.searchParams.set("child", child.id);
+          window.history.pushState({ child: child.id }, "", url);
         }
       })
       .catch((reason) => { if (reason.name !== "AbortError") setChildError(reason.message || "子页面暂时无法读取"); })
-      .finally(() => { if (childRequestRef.current === controller) setChildLoading(false); });
+      .finally(() => {
+        if (childRequestRef.current === controller) {
+          childRequestRef.current = null;
+          setChildLoading(false);
+          setChildOpening(false);
+        }
+      });
+  }, [childEndpoint, slug]);
+
+  const loadMoreChild = useCallback(() => {
+    const currentChild = childTrailRef.current.at(-1);
+    if (!currentChild?.hasMore || !currentChild.nextCursor || childRequestRef.current) return;
+    const controller = new AbortController();
+    childRequestRef.current = controller;
+    setChildLoading(true); setChildError("");
+    requestChildPage(childEndpoint, {
+      slug,
+      pageId: currentChild.id,
+      password: passwordRef.current,
+      trail: childTrailRef.current.map((item) => item.id),
+      cursor: currentChild.nextCursor,
+    }, controller.signal)
+      .then((page) => {
+        setChildTrail((current) => {
+          const index = current.findIndex((item) => item.id === page.id);
+          if (index < 0) return current;
+          const next = [...current];
+          next[index] = {
+            ...next[index],
+            blocks: [...next[index].blocks, ...page.blocks],
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor,
+            truncated: Boolean(next[index].truncated || page.truncated),
+          };
+          childTrailRef.current = next;
+          return next;
+        });
+      })
+      .catch((reason) => { if (reason.name !== "AbortError") setChildError(reason.message || "下一段内容暂时无法读取"); })
+      .finally(() => {
+        if (childRequestRef.current === controller) {
+          childRequestRef.current = null;
+          setChildLoading(false);
+        }
+      });
   }, [childEndpoint, slug]);
 
   const load = (password?: string) => {
@@ -173,6 +223,10 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   }, [isNewsPage, slug]);
 
   const closeChild = () => {
+    childRequestRef.current?.abort();
+    childRequestRef.current = null;
+    setChildLoading(false);
+    setChildOpening(false);
     setChildTrail((current) => {
       const next = current.slice(0, -1);
       const url = new URL(window.location.href);
@@ -199,7 +253,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       </div>
       {post.tags.length ? <div className="tags">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
     </header>
-    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childTrail.length ? <ChildDocument child={childTrail.at(-1)!} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} loading={childLoading} error={childError} /> : blocks.length ? <div className="notion-content"><Blocks blocks={blocks} onOpenChild={loadChild} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childLoading ? <p className="child-page-status" role="status">正在读取子页面…</p> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
+    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : childTrail.length ? <ChildDocument child={childTrail.at(-1)!} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} loading={childLoading} error={childError} /> : blocks.length ? <div className="notion-content"><Blocks blocks={blocks} onOpenChild={loadChild} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
   </>;
 }
 
@@ -217,13 +271,22 @@ function formatFeedDate(value: string) {
   return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "short", day: "numeric" }).format(date);
 }
 
-function ChildDocument({ child, parentTitle, onBack, onOpenChild, loading, error }: { child: ChildPage; parentTitle: string; onBack: () => void; onOpenChild: (pageId: string) => void; loading: boolean; error: string }) {
+function ChildLoading() {
+  return <section className="child-document child-document-loading" aria-busy="true" aria-label="正在读取子页面">
+    <p className="eyebrow">NOTION SUBPAGE</p>
+    <h2>正在打开子页面…</h2>
+    <div className="child-loading-lines" aria-hidden><span /><span /><span /></div>
+  </section>;
+}
+
+function ChildDocument({ child, parentTitle, onBack, onOpenChild, onLoadMore, loading, error }: { child: ChildPage; parentTitle: string; onBack: () => void; onOpenChild: (pageId: string) => void; onLoadMore: () => void; loading: boolean; error: string }) {
   return <section className="child-document" aria-labelledby={`child-${child.id}`}>
     <nav className="child-document-nav" aria-label="子页面导航"><button type="button" onClick={onBack}><ArrowLeft aria-hidden size={16} />返回 {parentTitle}</button><span>Notion 子页面</span></nav>
     <header className="child-document-head"><p className="eyebrow">NOTION SUBPAGE</p><h2 id={`child-${child.id}`}>{child.icon ? <span aria-hidden>{child.icon}</span> : null}{child.title}</h2></header>
     <div className="notion-content"><Blocks blocks={child.blocks} onOpenChild={onOpenChild} /></div>
     {child.truncated ? <ContentLimitNotice /> : null}
-    {loading ? <p className="child-page-status" role="status">正在读取子页面…</p> : null}
+    {child.hasMore ? <button className="child-page-more" type="button" onClick={onLoadMore} disabled={loading}>{loading ? "正在读取下一段…" : "继续读取"}</button> : null}
+    {loading && !child.hasMore ? <p className="child-page-status" role="status">正在读取子页面…</p> : null}
     {error ? <p className="child-page-error" role="alert">{error}</p> : null}
   </section>;
 }

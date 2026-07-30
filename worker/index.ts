@@ -26,6 +26,7 @@ const NOTION_IMAGE_HOSTS = new Set(["prod-files-secure.s3.us-west-2.amazonaws.co
 const MAX_BLOCKS = 10_000;
 const MAX_BLOCK_DEPTH = 12;
 const MAX_INDEX_BLOCKS_PER_POST = 800;
+const MAX_CHILD_BLOCKS_PER_CHUNK = 2_000;
 const WORD_CLOUD_CACHE_TTL_MS = 10 * 60 * 1000;
 const RSS_FEED_CACHE_TTL_MS = 15 * 60 * 1000;
 const SITE_BOOTSTRAP_CACHE_TTL_MS = 45 * 1000;
@@ -523,12 +524,13 @@ async function notionSitePage(env: Env, slug: string): Promise<Response> {
 
 async function notionChildPage(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; password?: unknown; trail?: unknown };
+  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; password?: unknown; trail?: unknown; cursor?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
   const pageId = normalizeNotionId(body.pageId);
   const supplied = typeof body.password === "string" ? body.password : "";
   const trail = Array.isArray(body.trail) ? body.trail.map(normalizeNotionId).filter(Boolean).slice(0, 8) : [];
-  if (!slug || slug.length > 180 || !pageId) return error(400, "Invalid child page request");
+  const cursor = normalizeNotionCursor(body.cursor);
+  if (!slug || slug.length > 180 || !pageId || (body.cursor != null && !cursor)) return error(400, "Invalid child page request");
 
   try {
     const parent = await findPost(env, slug);
@@ -551,40 +553,39 @@ async function notionChildPage(env: Env, request: Request): Promise<Response> {
 
     const childPage = await authorizedChildPage(env, parent, [...trail.filter((id) => id !== pageId), pageId]);
     if (!childPage) return error(404, "Child page not found");
-    const blockState = newBlockReadState();
-    const blocks = await getBlockChildren(env, childPage.id, blockState, 0);
-    return Response.json({ child: {
-      id: childPage.id,
-      title: notionPageTitle(childPage) || "未命名子页面",
-      icon: childPage.icon?.type === "emoji" ? childPage.icon.emoji : undefined,
-      blocks,
-      truncated: blockState.truncated,
-    } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    return childPageResponse(env, childPage, cursor);
   } catch (reason) { return notionError(reason); }
 }
 
 async function notionSitePageChild(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown };
+  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
   const pageId = normalizeNotionId(body.pageId);
   const trail = Array.isArray(body.trail) ? body.trail.map(normalizeNotionId).filter(Boolean).slice(0, 8) : [];
-  if (!slug || slug.length > 180 || !pageId) return error(400, "Invalid child page request");
+  const cursor = normalizeNotionCursor(body.cursor);
+  if (!slug || slug.length > 180 || !pageId || (body.cursor != null && !cursor)) return error(400, "Invalid child page request");
   try {
     const parent = await findSitePage(env, slug);
     if (!parent) return error(404, "Page not found");
     const childPage = await authorizedChildPage(env, parent, [...trail.filter((id) => id !== pageId), pageId]);
     if (!childPage) return error(404, "Child page not found");
-    const blockState = newBlockReadState();
-    const blocks = await getBlockChildren(env, childPage.id, blockState, 0);
-    return Response.json({ child: {
-      id: childPage.id,
-      title: notionPageTitle(childPage) || "未命名子页面",
-      icon: childPage.icon?.type === "emoji" ? childPage.icon.emoji : undefined,
-      blocks,
-      truncated: blockState.truncated,
-    } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    return childPageResponse(env, childPage, cursor);
   } catch (reason) { return notionError(reason); }
+}
+
+async function childPageResponse(env: Env, childPage: any, cursor: string): Promise<Response> {
+  const blockState: BlockReadState = { remaining: MAX_CHILD_BLOCKS_PER_CHUNK, truncated: false };
+  const page = await getBlockChildrenPage(env, childPage.id, blockState, 0, cursor);
+  return Response.json({ child: {
+    id: childPage.id,
+    title: notionPageTitle(childPage) || "未命名子页面",
+    icon: childPage.icon?.type === "emoji" ? childPage.icon.emoji : undefined,
+    blocks: page.blocks,
+    hasMore: Boolean(page.nextCursor),
+    nextCursor: page.nextCursor,
+    truncated: blockState.truncated,
+  } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
 }
 
 async function notionSitemap(env: Env): Promise<Response> {
@@ -742,6 +743,30 @@ async function getBlockChildren(env: Env, id: string, budget: BlockReadState, de
     cursor = payload.has_more && budget.remaining > 0 ? payload.next_cursor : undefined;
   } while (cursor);
   return output;
+}
+
+async function getBlockChildrenPage(env: Env, id: string, budget: BlockReadState, depth: number, cursor = "") {
+  if (depth > MAX_BLOCK_DEPTH || budget.remaining <= 0) {
+    budget.truncated = true;
+    return { blocks: [] as any[], nextCursor: undefined as string | undefined };
+  }
+  const query = new URLSearchParams({ page_size: "100" });
+  if (cursor) query.set("start_cursor", cursor);
+  const payload = await notionFetch(env, `/blocks/${id}/children?${query}`);
+  const blocks: any[] = [];
+  for (const raw of payload.results || []) {
+    if (budget.remaining-- <= 0) { budget.truncated = true; break; }
+    const block = normalizeBlock(raw);
+    if (!block) continue;
+    const hasInlineChildren = raw.has_children && raw.type !== "child_page" && raw.type !== "child_database";
+    if (hasInlineChildren && budget.remaining > 0) block.children = await getBlockChildren(env, raw.id, budget, depth + 1);
+    blocks.push(block);
+  }
+  const nextCursor = payload.has_more && budget.remaining > 0 && typeof payload.next_cursor === "string"
+    ? normalizeNotionCursor(payload.next_cursor) || undefined
+    : undefined;
+  if (payload.has_more && !nextCursor) budget.truncated = true;
+  return { blocks, nextCursor };
 }
 
 async function mapWithConcurrency<T, U>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<U>): Promise<U[]> {
@@ -995,6 +1020,12 @@ function normalizeNotionId(value: unknown): string {
   const compact = value.replaceAll("-", "").toLocaleLowerCase();
   if (!/^[a-f0-9]{32}$/.test(compact)) return "";
   return `${compact.slice(0, 8)}-${compact.slice(8, 12)}-${compact.slice(12, 16)}-${compact.slice(16, 20)}-${compact.slice(20)}`;
+}
+
+function normalizeNotionCursor(value: unknown): string {
+  if (value == null || value === "") return "";
+  if (typeof value !== "string" || value.length > 256 || !/^[A-Za-z0-9_-]+$/.test(value)) return "";
+  return value;
 }
 
 function notionPageTitle(page: any): string {
