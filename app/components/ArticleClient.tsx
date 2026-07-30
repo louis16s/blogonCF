@@ -44,6 +44,16 @@ async function requestChildPage(endpoint: string, payload: Record<string, unknow
   return data.child;
 }
 
+function scrollToArticleStart() {
+  window.requestAnimationFrame(() => {
+    const article = document.querySelector<HTMLElement>(".article-shell article");
+    if (!article) return;
+    const top = Math.max(0, article.getBoundingClientRect().top + window.scrollY - 18);
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top, behavior: reducedMotion ? "auto" : "smooth" });
+  });
+}
+
 export function ArticleClient({ slug, contentKind = "post", initialPost, initialBlocks = [], initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false }: ArticleClientProps) {
   const [post, setPost] = useState<Post | undefined>(initialPost);
   const [blocks, setBlocks] = useState<ContentBlock[]>(initialBlocks);
@@ -71,6 +81,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     const controller = new AbortController();
     childRequestRef.current = controller;
     setChildLoading(true); setChildOpening(true); setChildError("");
+    scrollToArticleStart();
     const password = passwordOverride ?? passwordRef.current;
     requestChildPage(childEndpoint, { slug, pageId, password, trail: childTrailRef.current.map((item) => item.id) }, controller.signal)
       .then((child) => {
@@ -239,21 +250,25 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       return next;
     });
     setChildError("");
+    scrollToArticleStart();
   };
 
   if (loading && !post) return <p className="article-state">正在从 Notion 读取{contentKind === "page" ? "页面" : "文章"}…</p>;
   if (!post) return <p className="article-state">{error || (contentKind === "page" ? "没有找到这个页面。" : "没有找到这篇文章。")}</p>;
 
+  const activeChild = childTrail.at(-1);
+  const isChildView = childOpening || Boolean(activeChild);
+
   return <>
-    <header className="article-head">
+    {!isChildView ? <header className="article-head">
       <p className="eyebrow">{contentKind === "page" ? "LOUIS16S · PAGE" : `${post.category} · ${post.date}`}</p>
       <div className="article-title-row">
         <h1>{contentKind === "page" && post.icon ? <span className="page-title-icon" aria-hidden>{post.icon}</span> : null}{post.title}</h1>
         {post.summary ? <p className="article-summary">{post.summary}</p> : null}
       </div>
       {post.tags.length ? <div className="tags">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
-    </header>
-    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : childTrail.length ? <ChildDocument child={childTrail.at(-1)!} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} loading={childLoading} error={childError} /> : blocks.length ? <div className="notion-content"><Blocks blocks={blocks} onOpenChild={loadChild} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
+    </header> : null}
+    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} loading={childLoading} error={childError} /> : blocks.length ? <div className="notion-content"><Blocks blocks={blocks} onOpenChild={loadChild} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
   </>;
 }
 
@@ -273,17 +288,28 @@ function formatFeedDate(value: string) {
 
 function ChildLoading() {
   return <section className="child-document child-document-loading" aria-busy="true" aria-label="正在读取子页面">
-    <p className="eyebrow">NOTION SUBPAGE</p>
-    <h2>正在打开子页面…</h2>
+    <span className="child-loading-mark" aria-hidden><FileText size={20} /></span>
+    <h2>正在展开页面</h2>
+    <p>正在整理标题与正文，请稍候。</p>
     <div className="child-loading-lines" aria-hidden><span /><span /><span /></div>
   </section>;
 }
 
 function ChildDocument({ child, parentTitle, onBack, onOpenChild, onLoadMore, loading, error }: { child: ChildPage; parentTitle: string; onBack: () => void; onOpenChild: (pageId: string) => void; onLoadMore: () => void; loading: boolean; error: string }) {
   return <section className="child-document" aria-labelledby={`child-${child.id}`}>
-    <nav className="child-document-nav" aria-label="子页面导航"><button type="button" onClick={onBack}><ArrowLeft aria-hidden size={16} />返回 {parentTitle}</button><span>Notion 子页面</span></nav>
-    <header className="child-document-head"><p className="eyebrow">NOTION SUBPAGE</p><h2 id={`child-${child.id}`}>{child.icon ? <span aria-hidden>{child.icon}</span> : null}{child.title}</h2></header>
-    <div className="notion-content"><Blocks blocks={child.blocks} onOpenChild={onOpenChild} /></div>
+    <nav className="child-document-nav" aria-label="子页面导航">
+      <button type="button" onClick={onBack} aria-label={`返回 ${parentTitle}`}>
+        <span className="child-back-icon" aria-hidden><ArrowLeft size={17} /></span>
+        <span><small>返回上一级</small><strong>{parentTitle}</strong></span>
+      </button>
+    </nav>
+    <header className="child-document-head">
+      {child.icon ? <span className="child-document-icon" aria-hidden>{child.icon}</span> : null}
+      <h2 id={`child-${child.id}`}>{child.title}</h2>
+    </header>
+    <div className="child-document-body">
+      <div className="notion-content"><Blocks blocks={child.blocks} onOpenChild={onOpenChild} /></div>
+    </div>
     {child.truncated ? <ContentLimitNotice /> : null}
     {child.hasMore ? <button className="child-page-more" type="button" onClick={onLoadMore} disabled={loading}>{loading ? "正在读取下一段…" : "继续读取"}</button> : null}
     {loading && !child.hasMore ? <p className="child-page-status" role="status">正在读取子页面…</p> : null}

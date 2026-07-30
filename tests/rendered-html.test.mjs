@@ -1217,9 +1217,15 @@ test("published posts without a slug remain reachable through their Notion page 
 
 test("article renderer opens child pages internally instead of linking to Notion", async () => {
   const article = await readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8");
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   assert.match(article, /contentKind === "page" \? "\/api\/content\/page-child" : "\/api\/content\/child"/);
   assert.match(article, /history\.pushState/);
   assert.match(article, /case "child_page": return block\.pageId/);
+  assert.match(article, /const isChildView = childOpening \|\| Boolean\(activeChild\)/);
+  assert.match(article, /\{!isChildView \? <header className="article-head">/);
+  assert.match(article, /返回上一级/);
+  assert.match(css, /\.child-document-head \{[^}]*border-bottom:/);
+  assert.match(css, /\.child-document-body>\.notion-content \{ padding-top:/);
   assert.doesNotMatch(article, /case "child_page"[^\n]+notion\.so/);
 });
 
