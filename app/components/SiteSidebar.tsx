@@ -80,7 +80,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
             <img src="/louis16s-avatar.jpg" alt="louis16s" width="52" height="52" />
             <strong>louis16s</strong>
           </Link>
-          {showHomeLink && <Link className="sidebar-home-link" href="/"><span className="sidebar-home-icon"><HouseLine aria-hidden size={16} weight="duotone" /></span><span><small>HOME</small><strong>返回主页</strong></span><ArrowSquareOut className="sidebar-home-arrow" aria-hidden size={13} /></Link>}
+          {showHomeLink && <Link className="sidebar-home-link" href="/" aria-label="返回主页" title="返回主页"><HouseLine aria-hidden size={17} weight="duotone" /></Link>}
         </div>
 
         <nav className="sidebar-nav" aria-label="主导航">
@@ -101,44 +101,39 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           ))}
         </nav>
 
-        <section className="sidebar-browse" aria-labelledby="sidebar-browse-title">
-          <p id="sidebar-browse-title">浏览</p>
-          <div className="sidebar-browse-panel">
-            <Link className="sidebar-cloud-link" href="/#word-cloud"><Cloud aria-hidden size={17} weight="regular" />词云</Link>
+        <Link className="sidebar-cloud-link" href="/#word-cloud"><Cloud aria-hidden size={17} weight="regular" />词云</Link>
 
-            {toolLinks.length > 0 && (
-              <details
-                className="sidebar-section sidebar-tools"
-                open={toolsDisclosure.open}
-                onToggle={toolsDisclosure.onToggle}
-              >
-                <summary><span><Wrench aria-hidden size={16} />小工具</span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
-                <div className="sidebar-tool-list">
-                  {toolLinks.map((link) => (
-                    <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id} title={link.summary || link.title}>
-                      <span className="tool-link-label"><span aria-hidden>{link.icon || "↗"}</span><span>{link.title}</span></span><ArrowSquareOut aria-hidden size={13} />
-                    </a>
-                  ))}
-                </div>
-              </details>
-            )}
+        {toolLinks.length > 0 && (
+          <details
+            className="sidebar-section sidebar-tools"
+            open={toolsDisclosure.open}
+            onToggle={toolsDisclosure.onToggle}
+          >
+            <summary><span><Wrench aria-hidden size={16} />小工具 <small>{toolLinks.length}</small></span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
+            <div className="sidebar-tool-list">
+              {toolLinks.map((link) => (
+                <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id} title={link.summary || link.title}>
+                  <span className="tool-link-label"><span aria-hidden>{link.icon || "↗"}</span><span>{link.title}</span></span><ArrowSquareOut aria-hidden size={13} />
+                </a>
+              ))}
+            </div>
+          </details>
+        )}
 
-            {categories.length > 0 && onCategoryChange && (
-              <details
-                className="sidebar-section sidebar-categories"
-                open={categoriesDisclosure.open}
-                onToggle={categoriesDisclosure.onToggle}
-              >
-                <summary><span><FolderOpen aria-hidden size={16} />文章分类</span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
-                <div className="sidebar-category-list" role="group" aria-label="按分类筛选">
-                  {categories.map((item) => (
-                    <button type="button" className={item === activeCategory ? "active" : ""} aria-pressed={item === activeCategory} onClick={() => onCategoryChange(item)} key={item}>{item}</button>
-                  ))}
-                </div>
-              </details>
-            )}
-          </div>
-        </section>
+        {categories.length > 0 && onCategoryChange && (
+          <details
+            className="sidebar-section sidebar-categories"
+            open={categoriesDisclosure.open}
+            onToggle={categoriesDisclosure.onToggle}
+          >
+            <summary><span><FolderOpen aria-hidden size={16} />文章分类</span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
+            <div className="sidebar-category-list" role="group" aria-label="按分类筛选">
+              {categories.map((item) => (
+                <button type="button" className={item === activeCategory ? "active" : ""} aria-pressed={item === activeCategory} onClick={() => onCategoryChange(item)} key={item}>{item}</button>
+              ))}
+            </div>
+          </details>
+        )}
 
         <details className="mobile-menu">
           <summary><List aria-hidden size={18} /><span>菜单</span><CaretDown className="section-caret" aria-hidden size={13} /></summary>
@@ -149,7 +144,6 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
               if (event.target instanceof Element && event.target.closest("a, button")) event.currentTarget.closest(".mobile-menu")?.removeAttribute("open");
             }}
           >
-            {showHomeLink && <Link href="/">返回主页</Link>}
             {aboutLink && (
               <a href={aboutLink.href} target={aboutLink.external ? "_blank" : undefined} rel={aboutLink.external ? "noreferrer" : undefined}>
                 {aboutLink.title || "关于我"}{aboutLink.external ? <small>外部</small> : null}
@@ -168,7 +162,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
             <Link href="/#word-cloud">词云</Link>
             {toolLinks.length > 0 && (
               <details className="mobile-menu-group mobile-menu-disclosure">
-                <summary><span>小工具</span><CaretDown className="section-caret" aria-hidden size={13} /></summary>
+                <summary><span>小工具</span><small>{toolLinks.length}</small><CaretDown className="section-caret" aria-hidden size={13} /></summary>
                 <div className="mobile-menu-disclosure-content">
                   {toolLinks.map((link) => (
                     <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id}>{link.title}{link.external && <small>外部</small>}</a>

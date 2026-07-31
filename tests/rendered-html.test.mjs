@@ -171,6 +171,7 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(sidebar, />RSS 订阅</);
   assert.match(sidebar, />文章分类/);
   assert.match(sidebar, /className="sidebar-section sidebar-categories"/);
+  assert.doesNotMatch(sidebar, /sidebar-browse-title|sidebar-browse-panel|>浏览</);
   assert.match(sidebar, /key: "blog\.sidebar\.categories\.v2", defaultOpen: false/);
   assert.match(sidebar, /categories\.map\(\(item\)/);
   assert.match(blog, /categories=\{categories\}/);
@@ -187,6 +188,8 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(sidebar, /href="https:\/\/github\.com\/louis16s\/blogonCF"[\s\S]*>blogonCF/);
   assert.ok(sidebar.indexOf("newsLink.href") < sidebar.indexOf("rssLink.href"), "RSS should follow the news link");
   assert.ok(sidebar.indexOf('className="sidebar-cloud-link"') < sidebar.indexOf('className="sidebar-section sidebar-tools"'), "word cloud should precede tools");
+  assert.match(sidebar, /aria-label="返回主页" title="返回主页"/);
+  assert.doesNotMatch(sidebar, /HOME|<strong>返回主页/);
   assert.ok(sidebar.indexOf('>blogonCF</a>') < sidebar.lastIndexOf("rssLink &&"), "RSS should follow blogonCF in the sidebar footer");
   assert.doesNotMatch(sidebar, /©/);
   assert.doesNotMatch(blog, /className="sync-meta"/);
@@ -308,8 +311,8 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   assert.match(sidebar, /<span>菜单<\/span>/);
   assert.doesNotMatch(sidebar, /文章归档|历史归档|快速访问/);
   assert.match(sidebar, />RSS 订阅<\/Link>/);
-  assert.match(sidebar, /<summary><span>小工具<\/span><CaretDown/);
-  assert.doesNotMatch(sidebar, /小工具 <small>\{toolLinks\.length\}<\/small>/);
+  assert.match(sidebar, /<summary><span>小工具<\/span><small>\{toolLinks\.length\}<\/small><CaretDown/);
+  assert.match(sidebar, /小工具 <small>\{toolLinks\.length\}<\/small>/);
   assert.match(sidebar, /<small>外部<\/small>/);
   assert.match(sidebar, /aboutLink && \(\s*<a href=\{aboutLink\.href\}/, "unconfigured About links must not be invented on mobile");
   assert.doesNotMatch(sidebar, /href="\/#about"/);
@@ -482,6 +485,7 @@ test("about and other Published Notion pages render inside the site shell", asyn
     assert.match(html, /ifanr\.com/);
     assert.match(html, /class="sidebar-home-link"/);
     assert.match(html, /返回主页/);
+    assert.doesNotMatch(html, />返回主页</);
     assert.doesNotMatch(html, /返回全部文章/);
     assert.doesNotMatch(html, /href="https:\/\/www\.notion\.so\/118ad771/);
     assert.doesNotMatch(html, /fas fa-info/);
