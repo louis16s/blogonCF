@@ -29,13 +29,13 @@ const MAX_INDEX_BLOCKS_PER_POST = 800;
 const MAX_CHILD_BLOCKS_PER_CHUNK = 2_000;
 const WORD_CLOUD_CACHE_TTL_MS = 10 * 60 * 1000;
 const RSS_FEED_CACHE_TTL_MS = 15 * 60 * 1000;
-const SITE_BOOTSTRAP_CACHE_TTL_MS = 45 * 1000;
-const SITE_BOOTSTRAP_STALE_TTL_MS = 5 * 60 * 1000;
+const SITE_BOOTSTRAP_CACHE_TTL_MS = 5 * 60 * 1000;
+const SITE_BOOTSTRAP_STALE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_RSS_FEEDS = 8;
 const LEGACY_EMOJI_PATTERN = /^(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*)$/u;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
 const publicContentHeaders = { ...jsonHeaders, "cache-control": "no-cache, max-age=0, must-revalidate" };
-const edgeBootstrapHeaders = { ...jsonHeaders, "cache-control": "public, max-age=45, stale-while-revalidate=120" };
+const edgeBootstrapHeaders = { ...jsonHeaders, "cache-control": "public, max-age=300, stale-while-revalidate=86400" };
 const wordCloudCache = new Map<string, { expiresAt: number; payload: WordCloudPayload }>();
 const publicCorpusCache = new Map<string, { expiresAt: number; corpus: PublicCorpus }>();
 const rssFeedCache = new Map<string, { expiresAt: number; feed: ExternalFeed | null }>();
@@ -1123,7 +1123,7 @@ function normalizeBlock(raw: any): any | null {
     }
     case "bookmark": case "embed": case "video": case "file": case "pdf": case "audio": case "link_preview": {
       const url = value.url || value.external?.url || value.file?.url;
-      const normalizedType = type === "video" ? "embed" : type === "link_preview" ? "bookmark" : type;
+      const normalizedType = type === "link_preview" ? "bookmark" : type;
       const caption = richText(value.caption) || (normalizedType === "bookmark" ? bookmarkTitle(url) : "");
       return { ...base, type: normalizedType, url, caption };
     }

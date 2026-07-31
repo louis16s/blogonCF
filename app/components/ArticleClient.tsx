@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, ArrowRight, ArrowSquareOut, CaretRight, Eye, EyeSlash, FileText, LockKey, Rss } from "@phosphor-icons/react";
-import { FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, type CSSProperties, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import type { ChildPage, ContentBlock, Post } from "../data/types";
 import { CONTENT_REFRESH_INTERVAL_MS } from "./siteBootstrap";
 
@@ -343,20 +343,31 @@ function PasswordForm({ onSubmit, error, loading }: { onSubmit: (value: string) 
   </form>;
 }
 
-function Blocks({ blocks, onOpenChild }: { blocks: ContentBlock[]; onOpenChild: (pageId: string) => void }) {
+type TocItem = { id: string; label: string; level: number };
+
+function collectHeadings(blocks: ContentBlock[]): TocItem[] {
+  return blocks.flatMap((block) => {
+    const own = /^heading_[123]$/.test(block.type)
+      ? [{ id: block.id, label: block.richText?.map((item) => item.text).join("") || "未命名章节", level: Number(block.type.at(-1)) }]
+      : [];
+    return [...own, ...(block.children?.length ? collectHeadings(block.children) : [])];
+  });
+}
+
+function Blocks({ blocks, onOpenChild, toc = collectHeadings(blocks) }: { blocks: ContentBlock[]; onOpenChild: (pageId: string) => void; toc?: TocItem[] }) {
   const output: ReactNode[] = [];
   for (let index = 0; index < blocks.length;) {
     const block = blocks[index];
     const listType = block.type === "bulleted_list_item" ? "ul" : block.type === "numbered_list_item" ? "ol" : "";
     if (!listType) {
-      output.push(<Block key={block.id} block={block} onOpenChild={onOpenChild} />);
+      output.push(<Block key={block.id} block={block} onOpenChild={onOpenChild} toc={toc} />);
       index += 1;
       continue;
     }
     const items: ContentBlock[] = [];
     while (index < blocks.length && blocks[index].type === block.type) items.push(blocks[index++]);
     const List = listType;
-    output.push(<List key={`${block.id}-list`} className="notion-list">{items.map((item) => <li key={item.id}><Rich value={item.richText} onOpenChild={onOpenChild} />{item.children?.length ? <Blocks blocks={item.children} onOpenChild={onOpenChild} /> : null}</li>)}</List>);
+    output.push(<List key={`${block.id}-list`} className="notion-list">{items.map((item) => <li key={item.id}><Rich value={item.richText} onOpenChild={onOpenChild} />{item.children?.length ? <Blocks blocks={item.children} onOpenChild={onOpenChild} toc={toc} /> : null}</li>)}</List>);
   }
   return <>{output}</>;
 }
@@ -459,8 +470,8 @@ function NotionImage({ src, alt, caption }: { src: string; alt: string; caption?
   return <figure><img src={src} alt={alt} loading="lazy" />{caption ? <figcaption>{caption}</figcaption> : null}</figure>;
 }
 
-function Block({ block, onOpenChild }: { block: ContentBlock; onOpenChild: (pageId: string) => void }) {
-  const children = block.children?.length ? <Blocks blocks={block.children} onOpenChild={onOpenChild} /> : null;
+function Block({ block, onOpenChild, toc }: { block: ContentBlock; onOpenChild: (pageId: string) => void; toc: TocItem[] }) {
+  const children = block.children?.length ? <Blocks blocks={block.children} onOpenChild={onOpenChild} toc={toc} /> : null;
   const className = block.color ? `notion-block notion-color-${block.color}` : "notion-block";
   switch (block.type) {
     case "paragraph": return <div className={className}><p><Rich value={block.richText} onOpenChild={onOpenChild} /></p>{children}</div>;
@@ -478,7 +489,10 @@ function Block({ block, onOpenChild }: { block: ContentBlock; onOpenChild: (page
       : <NotionImage src={block.url} alt={block.caption || "文章图片"} caption={block.caption} /> : null;
     case "bookmark": return block.url ? <a className={`${className} bookmark`} href={block.url} target="_blank" rel="noreferrer"><span><strong>{block.caption || bookmarkSource(block.url)}</strong><small>{bookmarkSource(block.url)}</small></span><ArrowSquareOut aria-hidden size={16} /></a> : null;
     case "embed": return block.url ? <figure className={`${className} notion-embed`}><iframe src={block.url} title={block.caption || "Notion 嵌入内容"} loading="lazy" allowFullScreen sandbox="allow-forms allow-popups allow-same-origin allow-scripts" />{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
-    case "file": case "pdf": case "audio": return block.url ? <a className="bookmark" href={block.url} target="_blank" rel="noreferrer">{block.caption || (block.type === "pdf" ? "查看 PDF" : "下载附件")}<ArrowSquareOut aria-hidden size={16} /></a> : null;
+    case "video": return block.url ? <figure className={`${className} notion-media`}><video src={block.url} controls preload="metadata">浏览器无法播放这个视频。</video>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
+    case "audio": return block.url ? <figure className={`${className} notion-media notion-audio`}><audio src={block.url} controls preload="metadata">浏览器无法播放这段音频。</audio>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
+    case "pdf": return block.url ? <figure className={`${className} notion-pdf`}><iframe src={block.url} title={block.caption || "PDF 文档"} loading="lazy" /><a href={block.url} target="_blank" rel="noreferrer">在新窗口打开 PDF<ArrowSquareOut aria-hidden size={15} /></a>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
+    case "file": return block.url ? <a className="bookmark" href={block.url} target="_blank" rel="noreferrer"><span><strong>{block.caption || "下载附件"}</strong><small>{bookmarkSource(block.url)}</small></span><ArrowSquareOut aria-hidden size={16} /></a> : null;
     case "child_page": return block.pageId ? <a className={`${className} notion-child-page`} href={`?child=${encodeURIComponent(block.pageId)}`} onClick={(event) => { event.preventDefault(); onOpenChild(block.pageId!); }}><FileText aria-hidden size={18} /><strong>{block.caption || "子页面"}</strong><CaretRight aria-hidden size={16} /></a> : null;
     case "child_database": return block.url ? <a className={`${className} notion-child-page`} href={block.url} target="_blank" rel="noreferrer"><FileText aria-hidden size={18} /><strong>{block.caption || "子数据库"}</strong><ArrowSquareOut aria-hidden size={16} /></a> : null;
     case "equation": return <div className="equation" aria-label="数学公式">{block.caption}</div>;
@@ -487,7 +501,7 @@ function Block({ block, onOpenChild }: { block: ContentBlock; onOpenChild: (page
     case "column_list": return <div className={`${className} columns`}>{children}</div>;
     case "column": return <div className="column">{children}</div>;
     case "synced_block": case "template": return <div className={className}>{children}</div>;
-    case "table_of_contents": return <aside className={`${className} notion-toc`}>目录</aside>;
+    case "table_of_contents": return toc.length ? <nav className={`${className} notion-toc`} aria-label="文章目录"><strong>目录</strong>{toc.map((item) => <a href={`#${item.id}`} style={{ "--toc-level": item.level } as CSSProperties} key={item.id}>{item.label}</a>)}</nav> : null;
     case "breadcrumb": return <div className={`${className} notion-breadcrumb`}>当前位置</div>;
     case "unsupported": return <aside className="unsupported">此内容块暂不支持显示。</aside>;
     default: return children ? <div>{children}</div> : <aside className="unsupported">未识别的内容块：{block.type}</aside>;

@@ -59,9 +59,17 @@ export type RichText = {
   color?: string;
 };
 
+export type ContentBlockType =
+  | "paragraph" | "heading_1" | "heading_2" | "heading_3"
+  | "bulleted_list_item" | "numbered_list_item" | "to_do" | "quote" | "callout" | "toggle"
+  | "code" | "divider" | "image" | "bookmark" | "embed" | "video" | "file" | "pdf" | "audio"
+  | "child_page" | "child_database" | "equation" | "table" | "table_row" | "table_cell"
+  | "column_list" | "column" | "synced_block" | "template" | "table_of_contents" | "breadcrumb"
+  | "unsupported";
+
 export type ContentBlock = {
   id: string;
-  type: string;
+  type: ContentBlockType;
   pageId?: string;
   richText?: RichText[];
   checked?: boolean;

@@ -154,7 +154,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
             <Link href="/#word-cloud">词云</Link>
             {categories.length > 0 && onCategoryChange && (
               <details className="mobile-menu-group mobile-menu-disclosure mobile-category-list">
-                <summary><span>文章分类</span><small>{Math.max(0, categories.length - 1)}</small><CaretDown className="section-caret" aria-hidden size={13} /></summary>
+                <summary><span>文章分类</span><CaretDown className="section-caret" aria-hidden size={13} /></summary>
                 <div className="mobile-menu-disclosure-content">
                   {categories.map((item) => (
                     <button type="button" className={item === activeCategory ? "active" : ""} aria-pressed={item === activeCategory} onClick={() => onCategoryChange(item)} key={item}>{item}</button>
@@ -176,7 +176,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
             open={categoriesDisclosure.open}
             onToggle={categoriesDisclosure.onToggle}
           >
-            <summary><span><FolderOpen aria-hidden size={16} />文章分类 <small>{Math.max(0, categories.length - 1)}</small></span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
+            <summary><span><FolderOpen aria-hidden size={16} />文章分类</span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
             <div className="sidebar-category-list" role="group" aria-label="按分类筛选">
               {categories.map((item) => (
                 <button type="button" className={item === activeCategory ? "active" : ""} aria-pressed={item === activeCategory} onClick={() => onCategoryChange(item)} key={item}>{item}</button>
