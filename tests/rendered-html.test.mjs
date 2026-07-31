@@ -308,7 +308,8 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   assert.match(sidebar, /<span>菜单<\/span>/);
   assert.doesNotMatch(sidebar, /文章归档|历史归档|快速访问/);
   assert.match(sidebar, />RSS 订阅<\/Link>/);
-  assert.match(sidebar, /<summary><span>小工具<\/span><small>\{toolLinks\.length\}<\/small>/);
+  assert.match(sidebar, /<summary><span>小工具<\/span><CaretDown/);
+  assert.doesNotMatch(sidebar, /小工具 <small>\{toolLinks\.length\}<\/small>/);
   assert.match(sidebar, /<small>外部<\/small>/);
   assert.match(sidebar, /aboutLink && \(\s*<a href=\{aboutLink\.href\}/, "unconfigured About links must not be invented on mobile");
   assert.doesNotMatch(sidebar, /href="\/#about"/);
@@ -437,8 +438,11 @@ test("article header stays compact and the password form supports keyboard submi
   assert.match(article, /autoFocus/);
   assert.match(css, /\.article-title-row \{ display: grid;/);
   assert.match(css, /\.article-shell article \{[^}]*padding: 8px 0 70px;/);
-  assert.match(articlePage, /<\/article><nav className="article-return"/);
-  assert.match(sitePage, /<nav className="article-return"/);
+  assert.match(articlePage, /<SiteSidebar showHomeLink \/>/);
+  assert.match(sitePage, /<SiteSidebar showHomeLink \/>/);
+  assert.doesNotMatch(articlePage, /返回全部文章|article-return/);
+  assert.doesNotMatch(sitePage, /返回全部文章|article-return/);
+  assert.match(css, /\.sidebar-home-link \{/);
   assert.match(article, /className="bookmark-preview"/);
   assert.match(article, /className="bookmark-copy"/);
   assert.match(css, /\.password-card-fields \{ display: grid;/);
@@ -476,7 +480,9 @@ test("about and other Published Notion pages render inside the site shell", asyn
     assert.match(html, /这是本站渲染的关于我正文。/);
     assert.match(html, /爱范儿/);
     assert.match(html, /ifanr\.com/);
-    assert.match(html, /← 返回全部文章/);
+    assert.match(html, /class="sidebar-home-link"/);
+    assert.match(html, /返回主页/);
+    assert.doesNotMatch(html, /返回全部文章/);
     assert.doesNotMatch(html, /href="https:\/\/www\.notion\.so\/118ad771/);
     assert.doesNotMatch(html, /fas fa-info/);
     assert.doesNotMatch(html, /site-intro|网站开场动画|rangefinder-intro/, "about and page routes must not render the homepage intro");
