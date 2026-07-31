@@ -143,7 +143,7 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .sidebar-footer p { margin: 5px 0; }
 .sidebar-footer a { text-decoration: underline; text-underline-offset: 2px; }
 .sidebar-sync-meta { display: grid; gap: 7px; margin-bottom: 9px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
-.sidebar-repo-link { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.sidebar-repo-link { display: flex; align-items: center; gap: 6px; width: max-content; margin-top: 5px; color: var(--muted); font-size: 11px; }
 .sidebar-repo-link:hover, .sidebar-repo-link:focus-visible { color: var(--ink); outline: none; }
 .mobile-menu-status { display: grid; gap: 8px; margin-top: 5px; padding: 12px 11px 7px; color: var(--muted); border-top: 1px solid var(--line); font-size: 11px; }
 
@@ -265,9 +265,9 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .footer-signature { display: grid; gap: 5px; justify-items: end; text-align: right; }
 .footer-signature a { text-decoration: underline; text-underline-offset: 3px; }
 
-.article-toolbar { max-width: 920px; display: flex; align-items: center; justify-content: space-between; margin: 0 auto; padding: 8px 0 24px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); }
-.article-toolbar a:hover { color: var(--ink); }
-.article-shell article { max-width: 820px; min-height: 70vh; margin: auto; padding: 38px 0 70px; }
+.article-shell article { max-width: 820px; min-height: 70vh; margin: auto; padding: 8px 0 70px; }
+.article-return { max-width: 820px; margin: 0 auto; padding: 18px 0 4px; color: var(--muted); border-top: 1px solid var(--line); font-size: 12px; }
+.article-return a:hover, .article-return a:focus-visible { color: var(--ink); outline: none; text-decoration: underline; text-underline-offset: 4px; }
 .article-shell>.content-footer { max-width: 920px; margin-inline: auto; }
 .article-head { padding: 4px 0 25px; border-bottom: 1px solid var(--line); }
 .eyebrow { margin: 0 0 10px; color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
@@ -302,8 +302,10 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .notion-todo input { margin-top: .52em; accent-color: var(--ink); }
 .notion-code { margin: 26px 0; }
 .notion-code pre { margin: 0; }
-.bookmark { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0; padding: 17px; border: 1px solid var(--line); border-radius: 10px; font-family: ui-sans-serif, sans-serif; text-decoration: none !important; }
-.bookmark>span { min-width: 0; display: grid; gap: 4px; }
+.bookmark { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 12px; margin: 20px 0; padding: 13px 15px; border: 1px solid var(--line); border-radius: 10px; font-family: ui-sans-serif, sans-serif; text-decoration: none !important; }
+.bookmark-preview { width: 34px; height: 34px; display: grid; place-items: center; overflow: hidden; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; }
+.bookmark-preview img { width: 18px; height: 18px; object-fit: contain; background: transparent; border-radius: 3px; }
+.bookmark-copy { min-width: 0; display: grid; gap: 4px; }
 .bookmark strong { overflow: hidden; color: var(--ink); font-size: 14px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 .bookmark small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .bookmark>svg { flex: 0 0 auto; color: var(--muted); }
@@ -459,9 +461,7 @@ html[data-intro="playing"] .site-intro { display: grid; }
   .category-section { padding-bottom: 20px; }
   .post-grid { grid-template-columns: 1fr; gap: 8px; }
   .post-card { min-height: 72px; padding: 11px 12px 10px; }
-  .article-toolbar { padding-top: 0; }
-  .article-toolbar span { display: none; }
-  .article-shell article { padding: 29px 0 54px; }
+  .article-shell article { padding: 4px 0 54px; }
   .article-title-row { grid-template-columns: minmax(0, 1fr) minmax(90px, 33%); gap: 10px; }
   .article-head h1 { font-size: 32px; }
   .article-summary { margin-bottom: .18em; font-size: 10px; line-height: 1.45; }

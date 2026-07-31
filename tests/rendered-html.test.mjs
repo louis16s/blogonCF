@@ -186,7 +186,8 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(sidebar, /Notion 实时同步中/);
   assert.match(sidebar, /href="https:\/\/github\.com\/louis16s\/blogonCF"[\s\S]*>blogonCF/);
   assert.ok(sidebar.indexOf("newsLink.href") < sidebar.indexOf("rssLink.href"), "RSS should follow the news link");
-  assert.ok(sidebar.indexOf("sidebar-tools") < sidebar.indexOf('className="sidebar-cloud-link"'), "word cloud should follow tools");
+  assert.ok(sidebar.indexOf('className="sidebar-cloud-link"') < sidebar.indexOf('className="sidebar-section sidebar-tools"'), "word cloud should precede tools");
+  assert.ok(sidebar.indexOf('>blogonCF</a>') < sidebar.lastIndexOf("rssLink &&"), "RSS should follow blogonCF in the sidebar footer");
   assert.doesNotMatch(sidebar, /©/);
   assert.doesNotMatch(blog, /className="sync-meta"/);
   assert.doesNotMatch(sidebar, /className="mobile-tools"/);
@@ -421,8 +422,10 @@ test("article raw HTML contains live title, summary, and public Notion content",
 });
 
 test("article header stays compact and the password form supports keyboard submission", async () => {
-  const [article, css] = await Promise.all([
+  const [article, articlePage, sitePage, css] = await Promise.all([
     readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/blog/[slug]/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/SiteContentPage.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
   assert.match(article, /className="article-title-row"/);
@@ -433,6 +436,11 @@ test("article header stays compact and the password form supports keyboard submi
   assert.match(article, /按 Enter 也可以直接解锁/);
   assert.match(article, /autoFocus/);
   assert.match(css, /\.article-title-row \{ display: grid;/);
+  assert.match(css, /\.article-shell article \{[^}]*padding: 8px 0 70px;/);
+  assert.match(articlePage, /<\/article><nav className="article-return"/);
+  assert.match(sitePage, /<nav className="article-return"/);
+  assert.match(article, /className="bookmark-preview"/);
+  assert.match(article, /className="bookmark-copy"/);
   assert.match(css, /\.password-card-fields \{ display: grid;/);
   assert.match(css, /\.password-card \.password-submit/);
 });

@@ -89,13 +89,14 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           ) : (
             <Link href={newsLink.href}><Newspaper aria-hidden size={19} weight="regular" />{newsLink.title || "资讯"}</Link>
           ))}
-          {rssLink && <Link href={rssLink.href}><Rss aria-hidden size={19} />RSS 订阅</Link>}
           {extraNavLinks.map((link) => link.external ? (
             <a href={link.href} target="_blank" rel="noreferrer" key={link.id}><ArrowSquareOut aria-hidden size={19} />{link.title}</a>
           ) : (
             <Link href={link.href} key={link.id}><Compass aria-hidden size={19} />{link.title}</Link>
           ))}
         </nav>
+
+        <Link className="sidebar-cloud-link" href="/#word-cloud"><Cloud aria-hidden size={19} weight="regular" />词云</Link>
 
         {toolLinks.length > 0 && (
           <details
@@ -113,8 +114,6 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
             </div>
           </details>
         )}
-
-        <Link className="sidebar-cloud-link" href="/#word-cloud"><Cloud aria-hidden size={19} weight="regular" />词云</Link>
 
         <details className="mobile-menu">
           <summary><List aria-hidden size={18} /><span>菜单</span><CaretDown className="section-caret" aria-hidden size={13} /></summary>
@@ -135,12 +134,12 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
             ) : (
               <Link href={newsLink.href}>{newsLink.title || "资讯"}</Link>
             ))}
-            {rssLink && <Link href={rssLink.href}>RSS 订阅</Link>}
             {extraNavLinks.map((link) => link.external ? (
               <a href={link.href} target="_blank" rel="noreferrer" key={link.id}>{link.title}<small>外部</small></a>
             ) : (
               <Link href={link.href} key={link.id}>{link.title}</Link>
             ))}
+            <Link href="/#word-cloud">词云</Link>
             {toolLinks.length > 0 && (
               <details className="mobile-menu-group mobile-menu-disclosure">
                 <summary><span>小工具</span><small>{toolLinks.length}</small><CaretDown className="section-caret" aria-hidden size={13} /></summary>
@@ -151,7 +150,6 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
                 </div>
               </details>
             )}
-            <Link href="/#word-cloud">词云</Link>
             {categories.length > 0 && onCategoryChange && (
               <details className="mobile-menu-group mobile-menu-disclosure mobile-category-list">
                 <summary><span>文章分类</span><CaretDown className="section-caret" aria-hidden size={13} /></summary>
@@ -192,6 +190,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           <span className={`source ${resolvedSyncState === "live" ? "live" : ""}`}>{syncLabel}</span>
         </div>
         <a className="sidebar-repo-link" href="https://github.com/louis16s/blogonCF" target="_blank" rel="noreferrer"><GithubLogo aria-hidden size={14} />blogonCF</a>
+        {rssLink && <Link className="sidebar-repo-link" href={rssLink.href}><Rss aria-hidden size={14} />RSS 订阅</Link>}
       </div>
     </aside>
   );

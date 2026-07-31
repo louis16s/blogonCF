@@ -9,9 +9,6 @@ export function SiteContentPage({ slug, payload, fetched = true }: { slug: strin
     <div className="blog-frame article-frame site-content-frame">
       <SiteSidebar />
       <main className="article-shell">
-        <header className="article-toolbar">
-          <Link href="/">← 返回全部文章</Link>
-        </header>
         <article>
           <ArticleClient
             slug={slug}
@@ -24,6 +21,7 @@ export function SiteContentPage({ slug, payload, fetched = true }: { slug: strin
             initialTruncated={Boolean(payload?.truncated)}
           />
         </article>
+        <nav className="article-return" aria-label="页面结束导航"><Link href="/">← 返回全部文章</Link></nav>
         <ContentFooter />
       </main>
     </div>

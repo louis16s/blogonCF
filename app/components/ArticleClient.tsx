@@ -408,6 +408,23 @@ function bookmarkSource(url: string): string {
   }
 }
 
+function bookmarkFavicon(url: string): string {
+  try {
+    return `${new URL(url).origin}/favicon.ico`;
+  } catch {
+    return "";
+  }
+}
+
+function BookmarkFavicon({ url }: { url: string }) {
+  const favicon = bookmarkFavicon(url);
+  return <span className="bookmark-preview" aria-hidden>{favicon ? (
+    // The favicon is discovered at runtime and has no stable dimensions for next/image.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={favicon} alt="" loading="lazy" onError={(event) => { event.currentTarget.hidden = true; }} />
+  ) : null}</span>;
+}
+
 function notionImageIdentity(block: ContentBlock): string {
   try {
     const gateway = new URL(block.url || "", "https://notion-image.local");
@@ -487,7 +504,7 @@ function Block({ block, onOpenChild, toc }: { block: ContentBlock; onOpenChild: 
     case "image": return block.url ? block.url.startsWith("/_notion/image?")
       ? <NotionHeicImage src={block.url} identity={notionImageIdentity(block)} alt={block.caption || "文章图片"} caption={block.caption} />
       : <NotionImage src={block.url} alt={block.caption || "文章图片"} caption={block.caption} /> : null;
-    case "bookmark": return block.url ? <a className={`${className} bookmark`} href={block.url} target="_blank" rel="noreferrer"><span><strong>{block.caption || bookmarkSource(block.url)}</strong><small>{bookmarkSource(block.url)}</small></span><ArrowSquareOut aria-hidden size={16} /></a> : null;
+    case "bookmark": return block.url ? <a className={`${className} bookmark`} href={block.url} target="_blank" rel="noreferrer"><BookmarkFavicon url={block.url} /><span className="bookmark-copy"><strong>{block.caption || bookmarkSource(block.url)}</strong><small>{bookmarkSource(block.url)} · {block.url}</small></span><ArrowSquareOut aria-hidden size={16} /></a> : null;
     case "embed": return block.url ? <figure className={`${className} notion-embed`}><iframe src={block.url} title={block.caption || "Notion 嵌入内容"} loading="lazy" allowFullScreen sandbox="allow-forms allow-popups allow-same-origin allow-scripts" />{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
     case "video": return block.url ? <figure className={`${className} notion-media`}><video src={block.url} controls preload="metadata">浏览器无法播放这个视频。</video>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
     case "audio": return block.url ? <figure className={`${className} notion-media notion-audio`}><audio src={block.url} controls preload="metadata">浏览器无法播放这段音频。</audio>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
