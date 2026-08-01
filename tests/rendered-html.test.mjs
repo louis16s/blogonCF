@@ -61,13 +61,14 @@ test("server-renders a safe loading state without stale Notion content", async (
 test("news-page hide markers remove their whole display region while keeping source blocks immutable", () => {
   const blocks = [
     { id: "before", richText: [{ text: "公开介绍" }] },
-    { id: "open", richText: [{ text: "------[hide]------" }] },
+    { id: "open", richText: [{ text: "———[hide]———" }], children: [{ id: "nested-feed", type: "bookmark", url: "https://feeds.example/feed.xml" }] },
     { id: "feed", type: "bookmark", url: "https://feeds.example/feed.xml" },
     { id: "close", richText: [{ text: "------[HIDE]------" }] },
     { id: "after", richText: [{ text: "公开结尾" }] },
   ];
   assert.deepEqual(withoutHiddenNotionBlocks(blocks).map((block) => block.id), ["before", "after"]);
   assert.equal(blocks.length, 5, "RSS discovery must still receive the original blocks");
+  assert.equal(blocks[1].children[0].id, "nested-feed", "hidden nested RSS sources must remain available to the worker");
 });
 
 test("homepage raw HTML contains the live Notion article index, tools, and footer config", async () => {

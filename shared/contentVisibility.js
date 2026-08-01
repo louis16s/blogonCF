@@ -1,4 +1,5 @@
-const HIDE_MARKER = /^-{2,}\s*\[hide\]\s*-{2,}$/i;
+// Notion may typographically convert repeated ASCII hyphens into em/en dashes.
+const HIDE_MARKER = /^[-‐‑‒–—―]{2,}\s*\[hide\]\s*[-‐‑‒–—―]{2,}$/i;
 
 function blockText(block) {
   if (!block || typeof block !== "object") return "";
@@ -7,7 +8,8 @@ function blockText(block) {
 }
 
 /**
- * Removes Notion blocks delimited by standalone `------[hide]------` markers.
+ * Removes Notion blocks delimited by standalone `------[hide]------` markers,
+ * including Notion's typographic `———[hide]———` conversion.
  * The source blocks remain untouched so server-side RSS discovery can still use them.
  */
 export function withoutHiddenNotionBlocks(blocks) {
