@@ -29,6 +29,7 @@ const MAX_INDEX_BLOCKS_PER_POST = 800;
 const MAX_CHILD_BLOCKS_PER_CHUNK = 2_000;
 const WORD_CLOUD_CACHE_TTL_MS = 10 * 60 * 1000;
 const RSS_FEED_CACHE_TTL_MS = 15 * 60 * 1000;
+const LINK_PREVIEW_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const SITE_BOOTSTRAP_CACHE_TTL_MS = 5 * 60 * 1000;
 const SITE_BOOTSTRAP_STALE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_RSS_FEEDS = 8;
@@ -39,6 +40,7 @@ const edgeBootstrapHeaders = { ...jsonHeaders, "cache-control": "public, max-age
 const wordCloudCache = new Map<string, { expiresAt: number; payload: WordCloudPayload }>();
 const publicCorpusCache = new Map<string, { expiresAt: number; corpus: PublicCorpus }>();
 const rssFeedCache = new Map<string, { expiresAt: number; feed: ExternalFeed | null }>();
+const linkPreviewCache = new Map<string, { expiresAt: number; preview: LinkPreview }>();
 const siteBootstrapCache = new Map<string, { freshUntil: number; staleUntil: number; payload?: HomePayload; pending?: Promise<HomePayload> }>();
 
 type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "notion" };
@@ -46,6 +48,7 @@ type SearchDocument = ReturnType<typeof toPost> & { body: string; searchBody: st
 type PublicCorpus = { documents: SearchDocument[]; partial: boolean };
 type ExternalFeedItem = { id: string; title: string; url: string; published: string; summary: string };
 type ExternalFeed = { url: string; title: string; source: string; items: ExternalFeedItem[] };
+type LinkPreview = { title: string; subtitle: string; source: string };
 type WorkerCacheStorage = CacheStorage & { default?: Cache };
 
 const worker = {
@@ -58,6 +61,7 @@ const worker = {
     if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
     if (url.pathname === "/api/content/search" && request.method === "GET") return notionSearch(env, url);
     if (url.pathname === "/api/content/rss-feeds" && request.method === "GET") return notionExternalRss(env, url);
+    if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url);
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") return notionWordCloud(env);
     if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
     if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request);
@@ -378,6 +382,97 @@ function isSafeExternalUrl(value: string): boolean {
     if (host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:")) return false;
     return true;
   } catch { return false; }
+}
+
+function bookmarkSource(value: string): string {
+  try { return new URL(value).hostname.replace(/^www\./i, ""); }
+  catch { return value; }
+}
+
+async function externalLinkPreview(url: URL): Promise<Response> {
+  const target = url.searchParams.get("url")?.trim() || "";
+  if (!target || target.length > 2_048 || !isSafeExternalUrl(target)) return error(400, "Invalid link URL");
+  const cached = linkPreviewCache.get(target);
+  if (cached && cached.expiresAt > Date.now()) return Response.json(cached.preview, { headers: { ...jsonHeaders, "cache-control": "public, max-age=21600" } });
+  const fallback: LinkPreview = { title: "", subtitle: "", source: bookmarkSource(target) };
+  try {
+    let current = target;
+    for (let redirect = 0; redirect < 4; redirect++) {
+      const response = await fetch(current, {
+        redirect: "manual",
+        headers: { accept: "text/html,application/xhtml+xml;q=0.9", "user-agent": "blogonCF link preview" },
+      });
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get("location");
+        if (!location) break;
+        const next = new URL(location, current).toString();
+        if (!isSafeExternalUrl(next)) break;
+        current = next;
+        continue;
+      }
+      if (!response.ok || !/text\/html|application\/xhtml\+xml/i.test(response.headers.get("content-type") || "")) break;
+      const declaredSize = Number(response.headers.get("content-length") || "0");
+      if (declaredSize > 600_000) break;
+      const html = await readLimitedText(response, 600_000);
+      const metadata = htmlMetadata(html);
+      const preview: LinkPreview = {
+        title: metadata.title,
+        subtitle: metadata.subtitle,
+        source: bookmarkSource(current),
+      };
+      linkPreviewCache.set(target, { expiresAt: Date.now() + LINK_PREVIEW_CACHE_TTL_MS, preview });
+      if (linkPreviewCache.size > 300) linkPreviewCache.delete(linkPreviewCache.keys().next().value as string);
+      return Response.json(preview, { headers: { ...jsonHeaders, "cache-control": "public, max-age=21600" } });
+    }
+  } catch { /* A compact domain-only card is the intended fallback. */ }
+  linkPreviewCache.set(target, { expiresAt: Date.now() + 10 * 60 * 1000, preview: fallback });
+  return Response.json(fallback, { headers: { ...jsonHeaders, "cache-control": "public, max-age=600" } });
+}
+
+async function readLimitedText(response: Response, limit: number): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let size = 0;
+  let output = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) { await reader.cancel(); throw new Error("Link preview is too large"); }
+    output += decoder.decode(value, { stream: true });
+  }
+  return output + decoder.decode();
+}
+
+function htmlMetadata(html: string): { title: string; subtitle: string } {
+  const meta = new Map<string, string>();
+  for (const match of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const attributes = new Map<string, string>();
+    for (const attribute of match[0].matchAll(/([:\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) {
+      attributes.set(attribute[1].toLocaleLowerCase(), attribute[2] ?? attribute[3] ?? attribute[4] ?? "");
+    }
+    const key = (attributes.get("property") || attributes.get("name") || "").toLocaleLowerCase();
+    const content = attributes.get("content") || "";
+    if (key && content && !meta.has(key)) meta.set(key, content);
+  }
+  const titleMatch = html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
+  const title = cleanMetadata(meta.get("og:title") || meta.get("twitter:title") || titleMatch?.[1] || "", 140);
+  const subtitle = cleanMetadata(meta.get("og:description") || meta.get("description") || meta.get("twitter:description") || "", 240);
+  return { title, subtitle };
+}
+
+function cleanMetadata(value: string, limit: number): string {
+  return decodeHtmlEntities(value.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim().slice(0, limit);
+}
+
+function decodeHtmlEntities(value: string): string {
+  const named: Record<string, string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">", nbsp: " " };
+  return value.replace(/&(#x[\da-f]+|#\d+|[a-z]+);/gi, (entity, code: string) => {
+    if (code[0] !== "#") return named[code.toLocaleLowerCase()] || entity;
+    const numeric = code[1]?.toLocaleLowerCase() === "x" ? Number.parseInt(code.slice(2), 16) : Number.parseInt(code.slice(1), 10);
+    try { return Number.isFinite(numeric) ? String.fromCodePoint(numeric) : entity; } catch { return entity; }
+  });
 }
 
 async function fetchExternalFeed(feedUrl: string): Promise<ExternalFeed | null> {

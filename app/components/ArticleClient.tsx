@@ -1,8 +1,9 @@
 "use client";
 
 import { ArrowLeft, ArrowRight, ArrowSquareOut, CaretRight, Eye, EyeSlash, FileText, LockKey, Rss } from "@phosphor-icons/react";
-import { FormEvent, type CSSProperties, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChildPage, ContentBlock, Post } from "../data/types";
+import { withoutHiddenNotionBlocks } from "../../shared/contentVisibility.js";
 import { CONTENT_REFRESH_INTERVAL_MS } from "./siteBootstrap";
 
 const HEIC_DECODE_CONCURRENCY = 3;
@@ -31,6 +32,7 @@ type ArticleClientProps = {
 };
 
 type ExternalFeed = { url: string; title: string; source: string; items: Array<{ id: string; title: string; url: string; published: string; summary: string }> };
+type LinkPreview = { title: string; subtitle: string; source: string };
 
 async function requestChildPage(endpoint: string, payload: Record<string, unknown>, signal: AbortSignal): Promise<ChildPage> {
   const response = await fetch(endpoint, {
@@ -221,6 +223,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   useEffect(() => () => childRequestRef.current?.abort(), []);
 
   const isNewsPage = contentKind === "page" && /资讯|news|links/i.test(`${slug} ${post?.title || ""}`);
+  const visibleBlocks = useMemo(() => isNewsPage ? withoutHiddenNotionBlocks(blocks) : blocks, [blocks, isNewsPage]);
   useEffect(() => {
     if (!isNewsPage) return;
     const controller = new AbortController();
@@ -268,7 +271,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       </div>
       {post.tags.length ? <div className="tags">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
     </header> : null}
-    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} loading={childLoading} error={childError} /> : blocks.length ? <div className="notion-content"><Blocks blocks={blocks} onOpenChild={loadChild} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
+    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} loading={childLoading} error={childError} /> : blocks.length ? <div className="notion-content"><Blocks blocks={visibleBlocks} onOpenChild={loadChild} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
   </>;
 }
 
@@ -425,6 +428,29 @@ function BookmarkFavicon({ url }: { url: string }) {
   ) : null}</span>;
 }
 
+function BookmarkCard({ block, className }: { block: ContentBlock; className: string }) {
+  const [preview, setPreview] = useState<LinkPreview>();
+  const url = block.url || "";
+  useEffect(() => {
+    if (!url) return;
+    const controller = new AbortController();
+    fetch(`/api/content/link-preview?url=${encodeURIComponent(url)}`, { signal: controller.signal })
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((value) => { if (!controller.signal.aborted) setPreview(value); })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [url]);
+  if (!url) return null;
+  const source = preview?.source || bookmarkSource(url);
+  const title = preview?.title || block.caption || source;
+  const subtitle = preview?.subtitle && preview.subtitle !== title && preview.subtitle !== source ? preview.subtitle : "";
+  return <a className={`${className} bookmark`} href={url} target="_blank" rel="noreferrer">
+    <BookmarkFavicon url={url} />
+    <span className="bookmark-copy"><strong>{title}</strong>{subtitle ? <em>{subtitle}</em> : null}<small>{source}</small></span>
+    <ArrowSquareOut aria-hidden size={16} />
+  </a>;
+}
+
 function notionImageIdentity(block: ContentBlock): string {
   try {
     const gateway = new URL(block.url || "", "https://notion-image.local");
@@ -504,7 +530,7 @@ function Block({ block, onOpenChild, toc }: { block: ContentBlock; onOpenChild: 
     case "image": return block.url ? block.url.startsWith("/_notion/image?")
       ? <NotionHeicImage src={block.url} identity={notionImageIdentity(block)} alt={block.caption || "文章图片"} caption={block.caption} />
       : <NotionImage src={block.url} alt={block.caption || "文章图片"} caption={block.caption} /> : null;
-    case "bookmark": return block.url ? <a className={`${className} bookmark`} href={block.url} target="_blank" rel="noreferrer"><BookmarkFavicon url={block.url} /><span className="bookmark-copy"><strong>{block.caption || bookmarkSource(block.url)}</strong><small>{bookmarkSource(block.url)} · {block.url}</small></span><ArrowSquareOut aria-hidden size={16} /></a> : null;
+    case "bookmark": return <BookmarkCard block={block} className={className} />;
     case "embed": return block.url ? <figure className={`${className} notion-embed`}><iframe src={block.url} title={block.caption || "Notion 嵌入内容"} loading="lazy" allowFullScreen sandbox="allow-forms allow-popups allow-same-origin allow-scripts" />{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
     case "video": return block.url ? <figure className={`${className} notion-media`}><video src={block.url} controls preload="metadata">浏览器无法播放这个视频。</video>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
     case "audio": return block.url ? <figure className={`${className} notion-media notion-audio`}><audio src={block.url} controls preload="metadata">浏览器无法播放这段音频。</audio>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;

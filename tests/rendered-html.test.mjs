@@ -5,6 +5,7 @@ import vm from "node:vm";
 import { createSharedRequest, readDisclosureState, writeDisclosureState } from "../app/components/clientState.js";
 import { completeIntro, INTRO_BOOTSTRAP_SCRIPT, INTRO_DURATION_MS, THEME_BOOTSTRAP_SCRIPT } from "../app/components/introState.js";
 import { buildWordCloud, normalizeSearchText } from "../shared/wordCloud.js";
+import { withoutHiddenNotionBlocks } from "../shared/contentVisibility.js";
 
 const workerUrl = new URL("../dist/server/index.js", import.meta.url);
 
@@ -55,6 +56,18 @@ test("server-renders a safe loading state without stale Notion content", async (
   assert.doesNotMatch(html, /2026槟城/);
   assert.match(html, /https:\/\/1\.530555\.xyz\/og\.jpg/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/);
+});
+
+test("news-page hide markers remove their whole display region while keeping source blocks immutable", () => {
+  const blocks = [
+    { id: "before", richText: [{ text: "公开介绍" }] },
+    { id: "open", richText: [{ text: "------[hide]------" }] },
+    { id: "feed", type: "bookmark", url: "https://feeds.example/feed.xml" },
+    { id: "close", richText: [{ text: "------[HIDE]------" }] },
+    { id: "after", richText: [{ text: "公开结尾" }] },
+  ];
+  assert.deepEqual(withoutHiddenNotionBlocks(blocks).map((block) => block.id), ["before", "after"]);
+  assert.equal(blocks.length, 5, "RSS discovery must still receive the original blocks");
 });
 
 test("homepage raw HTML contains the live Notion article index, tools, and footer config", async () => {
@@ -448,6 +461,8 @@ test("article header stays compact and the password form supports keyboard submi
   assert.match(css, /\.sidebar-home-link \{/);
   assert.match(article, /className="bookmark-preview"/);
   assert.match(article, /className="bookmark-copy"/);
+  assert.match(article, /\/api\/content\/link-preview\?url=/);
+  assert.doesNotMatch(article, /bookmarkSource\(block\.url\)\} · \{block\.url\}/);
   assert.match(css, /\.password-card-fields \{ display: grid;/);
   assert.match(css, /\.password-card \.password-submit/);
 });
@@ -667,6 +682,7 @@ test("news pages turn Notion-configured public feed URLs into safe RSS and Atom 
       { id: "unsafe-link", type: "bookmark", has_children: false, bookmark: { url: "http://127.0.0.1/private.xml", caption: [] } },
     ], has_more: false });
     if (url === "https://feeds.example.test/feed.xml") return new Response(`<?xml version="1.0"?><rss><channel><title>示例订阅</title><item><title>第一篇动态</title><link>https://example.test/posts/1</link><pubDate>Sat, 25 Jul 2026 12:00:00 GMT</pubDate><description><![CDATA[<b>正文摘要</b>]]></description></item></channel></rss>`, { headers: { "content-type": "application/rss+xml" } });
+    if (url === "https://www.ifanr.com/story") return new Response(`<!doctype html><html><head><title>普通标题</title><meta name="description" content="关注明日产品的数字潮牌"><meta property="og:title" content="爱范儿"></head></html>`, { headers: { "content-type": "text/html; charset=utf-8" } });
     throw new Error(`Unexpected request: ${url} ${init.method || "GET"}`);
   };
   try {
@@ -682,6 +698,9 @@ test("news pages turn Notion-configured public feed URLs into safe RSS and Atom 
       published: "Sat, 25 Jul 2026 12:00:00 GMT",
       summary: "正文摘要",
     });
+    const previewResponse = await worker.fetch(new Request("http://localhost/api/content/link-preview?url=https%3A%2F%2Fwww.ifanr.com%2Fstory"), { ASSETS: assets }, context);
+    assert.equal(previewResponse.status, 200);
+    assert.deepEqual(await previewResponse.json(), { title: "爱范儿", subtitle: "关注明日产品的数字潮牌", source: "ifanr.com" });
   } finally { globalThis.fetch = originalFetch; }
 });
 

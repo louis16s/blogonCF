@@ -309,6 +309,7 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .bookmark-preview img { width: 18px; height: 18px; object-fit: contain; background: transparent; border-radius: 3px; }
 .bookmark-copy { min-width: 0; display: grid; gap: 4px; }
 .bookmark strong { overflow: hidden; color: var(--ink); font-size: 14px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.bookmark-copy em { display: -webkit-box; overflow: hidden; color: var(--muted); font-size: 11px; font-style: normal; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .bookmark small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .bookmark>svg { flex: 0 0 auto; color: var(--muted); }
 .bookmark:hover { border-color: var(--line-strong); background: var(--surface-soft); }
