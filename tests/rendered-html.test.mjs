@@ -1351,6 +1351,13 @@ test("article renderer opens child pages internally instead of linking to Notion
   assert.doesNotMatch(article, /case "child_page"[^\n]+notion\.so/);
 });
 
+test("article client verifies the unlock cookie and sends it with child-page requests", async () => {
+  const source = await readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8");
+  assert.match(source, /credentials:\s*"same-origin"/);
+  assert.match(source, /安全会话未能建立/);
+  assert.match(source, /response\.status === 404[\s\S]*trail: \[\]/);
+});
+
 test("password endpoint rate-limits repeated failures before calling Notion again", async () => {
   const workerA = await loadWorker();
   const workerB = await loadWorker();

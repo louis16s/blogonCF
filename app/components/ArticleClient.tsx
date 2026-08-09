@@ -35,14 +35,20 @@ type ExternalFeed = { url: string; title: string; source: string; items: Array<{
 type LinkPreview = { title: string; subtitle: string; source: string };
 
 async function requestChildPage(endpoint: string, payload: Record<string, unknown>, signal: AbortSignal): Promise<ChildPage> {
-  const response = await fetch(endpoint, {
+  const send = (body: Record<string, unknown>) => fetch(endpoint, {
     method: "POST",
+    credentials: "same-origin",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
     signal,
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "子页面读取失败");
+  let response = await send(payload);
+  let data = await response.json();
+  if (response.status === 404 && Array.isArray(payload.trail) && payload.trail.length) {
+    response = await send({ ...payload, trail: [] });
+    data = await response.json();
+  }
+  if (!response.ok) throw new Error(response.status === 403 ? "解锁会话已失效，请刷新页面后重新输入密码" : data.error || "子页面读取失败");
   return data.child;
 }
 
@@ -147,10 +153,17 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
 
   const load = (password?: string) => {
     setLoading(true); setError("");
-    fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, password ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) } : undefined)
+    fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, password ? { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) } : { credentials: "same-origin" })
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
+        if (password && !data.locked) {
+          const verification = await fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, { credentials: "same-origin", cache: "no-store" });
+          const verified = await verification.json();
+          if (!verification.ok || verified.locked) throw new Error("安全会话未能建立，请允许本站 Cookie 后重试");
+          setPost(verified.post); setLocked(Boolean(verified.locked)); setBlocks(verified.blocks || []); setTruncated(Boolean(verified.truncated));
+          return;
+        }
         setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setTruncated(Boolean(data.truncated));
       })
       .catch((reason) => setError(reason.message || "文章暂时无法读取"))
@@ -164,7 +177,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       if (inFlight) return;
       inFlight = true;
       try {
-        const response = await fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, { signal: controller.signal, cache: "no-store" });
+        const response = await fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, { signal: controller.signal, cache: "no-store", credentials: "same-origin" });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
         setPost(data.post);
