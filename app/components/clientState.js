@@ -13,9 +13,9 @@ export function createSharedRequest(load) {
   };
 }
 
-export function readDisclosureState(storage, key, legacyKey, defaultOpen) {
+export function readDisclosureState(storage, key, defaultOpen) {
   try {
-    const saved = storage.getItem(key) ?? (legacyKey ? storage.getItem(legacyKey) : null);
+    const saved = storage.getItem(key);
     return saved === null ? defaultOpen : saved === "true";
   } catch {
     return defaultOpen;

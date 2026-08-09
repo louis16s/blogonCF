@@ -35,11 +35,11 @@ type SidebarProps = {
 
 export function SiteSidebar({ siteLinks = [], postCount, syncState, categories = [], activeCategory, onCategoryChange, showHomeLink = false }: SidebarProps) {
   const resolvedLinks = useSiteNavigation(siteLinks);
-  const toolsDisclosure = usePersistedDisclosure({ key: "blog.sidebar.tools.v1", legacyKey: "blog-sidebar-tools-open" });
+  const toolsDisclosure = usePersistedDisclosure({ key: "blog.sidebar.tools.v1" });
   const categoriesDisclosure = usePersistedDisclosure({ key: "blog.sidebar.categories.v2", defaultOpen: false });
   const [articlePageSync, setArticlePageSync] = useState<{ count?: number; state: ContentSyncState }>({ state: "loading" });
   const toolLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "tool"), [resolvedLinks]);
-  const navLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "nav" && !link.title.includes("归档") && !link.href.includes("#archive")), [resolvedLinks]);
+  const navLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "nav"), [resolvedLinks]);
   const rssLink = resolvedLinks.find((link) => link.kind === "rss");
   const aboutLink = navLinks.find((link) => link.href.includes("#about") || link.title.includes("关于"));
   const newsLink = navLinks.find((link) => link.href.includes("/page/links") || link.title.includes("资讯"));

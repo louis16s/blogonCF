@@ -15,6 +15,7 @@ test("replication uses one package manager and exposes a guided Cloudflare setup
   assert.match(manifest.packageManager, /^pnpm@/);
   assert.equal(manifest.scripts.deploy, "pnpm run deploy:worker");
   assert.equal(manifest.scripts.release, "pnpm run build && pnpm run deploy:worker");
+  assert.equal(manifest.scripts.typecheck, "tsc --noEmit --incremental false");
   assert.equal(manifest.scripts["setup:cloudflare"], "node scripts/setup-cloudflare.mjs");
   await assert.rejects(access(new URL("package-lock.json", root)));
 
@@ -22,5 +23,6 @@ test("replication uses one package manager and exposes a guided Cloudflare setup
   assert.match(readme, /pnpm create cloudflare@latest my-blog --template github:louis16s\/blogonCF --template-mode tar/);
   assert.match(setupSource, /"d1", "list", "--json"/);
   assert.match(setupSource, /"d1", "create", databaseName/);
+  assert.match(setupSource, /replaceJsonString\(config, "SITE_URL", siteUrl\)/);
   assert.match(setupSource, /"secret", "put", "NOTION_TOKEN"/);
 });

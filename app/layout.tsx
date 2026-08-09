@@ -1,9 +1,14 @@
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 import { THEME_BOOTSTRAP_SCRIPT } from "./components/introState";
 import "./globals.css";
 
-export const metadata: Metadata = {
-  metadataBase: new URL("https://1.530555.xyz"),
+function metadataBase(value: string | null): URL {
+  try { return new URL(value || "https://1.530555.xyz"); }
+  catch { return new URL("https://1.530555.xyz"); }
+}
+
+const SITE_METADATA: Metadata = {
   title: { default: "louis16s' blog", template: "%s · louis16s' blog" },
   description: "关于旅行、摄影、开发与生活的个人记录。由 Notion 写作，运行在 Cloudflare。",
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
@@ -12,7 +17,18 @@ export const metadata: Metadata = {
   alternates: { canonical: "/" },
 };
 
-export const viewport: Viewport = { colorScheme: "light dark", themeColor: "#ffffff" };
+export async function generateMetadata(): Promise<Metadata> {
+  const requestHeaders = await headers();
+  return { ...SITE_METADATA, metadataBase: metadataBase(requestHeaders.get("x-blog-site-origin")) };
+}
+
+export const viewport: Viewport = {
+  colorScheme: "light dark",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#111111" },
+  ],
+};
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (

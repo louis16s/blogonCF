@@ -38,8 +38,9 @@ async function question(label, fallback = "") {
 async function main() {
   if (!stdin.isTTY) throw new Error("请在交互式终端中运行 pnpm setup:cloudflare");
 
-  console.log("\nblogonCF 初始化：只需填写 Notion 数据源，其他步骤会自动完成。\n");
+  console.log("\nblogonCF 初始化：填写站点地址与 Notion 数据源，其他步骤会自动完成。\n");
   const workerName = await question("Worker 名称", "blogincf");
+  const siteUrl = await question("站点公开 URL（没有自定义域名可留空）");
   const dataSourceId = await question("文章数据库 Data Source ID");
   if (!dataSourceId) throw new Error("文章数据库 Data Source ID 不能为空");
   const configDataSourceId = await question("配置中心 Data Source ID（没有可留空）");
@@ -64,6 +65,7 @@ async function main() {
   config = replaceJsonString(config, "name", workerName);
   config = replaceJsonString(config, "database_name", databaseName);
   config = replaceJsonString(config, "database_id", database.uuid);
+  config = replaceJsonString(config, "SITE_URL", siteUrl);
   config = replaceJsonString(config, "NOTION_DATA_SOURCE_ID", dataSourceId);
   config = replaceJsonString(config, "NOTION_CONFIG_DATA_SOURCE_ID", configDataSourceId);
   await writeFile(wranglerConfigPath, config);

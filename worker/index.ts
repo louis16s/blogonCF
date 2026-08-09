@@ -2,17 +2,20 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Notion block/property unions are normalized at this gateway boundary. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import { clearPasswordAttempts, getPasswordAttemptStatus, recordPasswordFailure } from "../db/rate-limit";
+import { clearPasswordAttempts, getPasswordAttemptStatus, recordPasswordFailure, type PasswordRateLimitDatabase } from "../db/rate-limit";
 import { clearArticlePayload, storeArticlePayload, type ArticlePayload } from "../server/article-context";
 import { clearHomePayload, storeHomePayload, type HomePayload } from "../server/home-context";
 import { buildWordCloud, normalizeSearchText } from "../shared/wordCloud.js";
+import { decodeRouteSegment } from "../shared/url";
+import { externalLinkPreview, extractExternalUrls, fetchExternalFeed, type ExternalFeed } from "./external-content";
 
 interface Env {
-  ASSETS: Fetcher;
-  DB?: D1Database;
+  ASSETS: { fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> };
+  DB?: PasswordRateLimitDatabase;
   NOTION_TOKEN?: string;
   NOTION_DATA_SOURCE_ID?: string;
   NOTION_CONFIG_DATA_SOURCE_ID?: string;
+  SITE_URL?: string;
   IMAGES?: {
     input(stream: ReadableStream): { transform(options: Record<string, unknown>): { output(options: { format: string; quality: number }): Promise<{ response(): Response }> } };
   };
@@ -28,8 +31,6 @@ const MAX_BLOCK_DEPTH = 12;
 const MAX_INDEX_BLOCKS_PER_POST = 800;
 const MAX_CHILD_BLOCKS_PER_CHUNK = 2_000;
 const WORD_CLOUD_CACHE_TTL_MS = 10 * 60 * 1000;
-const RSS_FEED_CACHE_TTL_MS = 15 * 60 * 1000;
-const LINK_PREVIEW_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const SITE_BOOTSTRAP_CACHE_TTL_MS = 5 * 60 * 1000;
 const SITE_BOOTSTRAP_STALE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_RSS_FEEDS = 8;
@@ -39,39 +40,34 @@ const publicContentHeaders = { ...jsonHeaders, "cache-control": "no-cache, max-a
 const edgeBootstrapHeaders = { ...jsonHeaders, "cache-control": "public, max-age=300, stale-while-revalidate=86400" };
 const wordCloudCache = new Map<string, { expiresAt: number; payload: WordCloudPayload }>();
 const publicCorpusCache = new Map<string, { expiresAt: number; corpus: PublicCorpus }>();
-const rssFeedCache = new Map<string, { expiresAt: number; feed: ExternalFeed | null }>();
-const linkPreviewCache = new Map<string, { expiresAt: number; preview: LinkPreview }>();
 const siteBootstrapCache = new Map<string, { freshUntil: number; staleUntil: number; payload?: HomePayload; pending?: Promise<HomePayload> }>();
 
 type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "notion" };
 type SearchDocument = ReturnType<typeof toPost> & { body: string; searchBody: string };
 type PublicCorpus = { documents: SearchDocument[]; partial: boolean };
-type ExternalFeedItem = { id: string; title: string; url: string; published: string; summary: string };
-type ExternalFeed = { url: string; title: string; source: string; items: ExternalFeedItem[] };
-type LinkPreview = { title: string; subtitle: string; source: string };
 type WorkerCacheStorage = CacheStorage & { default?: Cache };
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/sitemap.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionSitemap(env));
-    if (url.pathname === "/rss.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionRss(env));
+    if (url.pathname === "/sitemap.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedPublicDocument(request, env, ctx, () => notionSitemap(env, url)));
+    if (url.pathname === "/rss.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedPublicDocument(request, env, ctx, () => notionRss(env, url)));
     if (url.pathname === "/api/content/posts" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionPosts(env, request, ctx));
     if (url.pathname === "/api/content/navigation" && request.method === "GET") return notionNavigation(env);
     if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
     if (url.pathname === "/api/content/search" && request.method === "GET") return notionSearch(env, url);
     if (url.pathname === "/api/content/rss-feeds" && request.method === "GET") return notionExternalRss(env, url);
-    if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url);
+    if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url, request);
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") return notionWordCloud(env);
     if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
     if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request);
     if (url.pathname === "/_notion/image" && (request.method === "GET" || request.method === "HEAD")) return notionImage(request);
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
-      const slug = decodeURIComponent(url.pathname.slice("/api/content/post/".length));
+      const slug = decodeRouteSegment(url.pathname.slice("/api/content/post/".length));
       return notionPost(env, slug, request);
     }
     if (url.pathname.startsWith("/api/content/page/") && request.method === "GET") {
-      const slug = decodeURIComponent(url.pathname.slice("/api/content/page/".length));
+      const slug = decodeRouteSegment(url.pathname.slice("/api/content/page/".length));
       return notionSitePage(env, slug);
     }
     if (url.pathname === "/api/health") return Response.json({ ok: true, notionConfigured: Boolean(env.NOTION_TOKEN) }, { headers: { "cache-control": "no-store" } });
@@ -88,11 +84,12 @@ const worker = {
       }, allowedWidths);
     }
     if (request.method === "GET" && url.pathname.startsWith("/blog/")) {
-      const slug = decodeURIComponent(url.pathname.slice("/blog/".length));
+      const slug = decodeRouteSegment(url.pathname.slice("/blog/".length));
       const payload = await articlePayloadForRender(env, slug, request);
       const key = storeArticlePayload(payload);
       const headers = new Headers(request.headers);
       headers.set("x-blog-article-context", key);
+      setSiteOriginHeader(headers, env, url);
       try {
         const rendered = await handler.fetch(new Request(request, { headers }), env, ctx);
         return payload.status && payload.status >= 400 && rendered.status < 400
@@ -102,11 +99,12 @@ const worker = {
       finally { clearArticlePayload(key); }
     }
     if (request.method === "GET" && (url.pathname === "/about" || url.pathname.startsWith("/page/"))) {
-      const slug = url.pathname === "/about" ? "about" : decodeURIComponent(url.pathname.slice("/page/".length));
+      const slug = url.pathname === "/about" ? "about" : decodeRouteSegment(url.pathname.slice("/page/".length));
       const payload = await sitePagePayloadForRender(env, slug);
       const key = storeArticlePayload(payload);
       const headers = new Headers(request.headers);
       headers.set("x-blog-article-context", key);
+      setSiteOriginHeader(headers, env, url);
       try {
         const rendered = await handler.fetch(new Request(request, { headers }), env, ctx);
         return payload.status && payload.status >= 400 && rendered.status < 400
@@ -120,10 +118,11 @@ const worker = {
       const key = storeHomePayload(payload);
       const headers = new Headers(request.headers);
       headers.set("x-blog-home-context", key);
+      setSiteOriginHeader(headers, env, url);
       try { return await handler.fetch(new Request(request, { headers }), env, ctx); }
       finally { clearHomePayload(key); }
     }
-    return handler.fetch(request, env, ctx);
+    return handler.fetch(requestWithSiteOrigin(request, env), env, ctx);
   },
 };
 
@@ -224,10 +223,33 @@ function defaultWorkerCache(): Cache | undefined {
   return (globalThis as typeof globalThis & { caches?: WorkerCacheStorage }).caches?.default;
 }
 
+async function cachedPublicDocument(request: Request, env: Env, ctx: ExecutionContext, load: () => Promise<Response>): Promise<Response> {
+  const cache = defaultWorkerCache();
+  const keyUrl = new URL(request.url);
+  const canonical = publicSiteOrigin(env, keyUrl);
+  keyUrl.protocol = canonical.protocol;
+  keyUrl.host = canonical.host;
+  keyUrl.search = "";
+  keyUrl.searchParams.set("schema", "2");
+  keyUrl.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
+  const key = new Request(keyUrl.toString(), { method: "GET" });
+  const cached = await cache?.match(key);
+  if (cached) return cached;
+
+  const response = await load();
+  if (!response.ok) return response;
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", "public, max-age=300, stale-while-revalidate=86400");
+  const cacheable = new Response(response.body, { status: response.status, headers });
+  if (cache) ctx.waitUntil(cache.put(key, cacheable.clone()));
+  return cacheable;
+}
+
 function siteBootstrapEdgeKey(env: Env, request: Request): Request {
   const url = new URL(request.url);
   url.protocol = "https:";
-  url.hostname = "1.530555.xyz";
+  const canonical = publicSiteOrigin(env, url);
+  url.host = canonical.host;
   url.pathname = "/__blog-cache/site-bootstrap";
   url.search = "";
   url.searchParams.set("schema", "2");
@@ -350,194 +372,6 @@ async function notionExternalRss(env: Env, url: URL): Promise<Response> {
       .filter((feed): feed is ExternalFeed => Boolean(feed));
     return Response.json({ feeds, partial: state.truncated, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
   } catch (reason) { return notionError(reason); }
-}
-
-function extractExternalUrls(blocks: any[]): string[] {
-  const urls = new Set<string>();
-  const add = (value: unknown) => {
-    if (typeof value !== "string" || !isSafeExternalUrl(value)) return;
-    urls.add(value.trim());
-  };
-  const visit = (items: any[]) => {
-    for (const block of items || []) {
-      add(block.url);
-      for (const item of block.richText || []) {
-        add(item.href);
-        for (const match of String(item.text || "").matchAll(/https?:\/\/[^\s<>()]+/gi)) add(match[0]);
-      }
-      if (Array.isArray(block.children)) visit(block.children);
-    }
-  };
-  visit(blocks);
-  return [...urls];
-}
-
-function isSafeExternalUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value.trim());
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
-    const host = parsed.hostname.toLocaleLowerCase();
-    if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) return false;
-    if (/^(?:0|10|127)\.|^169\.254\.|^172\.(?:1[6-9]|2\d|3[0-1])\.|^192\.168\./.test(host)) return false;
-    if (host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:")) return false;
-    return true;
-  } catch { return false; }
-}
-
-function bookmarkSource(value: string): string {
-  try { return new URL(value).hostname.replace(/^www\./i, ""); }
-  catch { return value; }
-}
-
-async function externalLinkPreview(url: URL): Promise<Response> {
-  const target = url.searchParams.get("url")?.trim() || "";
-  if (!target || target.length > 2_048 || !isSafeExternalUrl(target)) return error(400, "Invalid link URL");
-  const cached = linkPreviewCache.get(target);
-  if (cached && cached.expiresAt > Date.now()) return Response.json(cached.preview, { headers: { ...jsonHeaders, "cache-control": "public, max-age=21600" } });
-  const fallback: LinkPreview = { title: "", subtitle: "", source: bookmarkSource(target) };
-  try {
-    let current = target;
-    for (let redirect = 0; redirect < 4; redirect++) {
-      const response = await fetch(current, {
-        redirect: "manual",
-        headers: { accept: "text/html,application/xhtml+xml;q=0.9", "user-agent": "blogonCF link preview" },
-      });
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get("location");
-        if (!location) break;
-        const next = new URL(location, current).toString();
-        if (!isSafeExternalUrl(next)) break;
-        current = next;
-        continue;
-      }
-      if (!response.ok || !/text\/html|application\/xhtml\+xml/i.test(response.headers.get("content-type") || "")) break;
-      const declaredSize = Number(response.headers.get("content-length") || "0");
-      if (declaredSize > 600_000) break;
-      const html = await readLimitedText(response, 600_000);
-      const metadata = htmlMetadata(html);
-      const preview: LinkPreview = {
-        title: metadata.title,
-        subtitle: metadata.subtitle,
-        source: bookmarkSource(current),
-      };
-      linkPreviewCache.set(target, { expiresAt: Date.now() + LINK_PREVIEW_CACHE_TTL_MS, preview });
-      if (linkPreviewCache.size > 300) linkPreviewCache.delete(linkPreviewCache.keys().next().value as string);
-      return Response.json(preview, { headers: { ...jsonHeaders, "cache-control": "public, max-age=21600" } });
-    }
-  } catch { /* A compact domain-only card is the intended fallback. */ }
-  linkPreviewCache.set(target, { expiresAt: Date.now() + 10 * 60 * 1000, preview: fallback });
-  return Response.json(fallback, { headers: { ...jsonHeaders, "cache-control": "public, max-age=600" } });
-}
-
-async function readLimitedText(response: Response, limit: number): Promise<string> {
-  if (!response.body) return "";
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let size = 0;
-  let output = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > limit) { await reader.cancel(); throw new Error("Link preview is too large"); }
-    output += decoder.decode(value, { stream: true });
-  }
-  return output + decoder.decode();
-}
-
-function htmlMetadata(html: string): { title: string; subtitle: string } {
-  const meta = new Map<string, string>();
-  for (const match of html.matchAll(/<meta\b[^>]*>/gi)) {
-    const attributes = new Map<string, string>();
-    for (const attribute of match[0].matchAll(/([:\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) {
-      attributes.set(attribute[1].toLocaleLowerCase(), attribute[2] ?? attribute[3] ?? attribute[4] ?? "");
-    }
-    const key = (attributes.get("property") || attributes.get("name") || "").toLocaleLowerCase();
-    const content = attributes.get("content") || "";
-    if (key && content && !meta.has(key)) meta.set(key, content);
-  }
-  const titleMatch = html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
-  const title = cleanMetadata(meta.get("og:title") || meta.get("twitter:title") || titleMatch?.[1] || "", 140);
-  const subtitle = cleanMetadata(meta.get("og:description") || meta.get("description") || meta.get("twitter:description") || "", 240);
-  return { title, subtitle };
-}
-
-function cleanMetadata(value: string, limit: number): string {
-  return decodeHtmlEntities(value.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim().slice(0, limit);
-}
-
-function decodeHtmlEntities(value: string): string {
-  const named: Record<string, string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">", nbsp: " " };
-  return value.replace(/&(#x[\da-f]+|#\d+|[a-z]+);/gi, (entity, code: string) => {
-    if (code[0] !== "#") return named[code.toLocaleLowerCase()] || entity;
-    const numeric = code[1]?.toLocaleLowerCase() === "x" ? Number.parseInt(code.slice(2), 16) : Number.parseInt(code.slice(1), 10);
-    try { return Number.isFinite(numeric) ? String.fromCodePoint(numeric) : entity; } catch { return entity; }
-  });
-}
-
-async function fetchExternalFeed(feedUrl: string): Promise<ExternalFeed | null> {
-  const cached = rssFeedCache.get(feedUrl);
-  if (cached && cached.expiresAt > Date.now()) return cached.feed;
-  let current = feedUrl;
-  try {
-    for (let redirect = 0; redirect < 3; redirect++) {
-      const response = await fetch(current, { redirect: "manual", headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9" } });
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get("location");
-        if (!location) break;
-        const next = new URL(location, current).toString();
-        if (!isSafeExternalUrl(next)) break;
-        current = next;
-        continue;
-      }
-      if (!response.ok) break;
-      const length = Number(response.headers.get("content-length") || "0");
-      if (length > 1_000_000) break;
-      const xml = await response.text();
-      if (xml.length > 1_000_000) break;
-      const feed = parseExternalFeed(xml, current);
-      rssFeedCache.set(feedUrl, { expiresAt: Date.now() + RSS_FEED_CACHE_TTL_MS, feed });
-      return feed;
-    }
-  } catch (reason) { console.warn(reason instanceof Error ? reason.message : "External RSS fetch failed"); }
-  rssFeedCache.set(feedUrl, { expiresAt: Date.now() + RSS_FEED_CACHE_TTL_MS, feed: null });
-  return null;
-}
-
-function parseExternalFeed(xml: string, feedUrl: string): ExternalFeed | null {
-  const isAtom = /<feed\b/i.test(xml);
-  const chunks = [...xml.matchAll(isAtom ? /<entry\b[^>]*>([\s\S]*?)<\/entry>/gi : /<item\b[^>]*>([\s\S]*?)<\/item>/gi)].map((match) => match[1]);
-  if (!chunks.length) return null;
-  const source = externalSource(feedUrl);
-  const feedTitle = xmlField(xml, "title") || source;
-  const items = chunks.slice(0, 15).map((chunk, index) => {
-    const url = isAtom ? atomLink(chunk) : xmlField(chunk, "link");
-    const title = xmlField(chunk, "title") || "未命名动态";
-    const published = xmlField(chunk, isAtom ? "updated" : "pubDate") || xmlField(chunk, isAtom ? "published" : "dc:date");
-    const summary = xmlField(chunk, isAtom ? "summary" : "description") || xmlField(chunk, isAtom ? "content" : "content:encoded");
-    return { id: `${feedUrl}#${url || index}`, title, url: isSafeExternalUrl(url) ? url : feedUrl, published, summary };
-  }).filter((item) => item.title);
-  return items.length ? { url: feedUrl, title: feedTitle, source, items } : null;
-}
-
-function atomLink(xml: string): string {
-  const match = xml.match(/<link\b[^>]*\bhref=["']([^"']+)["'][^>]*>/i);
-  return match?.[1] ? decodeXml(match[1]) : "";
-}
-
-function xmlField(xml: string, tag: string): string {
-  const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = xml.match(new RegExp(`<${escaped}\\b[^>]*>([\\s\\S]*?)<\\/${escaped}>`, "i"));
-  return match?.[1] ? decodeXml(match[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, "$1").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()) : "";
-}
-
-function decodeXml(value: string): string {
-  return value.replace(/&#x([\da-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16))).replace(/&#(\d+);/g, (_, decimal) => String.fromCodePoint(Number(decimal))).replace(/&(?:amp|lt|gt|quot|apos);/gi, (entity) => ({ "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'" }[entity.toLocaleLowerCase()] || entity));
-}
-
-function externalSource(value: string): string {
-  try { return new URL(value).hostname.replace(/^www\./i, ""); }
-  catch { return "RSS"; }
 }
 
 async function getPublicCorpus(env: Env): Promise<PublicCorpus> {
@@ -683,28 +517,30 @@ async function childPageResponse(env: Env, childPage: any, cursor: string): Prom
   } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
 }
 
-async function notionSitemap(env: Env): Promise<Response> {
-  const base = "https://1.530555.xyz";
+async function notionSitemap(env: Env, requestUrl: URL): Promise<Response> {
+  const base = publicSiteOrigin(env, requestUrl).origin;
   let posts: ReturnType<typeof toPost>[] = [];
   let pages: ReturnType<typeof toSitePagePost>[] = [];
   if (env.NOTION_TOKEN) {
     try {
       const [postPages, sitePages] = await Promise.all([queryPosts(env, undefined, 100), querySitePages(env, undefined, 100)]);
       posts = postPages.map(toPost).filter((post) => post.slug);
-      pages = sitePages.map(toSitePagePost).filter((page) => page.slug);
+      pages = sitePages.map(toSitePagePost).filter((page) => page.slug && !isRssSitePage(page));
     }
     catch (reason) { console.error(reason instanceof Error ? reason.message : "Sitemap Notion request failed"); }
   }
+  const seen = new Set<string>();
+  const entry = (location: string, body: string) => seen.has(location) ? "" : (seen.add(location), `<url><loc>${location}</loc>${body}</url>`);
   const urls = [
-    `<url><loc>${base}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`,
-    ...posts.map((post) => `<url><loc>${base}/blog/${encodeURIComponent(post.slug)}</loc>${post.date ? `<lastmod>${escapeXml(post.date)}</lastmod>` : ""}<changefreq>weekly</changefreq><priority>0.7</priority></url>`),
-    ...pages.map((page) => `<url><loc>${base}${sitePagePath(page)}</loc><changefreq>weekly</changefreq><priority>0.6</priority></url>`),
+    entry(`${base}/`, "<changefreq>daily</changefreq><priority>1.0</priority>"),
+    ...posts.map((post) => entry(`${base}/blog/${encodeURIComponent(post.slug)}`, `${post.date ? `<lastmod>${escapeXml(post.date)}</lastmod>` : ""}<changefreq>weekly</changefreq><priority>0.7</priority>`)),
+    ...pages.map((page) => entry(`${base}${sitePagePath(page)}`, "<changefreq>weekly</changefreq><priority>0.6</priority>")),
   ].join("");
-  return new Response(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>`, { headers: { "content-type": "application/xml; charset=utf-8", "cache-control": env.NOTION_TOKEN ? "no-store" : "public, max-age=60" } });
+  return new Response(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>`, { headers: { "content-type": "application/xml; charset=utf-8" } });
 }
 
-async function notionRss(env: Env): Promise<Response> {
-  const base = "https://1.530555.xyz";
+async function notionRss(env: Env, requestUrl: URL): Promise<Response> {
+  const base = publicSiteOrigin(env, requestUrl).origin;
   let posts: ReturnType<typeof toPost>[] = [];
   if (env.NOTION_TOKEN) {
     try { posts = (await queryPosts(env, undefined, 100)).map(toPost).filter((post) => post.slug); }
@@ -716,7 +552,7 @@ async function notionRss(env: Env): Promise<Response> {
     return `<item><title>${escapeXml(post.title)}</title><link>${escapeXml(link)}</link><guid isPermaLink="true">${escapeXml(link)}</guid>${published ? `<pubDate>${published}</pubDate>` : ""}<description>${escapeXml(post.summary)}</description><category>${escapeXml(post.category)}</category></item>`;
   }).join("");
   const xml = `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>louis16s&apos; blog</title><link>${base}/</link><description>关于旅行、摄影、开发与生活的个人记录。</description><language>zh-CN</language><lastBuildDate>${new Date().toUTCString()}</lastBuildDate>${items}</channel></rss>`;
-  return new Response(xml, { headers: { "content-type": "application/rss+xml; charset=utf-8", "cache-control": env.NOTION_TOKEN ? "no-store" : "public, max-age=60" } });
+  return new Response(xml, { headers: { "content-type": "application/rss+xml; charset=utf-8" } });
 }
 
 async function queryPosts(env: Env, slug?: string, pageSize = 100): Promise<any[]> {
@@ -782,22 +618,29 @@ async function findPost(env: Env, slug: string): Promise<any | null> {
 }
 
 async function querySiteLinks(env: Env): Promise<any[]> {
-  const payload = await notionFetch(env, `/data_sources/${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID}/query`, {
-    method: "POST",
-    body: JSON.stringify({
-      filter: { and: [
-        { property: "status", select: { equals: "Published" } },
-        { or: [
-          { property: "type", select: { equals: "Menu" } },
-          { property: "type", select: { equals: "SubMenu" } },
-          { property: "type", select: { equals: "Page" } },
+  const results: any[] = [];
+  let cursor: string | undefined;
+  do {
+    const payload = await notionFetch(env, `/data_sources/${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID}/query`, {
+      method: "POST",
+      body: JSON.stringify({
+        filter: { and: [
+          { property: "status", select: { equals: "Published" } },
+          { or: [
+            { property: "type", select: { equals: "Menu" } },
+            { property: "type", select: { equals: "SubMenu" } },
+            { property: "type", select: { equals: "Page" } },
+          ] },
         ] },
-      ] },
-      sorts: [{ property: "date", direction: "descending" }],
-      page_size: 100,
-    }),
-  });
-  return Array.isArray(payload.results) ? payload.results : [];
+        sorts: [{ property: "date", direction: "descending" }],
+        page_size: 100,
+        ...(cursor ? { start_cursor: cursor } : {}),
+      }),
+    });
+    if (Array.isArray(payload.results)) results.push(...payload.results);
+    cursor = payload.has_more && typeof payload.next_cursor === "string" ? payload.next_cursor : undefined;
+  } while (cursor);
+  return results;
 }
 
 async function queryPublicSiteConfig(env: Env) {
@@ -944,6 +787,10 @@ function sitePagePath(page: ReturnType<typeof toSitePagePost>): string {
   return page.slug === "me" || page.title.includes("关于") ? "/about" : `/page/${encodeURIComponent(page.slug)}`;
 }
 
+function isRssSitePage(page: ReturnType<typeof toSitePagePost>): boolean {
+  return /^rss(?:\/feed\.xml|\.xml)?$/i.test(page.slug.trim()) || /^rss(?:\s|$)/i.test(page.title.trim());
+}
+
 function toSiteLink(page: any) {
   const properties = page.properties || {};
   const menuType = properties.type?.select?.name;
@@ -964,7 +811,7 @@ function toSiteLink(page: any) {
   const internal = /^\/(?!\/)/.test(target);
   const rss = /^\/?rss(?:\/feed\.xml|\.xml)?\/?$/i.test(target)
     || /^rss(?:\s|$)/i.test(linkTitle);
-  const href = rss ? "/rss.xml" : pageHref || (external || internal ? normalizeInternalNavigationTarget(target) : "");
+  const href = rss ? "/rss.xml" : pageHref || (external || internal ? target : "");
   return {
     id: page.id,
     title: linkTitle,
@@ -1022,7 +869,7 @@ function toSiteLinks(pages: any[]) {
 
   const seen = new Set<string>();
   return candidates.filter((link) => {
-    if (!link.href) return false;
+    if (!link.href || link.title.includes("归档") || /(?:^|\/)archive(?:\/|$|#)/i.test(link.href)) return false;
     const identity = `${link.kind}:${link.href}`;
     if (seen.has(identity)) return false;
     seen.add(identity);
@@ -1054,12 +901,6 @@ function safeNavigationTarget(value: unknown): string {
   return /^https?:\/\//i.test(target) || /^\/(?!\/)/.test(target) ? target : "";
 }
 
-function normalizeInternalNavigationTarget(target: string): string {
-  if (/^\/archive\/?$/i.test(target)) return "/#archive";
-  if (/^\/about\/?$/i.test(target)) return "/#about";
-  return target;
-}
-
 async function authorizedChildPage(env: Env, rootPage: any, path: string[]): Promise<any | null> {
   let currentPage = rootPage;
   for (const pageId of path) {
@@ -1070,7 +911,10 @@ async function authorizedChildPage(env: Env, rootPage: any, path: string[]): Pro
       const referenceState = newBlockReadState();
       const blocks = await getBlockChildren(env, currentPage.id, referenceState, 0);
       if (!referencesPage(blocks, pageId)) return null;
-      candidate = await notionFetch(env, `/pages/${pageId}`);
+      const publishedTarget = (await querySitePages(env, undefined, 100))
+        .find((page) => normalizeNotionId(page.id) === pageId && !plain(page.properties?.password));
+      if (!publishedTarget) return null;
+      candidate = publishedTarget;
     }
     currentPage = candidate;
   }
@@ -1241,6 +1085,26 @@ function needsBrowserImageConversion(url: unknown): url is string {
 }
 
 function escapeXml(value: string) { return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[char] || char)); }
+
+function publicSiteOrigin(env: Env, requestUrl: URL): URL {
+  try {
+    const configured = new URL(env.SITE_URL || "");
+    if (configured.protocol === "https:" || configured.protocol === "http:") return configured;
+  } catch { /* Fall back to the actual Worker/custom-domain request. */ }
+  const origin = new URL(requestUrl.origin);
+  if (origin.protocol === "http:" && origin.hostname !== "localhost" && origin.hostname !== "127.0.0.1") origin.protocol = "https:";
+  return origin;
+}
+
+function setSiteOriginHeader(headers: Headers, env: Env, requestUrl: URL): void {
+  headers.set("x-blog-site-origin", publicSiteOrigin(env, requestUrl).origin);
+}
+
+function requestWithSiteOrigin(request: Request, env: Env): Request {
+  const headers = new Headers(request.headers);
+  setSiteOriginHeader(headers, env, new URL(request.url));
+  return new Request(request, { headers });
+}
 
 function withHead(request: Request, response: Response) {
   return request.method === "HEAD" ? new Response(null, { status: response.status, headers: response.headers }) : response;

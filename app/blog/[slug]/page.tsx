@@ -6,6 +6,7 @@ import { ArticleClient } from "../../components/ArticleClient";
 import { SiteSidebar } from "../../components/SiteSidebar";
 import { ContentFooter } from "../../components/ContentFooter";
 import { readArticlePayload, type ArticlePayload } from "../../../server/article-context";
+import { decodeRouteSegment } from "../../../shared/url";
 
 const getArticle = cache(async (slug: string): Promise<{ payload?: ArticlePayload; fetched: boolean }> => {
   void slug;
@@ -16,7 +17,7 @@ const getArticle = cache(async (slug: string): Promise<{ payload?: ArticlePayloa
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
-  const decoded = decodeURIComponent(slug);
+  const decoded = decodeRouteSegment(slug);
   const { payload } = await getArticle(decoded);
   const title = payload?.post?.title || decoded;
   const description = payload?.post?.summary || "louis16s 的 Notion 博客文章";
@@ -31,7 +32,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 
 export default async function ArticlePage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const decoded = decodeURIComponent(slug);
+  const decoded = decodeRouteSegment(slug);
   const { payload, fetched } = await getArticle(decoded);
   if (payload?.status === 404) notFound();
   return <div className="blog-frame article-frame"><SiteSidebar showHomeLink /><main className="article-shell"><article><ArticleClient slug={decoded} initialPost={payload?.post} initialBlocks={payload?.locked ? [] : payload?.blocks || []} initialLocked={Boolean(payload?.locked)} initialFetched={fetched} initialError={payload?.error || ""} initialTruncated={Boolean(payload?.truncated)} /></article><ContentFooter /></main></div>;

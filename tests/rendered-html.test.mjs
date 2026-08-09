@@ -54,7 +54,7 @@ test("server-renders a safe loading state without stale Notion content", async (
   assert.match(html, /prefers-reduced-motion/);
   assert.ok(html.indexOf("prefers-reduced-motion") < html.indexOf("site-intro"), "pre-paint decision must run before the intro markup");
   assert.doesNotMatch(html, /2026槟城/);
-  assert.match(html, /https:\/\/1\.530555\.xyz\/og\.jpg/);
+  assert.match(html, /http:\/\/localhost\/og\.jpg/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/);
 });
 
@@ -402,20 +402,20 @@ test("shared client requests deduplicate concurrency and retry after failure", a
   assert.equal(calls, 2, "a successful request remains shared");
 });
 
-test("disclosure persistence prefers the versioned key and survives storage errors", () => {
-  const values = new Map([["legacy", "false"]]);
+test("disclosure persistence uses the current key and survives storage errors", () => {
+  const values = new Map();
   const storage = {
     getItem: (key) => values.get(key) ?? null,
     setItem: (key, value) => values.set(key, value),
   };
-  assert.equal(readDisclosureState(storage, "current", "legacy", true), false);
+  assert.equal(readDisclosureState(storage, "current", false), false);
   values.set("current", "true");
-  assert.equal(readDisclosureState(storage, "current", "legacy", false), true, "versioned state wins over legacy state");
+  assert.equal(readDisclosureState(storage, "current", false), true);
   writeDisclosureState(storage, "current", false);
   assert.equal(values.get("current"), "false");
 
   const blockedStorage = { getItem() { throw new Error("blocked"); }, setItem() { throw new Error("blocked"); } };
-  assert.equal(readDisclosureState(blockedStorage, "current", "legacy", true), true);
+  assert.equal(readDisclosureState(blockedStorage, "current", true), true);
   assert.doesNotThrow(() => writeDisclosureState(blockedStorage, "current", false));
 });
 
@@ -571,6 +571,16 @@ test("missing article raw HTML returns a real 404", async () => {
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("malformed route escapes do not crash the Worker", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ results: [] });
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/post/%"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(response.status, 404);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("article raw HTML preserves Notion upstream failure status", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
@@ -702,6 +712,10 @@ test("news pages turn Notion-configured public feed URLs into safe RSS and Atom 
     const previewResponse = await worker.fetch(new Request("http://localhost/api/content/link-preview?url=https%3A%2F%2Fwww.ifanr.com%2Fstory"), { ASSETS: assets }, context);
     assert.equal(previewResponse.status, 200);
     assert.deepEqual(await previewResponse.json(), { title: "爱范儿", subtitle: "关注明日产品的数字潮牌", source: "ifanr.com" });
+    for (const unsafe of ["http://[::1]/private", "http://user:pass@example.com/private", "http://192.168.1.2/private"]) {
+      const blocked = await worker.fetch(new Request(`http://localhost/api/content/link-preview?url=${encodeURIComponent(unsafe)}`), { ASSETS: assets }, context);
+      assert.equal(blocked.status, 400, `${unsafe} must not reach the external fetcher`);
+    }
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -728,23 +742,32 @@ test("sitemap is generated from current Published posts and safely degrades", as
   const worker = await loadWorker();
   const safe = await worker.fetch(new Request("http://localhost/sitemap.xml"), { ASSETS: assets }, context);
   const safeXml = await safe.text();
-  assert.match(safeXml, /https:\/\/1\.530555\.xyz\/<\/loc>/);
+  assert.match(safeXml, /http:\/\/localhost\/<\/loc>/);
   assert.doesNotMatch(safeXml, /\/blog\//);
   const head = await worker.fetch(new Request("http://localhost/sitemap.xml", { method: "HEAD" }), { ASSETS: assets }, context);
   assert.equal(head.status, 200);
   assert.match(head.headers.get("content-type"), /application\/xml/);
   assert.equal(await head.text(), "");
+  const canonical = await worker.fetch(new Request("http://localhost/sitemap.xml"), { ASSETS: assets, SITE_URL: "https://canonical.example" }, context);
+  assert.match(await canonical.text(), /https:\/\/canonical\.example\/<\/loc>/);
 
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => Response.json({ results: [{ id: "sitemap-page", properties: {
-    title: { title: [{ plain_text: "站点文章" }] }, slug: { rich_text: [{ plain_text: "a & b" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: { start: "2026-03-04" } }, password: { rich_text: [] },
-  } }], has_more: false });
+  globalThis.fetch = async (_input, init = {}) => {
+    const body = JSON.parse(init.body || "{}");
+    const pageQuery = body.filter?.and?.some((item) => item.property === "type" && item.select?.equals === "Page");
+    return pageQuery
+      ? Response.json({ results: [{ id: "rss-config-page", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "RSS_" }] }, slug: { rich_text: [{ plain_text: "rss" }] }, summary: { rich_text: [] } } }], has_more: false })
+      : Response.json({ results: [{ id: "sitemap-page", properties: {
+        title: { title: [{ plain_text: "站点文章" }] }, slug: { rich_text: [{ plain_text: "a & b" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: { start: "2026-03-04" } }, password: { rich_text: [] },
+      } }], has_more: false });
+  };
   try {
     const response = await worker.fetch(new Request("http://localhost/sitemap.xml"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     const xml = await response.text();
     assert.match(xml, /\/blog\/a%20%26%20b<\/loc>/);
     assert.match(xml, /<lastmod>2026-03-04<\/lastmod>/);
-    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.doesNotMatch(xml, /\/page\/rss<\/loc>/);
+    assert.equal(response.headers.get("cache-control"), "public, max-age=300, stale-while-revalidate=86400");
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -769,7 +792,7 @@ test("RSS is generated from current Published posts and safely degrades", async 
     assert.match(xml, /<title>旅行 &amp; 开发<\/title>/);
     assert.match(xml, /\/blog\/rss%20post<\/link>/);
     assert.match(xml, /摘要 &lt;测试&gt;/);
-    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("cache-control"), "public, max-age=300, stale-while-revalidate=86400");
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -874,7 +897,7 @@ test("content endpoint maps only filtered metadata while keeping browser respons
     const payload = await response.json();
     assert.equal(payload.posts[0].slug, "public-post");
     assert.deepEqual(payload.posts[0].tags, ["旅行"]);
-    assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://hd.530555.xyz", "tool"], ["带跳转的工具", "https://annotated.example", "tool"], ["历史归档", "/#archive", "nav"], ["关于我", "/about", "nav"], ["资讯", "/page/links", "nav"]]);
+    assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://hd.530555.xyz", "tool"], ["带跳转的工具", "https://annotated.example", "tool"], ["关于我", "/about", "nav"], ["资讯", "/page/links", "nav"]]);
     assert.equal(payload.config.author, "Notion 作者");
     assert.equal(payload.config.since, "2019");
     assert.deepEqual(payload.config.footerQuotes, [{ lead: "第一句", sub: "第二句" }, { lead: "第三句", sub: "第四句" }]);
@@ -908,6 +931,31 @@ test("navigation endpoint returns only live Notion-configured jump links", async
       { id: "fffad771-48f4-816c-b993-d78a936a4c78", title: "资讯", href: "/page/links", summary: "", icon: "", external: false, kind: "nav" },
       { id: "fffad771-48f4-810c-987c-000c02fa3dea", title: "RSS", href: "/rss.xml", summary: "", icon: "", external: false, kind: "rss" },
     ], source: "notion" });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("navigation endpoint follows Notion pagination", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const cursors = [];
+  globalThis.fetch = async (_input, init = {}) => {
+    const body = JSON.parse(init.body || "{}");
+    cursors.push(body.start_cursor);
+    const page = (id, titleText, slug) => ({ id, properties: {
+      type: { select: { name: "SubMenu" } },
+      title: { title: [{ plain_text: titleText }] },
+      slug: { rich_text: [{ plain_text: slug }] },
+      summary: { rich_text: [] },
+    } });
+    return body.start_cursor
+      ? Response.json({ results: [page("second", "第二个工具", "https://second.example")], has_more: false })
+      : Response.json({ results: [page("first", "第一个工具", "https://first.example")], has_more: true, next_cursor: "page-2" });
+  };
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/navigation"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).links.map((link) => link.id), ["first", "second"]);
+    assert.deepEqual(cursors, [undefined, "page-2"]);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -1075,16 +1123,18 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
   const referencedId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const nestedReferenceId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
   const richReferenceId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const unpublishedReferenceId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
   const outsideId = "33333333-3333-4333-8333-333333333333";
   let childBlockRequests = 0;
-  globalThis.fetch = async (input) => {
+  globalThis.fetch = async (input, init = {}) => {
     const url = String(input);
     if (url.includes(`/pages/${childId}`)) return Response.json({ id: childId, parent: { type: "page_id", page_id: parentId }, icon: { type: "emoji", emoji: "📖" }, properties: { title: { type: "title", title: [{ plain_text: "第一章" }] } } });
     if (url.includes(`/pages/${nestedId}`)) return Response.json({ id: nestedId, parent: { type: "page_id", page_id: intermediateId }, properties: { title: { type: "title", title: [{ plain_text: "嵌套章节" }] } } });
     if (url.includes(`/pages/${intermediateId}`)) return Response.json({ id: intermediateId, parent: { type: "page_id", page_id: parentId }, properties: { title: { type: "title", title: [{ plain_text: "中间章节" }] } } });
     if (url.includes(`/pages/${referencedId}`)) return Response.json({ id: referencedId, parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "同步块引用页" }] } } });
-    if (url.includes(`/pages/${nestedReferenceId}`)) return Response.json({ id: nestedReferenceId, parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "引用页的下一级" }] } } });
+    if (url.includes(`/pages/${nestedReferenceId}`)) return Response.json({ id: nestedReferenceId, parent: { type: "page_id", page_id: referencedId }, properties: { title: { type: "title", title: [{ plain_text: "引用页的下一级" }] } } });
     if (url.includes(`/pages/${richReferenceId}`)) return Response.json({ id: richReferenceId, parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "富文本引用页" }] } } });
+    if (url.includes(`/pages/${unpublishedReferenceId}`)) return Response.json({ id: unpublishedReferenceId, parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "未发布引用页" }] } } });
     if (url.includes(`/pages/${outsideId}`)) return Response.json({ id: outsideId, parent: { type: "page_id", page_id: "44444444-4444-4444-8444-444444444444" }, properties: { title: { type: "title", title: [{ plain_text: "不属于本文" }] } } });
     if (url.includes(`/pages/44444444-4444-4444-8444-444444444444`)) return Response.json({ id: "44444444-4444-4444-8444-444444444444", parent: { type: "workspace", workspace: true }, properties: {} });
     if (url.includes(`/blocks/${childId}/children`)) {
@@ -1094,11 +1144,24 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     if (url.includes(`/blocks/${nestedId}/children`)) { childBlockRequests++; return Response.json({ results: [], has_more: false }); }
     if (url.includes(`/blocks/${parentId}/children`)) return Response.json({ results: [
       { id: referencedId, type: "child_page", has_children: true, child_page: { title: "同步块引用页" } },
+      { id: unpublishedReferenceId, type: "child_page", has_children: true, child_page: { title: "未发布引用页" } },
       { id: "rich-link", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: "富文本引用", href: `https://app.notion.com/p/${richReferenceId.replaceAll("-", "")}`, annotations: {} }] } },
     ], has_more: false });
     if (url.includes(`/blocks/${referencedId}/children`)) { childBlockRequests++; return Response.json({ results: [{ id: nestedReferenceId, type: "child_page", has_children: true, child_page: { title: "引用页的下一级" } }], has_more: false }); }
     if (url.includes(`/blocks/${nestedReferenceId}/children`)) { childBlockRequests++; return Response.json({ results: [], has_more: false }); }
     if (url.includes(`/blocks/${richReferenceId}/children`)) { childBlockRequests++; return Response.json({ results: [], has_more: false }); }
+    if (url.includes("/data_sources/") && init.body) {
+      const body = JSON.parse(init.body);
+      const pageFilter = body.filter?.and?.some((item) => item.property === "type" && item.select?.equals === "Page");
+      if (pageFilter) return Response.json({ results: [referencedId, richReferenceId].map((id) => ({
+        id,
+        properties: {
+          title: { type: "title", title: [{ plain_text: id === referencedId ? "同步块引用页" : "富文本引用页" }] },
+          type: { select: { name: "Page" } },
+          password: { rich_text: [] },
+        },
+      })), has_more: false });
+    }
     return Response.json({ results: [{ id: parentId, properties: {
       title: { title: [{ plain_text: "目录文章" }] }, slug: { rich_text: [{ plain_text: "index" }] }, summary: { rich_text: [] }, category: { select: { name: "输入密码" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "correct" }] },
     } }] });
@@ -1136,9 +1199,12 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     assert.equal(richReference.status, 200, "a Notion page linked from rich text must remain available on-site");
     assert.equal((await richReference.json()).child.title, "富文本引用页");
 
+    const unpublishedReference = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: unpublishedReferenceId, password: "correct" }) }), env, context);
+    assert.equal(unpublishedReference.status, 404, "a referenced page outside the Published collection must stay private");
+
     const outside = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: outsideId, password: "correct" }) }), env, context);
     assert.equal(outside.status, 404);
-    assert.equal(childBlockRequests, 6, "non-descendant and unreferenced pages must never expose their blocks");
+    assert.equal(childBlockRequests, 5, "unpublished and unrelated pages must never expose their blocks");
   } finally { globalThis.fetch = originalFetch; }
 });
 

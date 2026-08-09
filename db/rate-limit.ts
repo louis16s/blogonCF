@@ -3,7 +3,15 @@ const PASSWORD_WINDOW_MS = 10 * 60 * 1000;
 
 export type RateLimitResult = { allowed: boolean; retryAfter: number };
 
-export async function getPasswordAttemptStatus(db: D1Database, key: string, now = Date.now()): Promise<RateLimitResult> {
+type D1Statement = {
+  bind(...values: unknown[]): D1Statement;
+  first<T>(): Promise<T | null>;
+  run(): Promise<unknown>;
+};
+
+export type PasswordRateLimitDatabase = { prepare(sql: string): D1Statement };
+
+export async function getPasswordAttemptStatus(db: PasswordRateLimitDatabase, key: string, now = Date.now()): Promise<RateLimitResult> {
   const row = await db.prepare("SELECT attempt_count, window_start FROM password_attempts WHERE key = ?1")
     .bind(key)
     .first<{ attempt_count: number; window_start: number }>();
@@ -11,7 +19,7 @@ export async function getPasswordAttemptStatus(db: D1Database, key: string, now 
   return { allowed: row.attempt_count < PASSWORD_LIMIT, retryAfter: Math.max(1, Math.ceil((row.window_start + PASSWORD_WINDOW_MS - now) / 1000)) };
 }
 
-export async function recordPasswordFailure(db: D1Database, key: string, now = Date.now()): Promise<RateLimitResult> {
+export async function recordPasswordFailure(db: PasswordRateLimitDatabase, key: string, now = Date.now()): Promise<RateLimitResult> {
   const cutoff = now - PASSWORD_WINDOW_MS;
   const row = await db.prepare(`
     INSERT INTO password_attempts (key, window_start, attempt_count)
@@ -31,7 +39,7 @@ export async function recordPasswordFailure(db: D1Database, key: string, now = D
   return { allowed: count <= PASSWORD_LIMIT, retryAfter: Math.max(1, Math.ceil((windowStart + PASSWORD_WINDOW_MS - now) / 1000)) };
 }
 
-export async function clearPasswordAttempts(db: D1Database, key: string) {
+export async function clearPasswordAttempts(db: PasswordRateLimitDatabase, key: string) {
   await db.prepare("DELETE FROM password_attempts WHERE key = ?1")
     .bind(key)
     .run();

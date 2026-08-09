@@ -36,7 +36,7 @@ pnpm create cloudflare@latest my-blog --template github:louis16s/blogonCF --temp
 cd my-blog && pnpm setup:cloudflare
 ```
 
-`setup:cloudflare` 只询问 Worker 名称和两个 Notion Data Source ID，随后自动登录 Cloudflare、创建或复用 D1、写入配置、执行迁移、构建并部署。最后按 Wrangler 提示粘贴一次 `NOTION_TOKEN` 即可。
+`setup:cloudflare` 只询问 Worker 名称、可选站点地址和两个 Notion Data Source ID，随后自动登录 Cloudflare、创建或复用 D1、写入配置、执行迁移、构建并部署。最后按 Wrangler 提示粘贴一次 `NOTION_TOKEN` 即可。
 
 网页部署时会显示以下配置：
 
@@ -45,6 +45,7 @@ cd my-blog && pnpm setup:cloudflare
 | `NOTION_TOKEN` | Secret | 是 | Notion Integration 的内部集成密钥 |
 | `NOTION_DATA_SOURCE_ID` | Variable | 建议 | 博客数据库的 Data Source ID；省略时使用项目默认示例值 |
 | `NOTION_CONFIG_DATA_SOURCE_ID` | Variable | 可选 | NotionNext 配置中心的 Data Source ID |
+| `SITE_URL` | Variable | 可选 | RSS 与站点地图使用的规范站点地址；未设置时使用当前请求域名 |
 
 无论使用哪种方式，都要把文章数据库和可选的配置数据库共享给同一个 Notion Integration。
 
@@ -76,6 +77,7 @@ pnpm install
 
 ```dotenv
 NOTION_TOKEN=ntn_your_token
+SITE_URL=https://your-blog.example.com
 NOTION_DATA_SOURCE_ID=your_blog_data_source_id
 NOTION_CONFIG_DATA_SOURCE_ID=your_config_data_source_id
 ```
@@ -103,7 +105,7 @@ pnpm wrangler d1 migrations apply DB --remote
 pnpm wrangler secret put NOTION_TOKEN
 ```
 
-把两个 Data Source ID 写进 `wrangler.jsonc` 的 `vars`，或在 Cloudflare Dashboard 中添加普通变量。不要把 Token 放进 `vars`。
+把 `SITE_URL` 和两个 Data Source ID 写进 `wrangler.jsonc` 的 `vars`，或在 Cloudflare Dashboard 中添加普通变量。不要把 Token 放进 `vars`。
 
 ### 5. 构建并发布
 
@@ -167,6 +169,16 @@ https://example.org/rss
 
 本站会在该页面下方自动渲染订阅动态的标题、来源、日期和摘要；文章仍在原站点打开。RSS 2.0 和 Atom 都可用。无效链接会被静默跳过，不影响 Notion 正文显示；本地、内网和非 `http(s)` 地址会被拒绝。订阅结果在 Worker 内短暂缓存，避免每次访问都请求对方网站。
 
+若订阅源只用于聚合、不希望在资讯正文中显示，可用两行标记包住它们：
+
+```text
+------[hide]------
+https://example.com/feed.xml
+------[hide]------
+```
+
+Notion 自动转换出的 `———[hide]———` 也会被识别。标记和中间内容不会渲染，但 Worker 仍会读取其中的 RSS 地址。
+
 ## 配置中心
 
 公共接口只读取以下允许项，避免把配置数据库中的私密字段暴露给访客：
@@ -200,7 +212,7 @@ pnpm dev
 
 ## 自定义域名
 
-在 Cloudflare Dashboard 打开 Worker 的 **Settings → Domains & Routes → Add → Custom Domain**，选择已托管在同一 Cloudflare 账号中的域名。项目本身不固定域名，RSS 和站点地图会基于请求 Host 生成绝对地址。
+在 Cloudflare Dashboard 打开 Worker 的 **Settings → Domains & Routes → Add → Custom Domain**，选择已托管在同一 Cloudflare 账号中的域名。设置 `SITE_URL` 后，RSS 和站点地图固定使用该规范地址；未设置时使用当前请求域名。
 
 ## 数据与性能架构
 
@@ -229,7 +241,7 @@ pnpm dev
 
 ```text
 app/        页面、组件与样式
-worker/     Cloudflare Worker、Notion API 网关与 SSR 路由
+worker/     Cloudflare Worker 路由、Notion 网关与隔离的外部内容抓取模块
 shared/     浏览器与 Worker 共用的纯逻辑
 db/         D1 数据结构与限流逻辑
 drizzle/    D1 迁移

@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { cache } from "react";
 import { SiteContentPage } from "../../components/SiteContentPage";
 import { readArticlePayload, type ArticlePayload } from "../../../server/article-context";
+import { decodeRouteSegment } from "../../../shared/url";
 
 const getSitePage = cache(async (slug: string): Promise<{ payload?: ArticlePayload; fetched: boolean }> => {
   void slug;
@@ -14,7 +15,7 @@ const getSitePage = cache(async (slug: string): Promise<{ payload?: ArticlePaylo
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
-  const decoded = decodeURIComponent(slug);
+  const decoded = decodeRouteSegment(slug);
   const { payload } = await getSitePage(decoded);
   const title = payload?.post?.title || decoded;
   const description = payload?.post?.summary || "louis16s 的 Notion 页面";
@@ -29,7 +30,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 
 export default async function NotionPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const decoded = decodeURIComponent(slug);
+  const decoded = decodeRouteSegment(slug);
   const { payload, fetched } = await getSitePage(decoded);
   if (payload?.status === 404) notFound();
   return <SiteContentPage slug={decoded} payload={payload} fetched={fetched} />;
