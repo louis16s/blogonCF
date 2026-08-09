@@ -1198,6 +1198,10 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     assert.equal((await nested.json()).child.id, nestedId, "nested ancestry must return the requested page rather than its intermediate parent");
     assert.equal(childBlockRequests, 2);
 
+    const staleTrail = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: nestedId, trail: [childId] }) }), env, context);
+    assert.equal(staleTrail.status, 200, "a stale visual trail must fall back to the target's real Notion ancestry");
+    assert.equal((await staleTrail.json()).child.id, nestedId);
+
     const referenced = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: referencedId }) }), env, context);
     assert.equal(referenced.status, 200, "a page explicitly referenced by unlocked parent blocks must remain available on-site");
     assert.equal((await referenced.json()).child.title, "同步块引用页");
@@ -1215,7 +1219,7 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
 
     const outside = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: outsideId }) }), env, context);
     assert.equal(outside.status, 404);
-    assert.equal(childBlockRequests, 5, "unpublished and unrelated pages must never expose their blocks");
+    assert.equal(childBlockRequests, 7, "only authorized pages may expose blocks, including the stale-trail retry");
   } finally { globalThis.fetch = originalFetch; }
 });
 

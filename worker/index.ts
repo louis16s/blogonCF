@@ -502,8 +502,8 @@ async function notionChildPage(env: Env, request: Request): Promise<Response> {
       if (!await hasUnlockSession(request, env.NOTION_TOKEN, slug)) return error(403, "请先解锁父文章");
     }
 
-    const childPage = await authorizedChildPage(env, parent, [...trail.filter((id) => id !== pageId), pageId]);
-    if (!childPage) return error(404, "Child page not found");
+    const childPage = await resolveAuthorizedChildPage(env, parent, trail, pageId);
+    if (!childPage) return error(404, "没有找到这个子页面，或它已从当前文章移除");
     return childPageResponse(env, childPage, cursor);
   } catch (reason) { return notionError(reason); }
 }
@@ -519,8 +519,8 @@ async function notionSitePageChild(env: Env, request: Request): Promise<Response
   try {
     const parent = await findSitePage(env, slug);
     if (!parent) return error(404, "Page not found");
-    const childPage = await authorizedChildPage(env, parent, [...trail.filter((id) => id !== pageId), pageId]);
-    if (!childPage) return error(404, "Child page not found");
+    const childPage = await resolveAuthorizedChildPage(env, parent, trail, pageId);
+    if (!childPage) return error(404, "没有找到这个子页面，或它已从当前页面移除");
     return childPageResponse(env, childPage, cursor);
   } catch (reason) { return notionError(reason); }
 }
@@ -985,6 +985,18 @@ async function authorizedChildPage(env: Env, rootPage: any, path: string[]): Pro
     currentPage = candidate;
   }
   return currentPage === rootPage ? null : currentPage;
+}
+
+async function resolveAuthorizedChildPage(env: Env, rootPage: any, trail: string[], pageId: string): Promise<any | null> {
+  const normalizedTrail = trail.filter((id, index, items) => id !== pageId && items.indexOf(id) === index);
+  if (normalizedTrail.length) {
+    const throughVisibleTrail = await authorizedChildPage(env, rootPage, [...normalizedTrail, pageId]);
+    if (throughVisibleTrail) return throughVisibleTrail;
+  }
+  // Browser history and cross-links can carry a stale visual trail. The target
+  // is still safe when Notion proves it descends from (or is directly
+  // referenced by) the already-authorized root page.
+  return authorizedChildPage(env, rootPage, [pageId]);
 }
 
 function referencesPage(blocks: any[], pageId: string): boolean {
