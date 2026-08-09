@@ -7,7 +7,7 @@ import { clearArticlePayload, storeArticlePayload, type ArticlePayload } from ".
 import { clearHomePayload, storeHomePayload, type HomePayload } from "../server/home-context";
 import { buildWordCloud, normalizeSearchText } from "../shared/wordCloud.js";
 import { decodeRouteSegment } from "../shared/url";
-import { externalLinkPreview, extractExternalUrls, fetchExternalFeed, type ExternalFeed } from "./external-content";
+import { externalLinkPreview, extractExternalUrls, fetchExternalFeed, isSafeExternalUrl, signPreviewUrl, type ExternalFeed } from "./external-content";
 
 interface Env {
   ASSETS: { fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> };
@@ -57,7 +57,7 @@ const worker = {
     if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
     if (url.pathname === "/api/content/search" && request.method === "GET") return notionSearch(env, url);
     if (url.pathname === "/api/content/rss-feeds" && request.method === "GET") return notionExternalRss(env, url);
-    if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url, request);
+    if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url, request, env.NOTION_TOKEN);
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") return notionWordCloud(env);
     if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
     if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request);
@@ -430,6 +430,7 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
     }
     const blockState = newBlockReadState();
     const blocks = await getBlockChildren(env, page.id, blockState, 0);
+    await attachPreviewSignatures(blocks, env.NOTION_TOKEN);
     return Response.json({ post: { ...post, locked: Boolean(expectedPassword) }, locked: false, blocks, truncated: blockState.truncated }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
@@ -442,6 +443,7 @@ async function notionSitePage(env: Env, slug: string): Promise<Response> {
     if (!page) return error(404, "Page not found");
     const blockState = newBlockReadState();
     const blocks = await getBlockChildren(env, page.id, blockState, 0);
+    await attachPreviewSignatures(blocks, env.NOTION_TOKEN);
     return Response.json({
       post: toSitePagePost(page),
       locked: false,
@@ -506,6 +508,7 @@ async function notionSitePageChild(env: Env, request: Request): Promise<Response
 async function childPageResponse(env: Env, childPage: any, cursor: string): Promise<Response> {
   const blockState: BlockReadState = { remaining: MAX_CHILD_BLOCKS_PER_CHUNK, truncated: false };
   const page = await getBlockChildrenPage(env, childPage.id, blockState, 0, cursor);
+  await attachPreviewSignatures(page.blocks, env.NOTION_TOKEN);
   return Response.json({ child: {
     id: childPage.id,
     title: notionPageTitle(childPage) || "未命名子页面",
@@ -515,6 +518,19 @@ async function childPageResponse(env: Env, childPage: any, cursor: string): Prom
     nextCursor: page.nextCursor,
     truncated: blockState.truncated,
   } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+}
+
+async function attachPreviewSignatures(blocks: any[], secret: string | undefined): Promise<void> {
+  if (!secret) return;
+  const bookmarks: any[] = [];
+  const visit = (items: any[]) => {
+    for (const block of items) {
+      if (block.type === "bookmark" && typeof block.url === "string" && isSafeExternalUrl(block.url)) bookmarks.push(block);
+      if (Array.isArray(block.children)) visit(block.children);
+    }
+  };
+  visit(blocks);
+  await Promise.all(bookmarks.map(async (block) => { block.previewSignature = await signPreviewUrl(secret, block.url); }));
 }
 
 async function notionSitemap(env: Env, requestUrl: URL): Promise<Response> {

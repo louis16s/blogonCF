@@ -690,6 +690,7 @@ test("news pages turn Notion-configured public feed URLs into safe RSS and Atom 
     } }], has_more: false });
     if (url.includes("/blocks/news-page/children")) return Response.json({ results: [
       { id: "feed-link", type: "bookmark", has_children: false, bookmark: { url: "https://feeds.example.test/feed.xml", caption: [] } },
+      { id: "preview-link", type: "bookmark", has_children: false, bookmark: { url: "https://www.ifanr.com/story", caption: [] } },
       { id: "unsafe-link", type: "bookmark", has_children: false, bookmark: { url: "http://127.0.0.1/private.xml", caption: [] } },
     ], has_more: false });
     if (url === "https://feeds.example.test/feed.xml") return new Response(`<?xml version="1.0"?><rss><channel><title>示例订阅</title><item><title>第一篇动态</title><link>https://example.test/posts/1</link><pubDate>Sat, 25 Jul 2026 12:00:00 GMT</pubDate><description><![CDATA[<b>正文摘要</b>]]></description></item></channel></rss>`, { headers: { "content-type": "application/rss+xml" } });
@@ -709,7 +710,13 @@ test("news pages turn Notion-configured public feed URLs into safe RSS and Atom 
       published: "Sat, 25 Jul 2026 12:00:00 GMT",
       summary: "正文摘要",
     });
-    const previewResponse = await worker.fetch(new Request("http://localhost/api/content/link-preview?url=https%3A%2F%2Fwww.ifanr.com%2Fstory"), { ASSETS: assets }, context);
+    const unauthorizedPreview = await worker.fetch(new Request("http://localhost/api/content/link-preview?url=https%3A%2F%2Fwww.ifanr.com%2Fstory"), { ASSETS: assets, NOTION_TOKEN: "test-token" }, context);
+    assert.equal(unauthorizedPreview.status, 403);
+    const pageResponse = await worker.fetch(new Request("http://localhost/api/content/page/links"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    const pagePayload = await pageResponse.json();
+    const previewBlock = pagePayload.blocks.find((block) => block.id === "preview-link");
+    assert.match(previewBlock.previewSignature, /^[A-Za-z0-9_-]{43}$/);
+    const previewResponse = await worker.fetch(new Request(`http://localhost/api/content/link-preview?url=${encodeURIComponent(previewBlock.url)}&signature=${previewBlock.previewSignature}`), { ASSETS: assets, NOTION_TOKEN: "test-token" }, context);
     assert.equal(previewResponse.status, 200);
     assert.deepEqual(await previewResponse.json(), { title: "爱范儿", subtitle: "关注明日产品的数字潮牌", source: "ifanr.com" });
     for (const unsafe of ["http://[::1]/private", "http://user:pass@example.com/private", "http://192.168.1.2/private"]) {

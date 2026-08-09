@@ -21,6 +21,8 @@ const rssFeedCache = new Map<string, { expiresAt: number; feed: ExternalFeed | n
 const linkPreviewCache = new Map<string, { expiresAt: number; preview: LinkPreview }>();
 const previewClients = new Map<string, { windowStartedAt: number; count: number }>();
 let activePreviews = 0;
+let signingKeySecret = "";
+let signingKeyPromise: Promise<CryptoKey> | undefined;
 
 export function extractExternalUrls(blocks: any[]): string[] {
   const urls = new Set<string>();
@@ -70,9 +72,11 @@ function isBlockedHostname(host: string): boolean {
     || (a === 203 && b === 0 && octets[2] === 113);
 }
 
-export async function externalLinkPreview(url: URL, request: Request): Promise<Response> {
+export async function externalLinkPreview(url: URL, request: Request, secret: string | undefined): Promise<Response> {
   const target = url.searchParams.get("url")?.trim() || "";
   if (!target || target.length > 2_048 || !isSafeExternalUrl(target)) return jsonError(400, "Invalid link URL");
+  const signature = url.searchParams.get("signature") || "";
+  if (!secret || !await verifyPreviewSignature(secret, target, signature)) return jsonError(403, "Preview URL is not authorized");
   const cached = linkPreviewCache.get(target);
   if (cached && cached.expiresAt > Date.now()) return previewResponse(cached.preview, 21_600);
   const retryAfter = previewRetryAfter(request);
@@ -101,6 +105,40 @@ export async function externalLinkPreview(url: URL, request: Request): Promise<R
   finally { activePreviews--; }
   rememberPreview(target, fallback, 10 * 60 * 1000);
   return previewResponse(fallback, 600);
+}
+
+export async function signPreviewUrl(secret: string, target: string): Promise<string> {
+  const key = await previewSigningKey(secret);
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(target));
+  return bytesToBase64Url(new Uint8Array(signature));
+}
+
+async function verifyPreviewSignature(secret: string, target: string, signature: string): Promise<boolean> {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(signature)) return false;
+  try {
+    return crypto.subtle.verify("HMAC", await previewSigningKey(secret), base64UrlToBuffer(signature), new TextEncoder().encode(target));
+  } catch { return false; }
+}
+
+function previewSigningKey(secret: string): Promise<CryptoKey> {
+  if (!signingKeyPromise || signingKeySecret !== secret) {
+    signingKeySecret = secret;
+    signingKeyPromise = crypto.subtle.importKey("raw", new TextEncoder().encode(`blogonCF-preview:${secret}`), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  }
+  return signingKeyPromise;
+}
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+function base64UrlToBuffer(value: string): ArrayBuffer {
+  const binary = atob(value.replaceAll("-", "+").replaceAll("_", "/") + "=".repeat((4 - value.length % 4) % 4));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes.buffer;
 }
 
 export async function fetchExternalFeed(feedUrl: string): Promise<ExternalFeed | null> {

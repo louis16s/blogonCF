@@ -431,15 +431,16 @@ function BookmarkFavicon({ url }: { url: string }) {
 function BookmarkCard({ block, className }: { block: ContentBlock; className: string }) {
   const [preview, setPreview] = useState<LinkPreview>();
   const url = block.url || "";
+  const signature = block.previewSignature || "";
   useEffect(() => {
-    if (!url) return;
+    if (!url || !signature) return;
     const controller = new AbortController();
-    fetch(`/api/content/link-preview?url=${encodeURIComponent(url)}`, { signal: controller.signal })
+    fetch(`/api/content/link-preview?url=${encodeURIComponent(url)}&signature=${encodeURIComponent(signature)}`, { signal: controller.signal })
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((value) => { if (!controller.signal.aborted) setPreview(value); })
       .catch(() => undefined);
     return () => controller.abort();
-  }, [url]);
+  }, [signature, url]);
   if (!url) return null;
   const source = preview?.source || bookmarkSource(url);
   const title = preview?.title || block.caption || source;

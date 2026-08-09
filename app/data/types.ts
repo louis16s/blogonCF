@@ -74,6 +74,7 @@ export type ContentBlock = {
   richText?: RichText[];
   checked?: boolean;
   url?: string;
+  previewSignature?: string;
   caption?: string;
   language?: string;
   icon?: string;
