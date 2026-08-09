@@ -83,13 +83,13 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const contentEndpoint = contentKind === "page" ? "/api/content/page" : "/api/content/post";
   const childEndpoint = contentKind === "page" ? "/api/content/page-child" : "/api/content/child";
 
-  const loadChild = useCallback((pageId: string, _passwordOverride?: string, updateHistory = true) => {
+  const loadChild = useCallback((pageId: string, accessSignature?: string, updateHistory = true) => {
     childRequestRef.current?.abort();
     const controller = new AbortController();
     childRequestRef.current = controller;
     setChildLoading(true); setChildOpening(true); setChildError("");
     scrollToArticleStart();
-    requestChildPage(childEndpoint, { slug, pageId, trail: childTrailRef.current.map((item) => item.id) }, controller.signal)
+    requestChildPage(childEndpoint, { slug, pageId, accessSignature, trail: childTrailRef.current.map((item) => item.id) }, controller.signal)
       .then((child) => {
         childIdRef.current = child.id;
         setChildTrail((current) => {
@@ -307,7 +307,7 @@ function ChildLoading() {
 
 type DatabaseContext = { slug: string; contentKind: "post" | "page"; trail: string[] };
 
-function ChildDocument({ child, parentTitle, onBack, onOpenChild, onLoadMore, loading, error, databaseContext, breadcrumb }: { child: ChildPage; parentTitle: string; onBack: () => void; onOpenChild: (pageId: string) => void; onLoadMore: () => void; loading: boolean; error: string; databaseContext: DatabaseContext; breadcrumb: string[] }) {
+function ChildDocument({ child, parentTitle, onBack, onOpenChild, onLoadMore, loading, error, databaseContext, breadcrumb }: { child: ChildPage; parentTitle: string; onBack: () => void; onOpenChild: (pageId: string, accessSignature?: string) => void; onLoadMore: () => void; loading: boolean; error: string; databaseContext: DatabaseContext; breadcrumb: string[] }) {
   return <section className="child-document" aria-labelledby={`child-${child.id}`}>
     <nav className="child-document-nav" aria-label="子页面导航">
       <button type="button" onClick={onBack} aria-label={`返回 ${parentTitle}`}>
@@ -366,7 +366,7 @@ function collectHeadings(blocks: ContentBlock[]): TocItem[] {
   });
 }
 
-function Blocks({ blocks, onOpenChild, toc = collectHeadings(blocks), databaseContext, breadcrumb = [] }: { blocks: ContentBlock[]; onOpenChild: (pageId: string) => void; toc?: TocItem[]; databaseContext?: DatabaseContext; breadcrumb?: string[] }) {
+function Blocks({ blocks, onOpenChild, toc = collectHeadings(blocks), databaseContext, breadcrumb = [] }: { blocks: ContentBlock[]; onOpenChild: (pageId: string, accessSignature?: string) => void; toc?: TocItem[]; databaseContext?: DatabaseContext; breadcrumb?: string[] }) {
   const output: ReactNode[] = [];
   for (let index = 0; index < blocks.length;) {
     const block = blocks[index];
@@ -384,7 +384,7 @@ function Blocks({ blocks, onOpenChild, toc = collectHeadings(blocks), databaseCo
   return <>{output}</>;
 }
 
-function Rich({ value = [], onOpenChild }: { value?: ContentBlock["richText"]; onOpenChild: (pageId: string) => void }) {
+function Rich({ value = [], onOpenChild }: { value?: ContentBlock["richText"]; onOpenChild: (pageId: string, accessSignature?: string) => void }) {
   return <>{value?.map((item, index) => {
     let node = <>{item.text}</>;
     if (item.code) node = <code>{node}</code>;
@@ -395,7 +395,7 @@ function Rich({ value = [], onOpenChild }: { value?: ContentBlock["richText"]; o
     const className = item.color ? `notion-color-${item.color}` : undefined;
     if (!item.href) return <span className={className} key={index}>{node}</span>;
     const pageId = notionPageIdFromHref(item.href);
-    if (pageId) return <a className={className} key={index} href={`?child=${encodeURIComponent(pageId)}`} onClick={(event) => { event.preventDefault(); onOpenChild(pageId); }}>{node}</a>;
+    if (pageId) return <a className={className} key={index} href={`?child=${encodeURIComponent(pageId)}`} onClick={(event) => { event.preventDefault(); onOpenChild(pageId, item.accessSignature); }}>{node}</a>;
     const external = /^https?:\/\//i.test(item.href);
     return <a className={className} key={index} href={item.href} target={external ? "_blank" : undefined} rel={external ? "noreferrer" : undefined}>{node}</a>;
   })}</>;
@@ -556,7 +556,7 @@ function ChildDatabaseBlock({ block, context }: { block: ContentBlock; context: 
   return <section className="notion-child-database is-open"><header><small>NOTION DATABASE</small><h3>{database.title}</h3></header><div className="notion-database-grid">{database.rows.map((row) => <article key={row.id}><h4>{row.icon ? <span aria-hidden>{row.icon}</span> : null}{row.title}</h4>{row.fields.map((field) => <p key={field.name}><small>{field.name}</small><span>{field.value}</span></p>)}</article>)}</div>{database.hasMore ? <button type="button" onClick={() => void load(database.nextCursor)} disabled={loading}>{loading ? "正在读取…" : "继续读取"}</button> : null}{error ? <p role="alert">{error}</p> : null}</section>;
 }
 
-function Block({ block, onOpenChild, toc, databaseContext, breadcrumb }: { block: ContentBlock; onOpenChild: (pageId: string) => void; toc: TocItem[]; databaseContext?: DatabaseContext; breadcrumb: string[] }) {
+function Block({ block, onOpenChild, toc, databaseContext, breadcrumb }: { block: ContentBlock; onOpenChild: (pageId: string, accessSignature?: string) => void; toc: TocItem[]; databaseContext?: DatabaseContext; breadcrumb: string[] }) {
   const children = block.children?.length ? <Blocks blocks={block.children} onOpenChild={onOpenChild} toc={toc} databaseContext={databaseContext} breadcrumb={breadcrumb} /> : null;
   const className = block.color ? `notion-block notion-color-${block.color}` : "notion-block";
   switch (block.type) {
@@ -579,7 +579,7 @@ function Block({ block, onOpenChild, toc, databaseContext, breadcrumb }: { block
     case "audio": return block.url ? <figure className={`${className} notion-media notion-audio`}><audio src={block.url} controls preload="metadata">浏览器无法播放这段音频。</audio>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
     case "pdf": return block.url ? <figure className={`${className} notion-pdf`}><iframe src={block.url} title={block.caption || "PDF 文档"} loading="lazy" /><a href={block.url} target="_blank" rel="noreferrer">在新窗口打开 PDF<ArrowSquareOut aria-hidden size={15} /></a>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
     case "file": return block.url ? <a className="bookmark" href={block.url} target="_blank" rel="noreferrer"><span><strong>{block.caption || "下载附件"}</strong><small>{bookmarkSource(block.url)}</small></span><ArrowSquareOut aria-hidden size={16} /></a> : null;
-    case "child_page": return block.pageId ? <a className={`${className} notion-child-page`} href={`?child=${encodeURIComponent(block.pageId)}`} onClick={(event) => { event.preventDefault(); onOpenChild(block.pageId!); }}><FileText aria-hidden size={18} /><strong>{block.caption || "子页面"}</strong><CaretRight aria-hidden size={16} /></a> : null;
+    case "child_page": return block.pageId ? <a className={`${className} notion-child-page`} href={`?child=${encodeURIComponent(block.pageId)}`} onClick={(event) => { event.preventDefault(); onOpenChild(block.pageId!, block.accessSignature); }}><FileText aria-hidden size={18} /><strong>{block.caption || "子页面"}</strong><CaretRight aria-hidden size={16} /></a> : null;
     case "child_database": return block.databaseId && databaseContext ? <ChildDatabaseBlock block={block} context={databaseContext} /> : null;
     case "equation": return <EquationBlock expression={block.caption || ""} />;
     case "table": return <div className="notion-table" role="table">{children}</div>;

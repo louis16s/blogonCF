@@ -57,6 +57,7 @@ export type RichText = {
   strikethrough?: boolean;
   underline?: boolean;
   color?: string;
+  accessSignature?: string;
 };
 
 export type ContentBlockType =
@@ -76,6 +77,7 @@ export type ContentBlock = {
   checked?: boolean;
   url?: string;
   previewSignature?: string;
+  accessSignature?: string;
   caption?: string;
   language?: string;
   icon?: string;

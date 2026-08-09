@@ -1113,6 +1113,7 @@ test("locked article keeps child-page references without eagerly expanding their
     assert.deepEqual(payload.blocks[0].children.map((block) => block.id), [childPageId, "inside"]);
     assert.equal(payload.blocks[0].children[0].caption, "第一章");
     assert.equal(payload.blocks[0].children[0].pageId, childPageId);
+    assert.match(payload.blocks[0].children[0].accessSignature, /^[A-Za-z0-9_-]{43}$/);
     assert.equal(payload.blocks[0].children[0].url, undefined);
     assert.equal(payload.blocks[0].color, "blue_background");
     assert.equal(payload.blocks[1].richText[0].underline, true);

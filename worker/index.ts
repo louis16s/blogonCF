@@ -8,7 +8,7 @@ import { clearHomePayload, storeHomePayload, type HomePayload } from "../server/
 import { buildWordCloud, normalizeSearchText } from "../shared/wordCloud.js";
 import { decodeRouteSegment } from "../shared/url";
 import { externalLinkPreview, extractExternalUrls, fetchExternalFeed, isSafeExternalUrl, signPreviewUrl, type ExternalFeed } from "./external-content";
-import { createUnlockCookie, hasUnlockSession } from "./unlock-session";
+import { createChildAccessSignature, createUnlockCookie, hasUnlockSession, verifyChildAccessSignature } from "./unlock-session";
 
 interface Env {
   ASSETS: { fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> };
@@ -456,6 +456,7 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
       const blockState = newBlockReadState();
       const blocks = await getBlockChildren(env, page.id, blockState, 0);
       await attachPreviewSignatures(blocks, env.NOTION_TOKEN);
+      await attachChildAccessSignatures(blocks, env.NOTION_TOKEN, page.id);
       const headers = new Headers({ ...jsonHeaders, "cache-control": "no-store" });
       if (!sessionUnlocked) headers.append("set-cookie", await createUnlockCookie(env.NOTION_TOKEN, slug, request.url));
       return Response.json({ post: { ...post, locked: true }, locked: false, blocks, truncated: blockState.truncated }, { headers });
@@ -463,6 +464,7 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
     const blockState = newBlockReadState();
     const blocks = await getBlockChildren(env, page.id, blockState, 0);
     await attachPreviewSignatures(blocks, env.NOTION_TOKEN);
+    await attachChildAccessSignatures(blocks, env.NOTION_TOKEN, page.id);
     return Response.json({ post: { ...post, locked: Boolean(expectedPassword) }, locked: false, blocks, truncated: blockState.truncated }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
@@ -476,6 +478,7 @@ async function notionSitePage(env: Env, slug: string): Promise<Response> {
     const blockState = newBlockReadState();
     const blocks = await getBlockChildren(env, page.id, blockState, 0);
     await attachPreviewSignatures(blocks, env.NOTION_TOKEN);
+    await attachChildAccessSignatures(blocks, env.NOTION_TOKEN, page.id);
     return Response.json({
       post: toSitePagePost(page),
       locked: false,
@@ -487,11 +490,12 @@ async function notionSitePage(env: Env, slug: string): Promise<Response> {
 
 async function notionChildPage(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown };
+  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown; accessSignature?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
   const pageId = normalizeNotionId(body.pageId);
   const trail = Array.isArray(body.trail) ? body.trail.map(normalizeNotionId).filter(Boolean).slice(0, 8) : [];
   const cursor = normalizeNotionCursor(body.cursor);
+  const accessSignature = typeof body.accessSignature === "string" ? body.accessSignature : "";
   if (!slug || slug.length > 180 || !pageId || (body.cursor != null && !cursor)) return error(400, "Invalid child page request");
 
   try {
@@ -502,33 +506,35 @@ async function notionChildPage(env: Env, request: Request): Promise<Response> {
       if (!await hasUnlockSession(request, env.NOTION_TOKEN, slug)) return error(403, "请先解锁父文章");
     }
 
-    const childPage = await resolveAuthorizedChildPage(env, parent, trail, pageId);
+    const childPage = await resolveChildPage(env, parent, trail, pageId, accessSignature);
     if (!childPage) return error(404, "没有找到这个子页面，或它已从当前文章移除");
-    return childPageResponse(env, childPage, cursor);
+    return childPageResponse(env, childPage, cursor, parent.id);
   } catch (reason) { return notionError(reason); }
 }
 
 async function notionSitePageChild(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown };
+  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown; accessSignature?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
   const pageId = normalizeNotionId(body.pageId);
   const trail = Array.isArray(body.trail) ? body.trail.map(normalizeNotionId).filter(Boolean).slice(0, 8) : [];
   const cursor = normalizeNotionCursor(body.cursor);
+  const accessSignature = typeof body.accessSignature === "string" ? body.accessSignature : "";
   if (!slug || slug.length > 180 || !pageId || (body.cursor != null && !cursor)) return error(400, "Invalid child page request");
   try {
     const parent = await findSitePage(env, slug);
     if (!parent) return error(404, "Page not found");
-    const childPage = await resolveAuthorizedChildPage(env, parent, trail, pageId);
+    const childPage = await resolveChildPage(env, parent, trail, pageId, accessSignature);
     if (!childPage) return error(404, "没有找到这个子页面，或它已从当前页面移除");
-    return childPageResponse(env, childPage, cursor);
+    return childPageResponse(env, childPage, cursor, parent.id);
   } catch (reason) { return notionError(reason); }
 }
 
-async function childPageResponse(env: Env, childPage: any, cursor: string): Promise<Response> {
+async function childPageResponse(env: Env, childPage: any, cursor: string, rootPageId: string): Promise<Response> {
   const blockState: BlockReadState = { remaining: MAX_CHILD_BLOCKS_PER_CHUNK, truncated: false };
   const page = await getBlockChildrenPage(env, childPage.id, blockState, 0, cursor);
   await attachPreviewSignatures(page.blocks, env.NOTION_TOKEN);
+  await attachChildAccessSignatures(page.blocks, env.NOTION_TOKEN, rootPageId);
   return Response.json({ child: {
     id: childPage.id,
     title: notionPageTitle(childPage) || "未命名子页面",
@@ -581,6 +587,23 @@ async function attachPreviewSignatures(blocks: any[], secret: string | undefined
   };
   visit(blocks);
   await Promise.all(bookmarks.map(async (block) => { block.previewSignature = await signPreviewUrl(secret, block.url); }));
+}
+
+async function attachChildAccessSignatures(blocks: any[], secret: string | undefined, rootPageId: string): Promise<void> {
+  if (!secret) return;
+  const targets: Array<{ target: any; pageId: string }> = [];
+  const visit = (items: any[]) => {
+    for (const block of items || []) {
+      if (block.type === "child_page" && normalizeNotionId(block.pageId)) targets.push({ target: block, pageId: normalizeNotionId(block.pageId) });
+      for (const item of block.richText || []) {
+        const pageId = notionPageIdFromUrl(item.href);
+        if (pageId) targets.push({ target: item, pageId });
+      }
+      if (Array.isArray(block.children)) visit(block.children);
+    }
+  };
+  visit(blocks);
+  await Promise.all(targets.map(async ({ target, pageId }) => { target.accessSignature = await createChildAccessSignature(secret, normalizeNotionId(rootPageId), pageId); }));
 }
 
 async function notionSitemap(env: Env, requestUrl: URL): Promise<Response> {
@@ -997,6 +1020,15 @@ async function resolveAuthorizedChildPage(env: Env, rootPage: any, trail: string
   // is still safe when Notion proves it descends from (or is directly
   // referenced by) the already-authorized root page.
   return authorizedChildPage(env, rootPage, [pageId]);
+}
+
+async function resolveChildPage(env: Env, rootPage: any, trail: string[], pageId: string, accessSignature: string): Promise<any | null> {
+  const rootId = normalizeNotionId(rootPage.id);
+  if (rootId && await verifyChildAccessSignature(env.NOTION_TOKEN || "", rootId, pageId, accessSignature)) {
+    const page = await notionFetch(env, `/pages/${pageId}`);
+    return page?.object === "page" && !page.archived && !page.in_trash ? page : null;
+  }
+  return resolveAuthorizedChildPage(env, rootPage, trail, pageId);
 }
 
 function referencesPage(blocks: any[], pageId: string): boolean {

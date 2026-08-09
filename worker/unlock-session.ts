@@ -29,6 +29,22 @@ async function signature(secret: string, payload: string): Promise<string> {
   return base64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload))));
 }
 
+export async function createChildAccessSignature(secret: string, rootPageId: string, childPageId: string): Promise<string> {
+  return signature(secret, `child:${rootPageId}:${childPageId}`);
+}
+
+export async function verifyChildAccessSignature(secret: string, rootPageId: string, childPageId: string, supplied: string): Promise<boolean> {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(supplied)) return false;
+  try {
+    const left = decodeBase64Url(supplied);
+    const right = decodeBase64Url(await createChildAccessSignature(secret, rootPageId, childPageId));
+    if (left.byteLength !== right.byteLength) return false;
+    let mismatch = 0;
+    for (let index = 0; index < left.byteLength; index++) mismatch |= left[index] ^ right[index];
+    return mismatch === 0;
+  } catch { return false; }
+}
+
 export async function createUnlockCookie(secret: string, slug: string, requestUrl: string): Promise<string> {
   const payload = base64Url(new TextEncoder().encode(JSON.stringify({ slug: normalizedSlug(slug), exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS })));
   const token = `${payload}.${await signature(secret, payload)}`;
