@@ -8,6 +8,7 @@ import { clearHomePayload, storeHomePayload, type HomePayload } from "../server/
 import { buildWordCloud, normalizeSearchText } from "../shared/wordCloud.js";
 import { decodeRouteSegment } from "../shared/url";
 import { externalLinkPreview, extractExternalUrls, fetchExternalFeed, isSafeExternalUrl, signPreviewUrl, type ExternalFeed } from "./external-content";
+import { createUnlockCookie, hasUnlockSession } from "./unlock-session";
 
 interface Env {
   ASSETS: { fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> };
@@ -21,6 +22,7 @@ interface Env {
   };
 }
 interface ExecutionContext { waitUntil(promise: Promise<unknown>): void; passThroughOnException(): void; }
+interface ScheduledController { scheduledTime: number; cron: string; }
 
 const DEFAULT_DATA_SOURCE_ID = "fffad771-48f4-81f5-be17-000b319f85ad";
 const DEFAULT_CONFIG_DATA_SOURCE_ID = "fffad771-48f4-8181-b48e-000b8cf60e1b";
@@ -61,7 +63,8 @@ const worker = {
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") return notionWordCloud(env);
     if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
     if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request);
-    if (url.pathname === "/_notion/image" && (request.method === "GET" || request.method === "HEAD")) return notionImage(request);
+    if (url.pathname === "/api/content/database" && request.method === "POST") return notionChildDatabase(env, request);
+    if (url.pathname === "/_notion/image" && (request.method === "GET" || request.method === "HEAD")) return notionImage(request, env);
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
       const slug = decodeRouteSegment(url.pathname.slice("/api/content/post/".length));
       return notionPost(env, slug, request);
@@ -124,9 +127,23 @@ const worker = {
     }
     return handler.fetch(requestWithSiteOrigin(request, env), env, ctx);
   },
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(refreshExternalFeeds(env));
+  },
 };
 
-async function notionImage(request: Request): Promise<Response> {
+async function refreshExternalFeeds(env: Env): Promise<void> {
+  if (!env.NOTION_TOKEN) return;
+  const pages = await querySitePages(env, undefined, 100);
+  const candidates = pages.filter((page) => /资讯|news|links/i.test(`${plain(page.properties?.slug)} ${title(page.properties?.title)}`));
+  for (const page of candidates.slice(0, 4)) {
+    const state = newBlockReadState();
+    const urls = extractExternalUrls(await getBlockChildren(env, page.id, state, 0)).slice(0, MAX_RSS_FEEDS);
+    await mapWithConcurrency(urls, 2, (feedUrl) => fetchExternalFeed(feedUrl, env.DB, true));
+  }
+}
+
+async function notionImage(request: Request, env: Env): Promise<Response> {
   const rawUrl = new URL(request.url).searchParams.get("url");
   let source: URL;
   try { source = new URL(rawUrl || ""); }
@@ -137,10 +154,18 @@ async function notionImage(request: Request): Promise<Response> {
     if (!response.ok || !response.body) return error(response.status || 502, "Image is temporarily unavailable");
     const contentType = response.headers.get("content-type")?.split(";", 1)[0].toLocaleLowerCase();
     if (!contentType?.startsWith("image/")) return error(415, "Unsupported image response");
-    const headers = new Headers(response.headers);
-    headers.set("cache-control", "public, max-age=3600, stale-while-revalidate=86400");
+    let output = response;
+    if (/image\/(?:hei[cf])|\.(?:heic|heif)(?:$|\?)/i.test(`${contentType || ""} ${source.pathname}`) && env.IMAGES && request.method === "GET") {
+      try {
+        output = await (await env.IMAGES.input(response.body).transform({}).output({ format: "image/jpeg", quality: 84 })).response();
+      } catch (reason) { console.warn(reason instanceof Error ? reason.message : "HEIC conversion failed"); }
+    }
+    const headers = new Headers(output.headers);
+    // The source may belong to a password-protected article. Browser-private
+    // caching avoids placing that media in a shared edge cache.
+    headers.set("cache-control", "private, max-age=3600");
     headers.set("x-content-type-options", "nosniff");
-    return request.method === "HEAD" ? new Response(null, { status: response.status, headers }) : new Response(response.body, { status: response.status, headers });
+    return request.method === "HEAD" ? new Response(null, { status: output.status, headers }) : new Response(output.body, { status: output.status, headers });
   } catch (reason) {
     console.error(reason instanceof Error ? reason.message : "Notion image fetch failed");
     return error(502, "Image is temporarily unavailable");
@@ -368,7 +393,7 @@ async function notionExternalRss(env: Env, url: URL): Promise<Response> {
     const state = newBlockReadState();
     const blocks = await getBlockChildren(env, page.id, state, 0);
     const urls = extractExternalUrls(blocks).slice(0, MAX_RSS_FEEDS);
-    const feeds = (await mapWithConcurrency(urls, 3, (feedUrl) => fetchExternalFeed(feedUrl)))
+    const feeds = (await mapWithConcurrency(urls, 3, (feedUrl) => fetchExternalFeed(feedUrl, env.DB)))
       .filter((feed): feed is ExternalFeed => Boolean(feed));
     return Response.json({ feeds, partial: state.truncated, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
   } catch (reason) { return notionError(reason); }
@@ -414,12 +439,13 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
     const post = toPost(page);
     const expectedPassword = plain(page.properties?.password);
     if (expectedPassword) {
+      const sessionUnlocked = await hasUnlockSession(request, env.NOTION_TOKEN, slug);
       let supplied = "";
-      if (request.method === "POST") {
+      if (!sessionUnlocked && request.method === "POST") {
         const body = await request.json().catch(() => ({})) as { password?: unknown };
         supplied = typeof body.password === "string" ? body.password : "";
       }
-      if (supplied !== expectedPassword) {
+      if (!sessionUnlocked && supplied !== expectedPassword) {
         if (supplied && env.DB) {
           const failure = await recordPasswordFailure(env.DB, attemptKey);
           if (!failure.allowed) return Response.json({ error: "尝试次数过多，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(failure.retryAfter) } });
@@ -427,6 +453,12 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
         return Response.json({ post: { ...post, locked: true }, locked: true, error: supplied ? "密码不正确" : undefined }, { status: supplied ? 401 : 200, headers: { ...jsonHeaders, "cache-control": "no-store" } });
       }
       if (env.DB) await clearPasswordAttempts(env.DB, attemptKey);
+      const blockState = newBlockReadState();
+      const blocks = await getBlockChildren(env, page.id, blockState, 0);
+      await attachPreviewSignatures(blocks, env.NOTION_TOKEN);
+      const headers = new Headers({ ...jsonHeaders, "cache-control": "no-store" });
+      if (!sessionUnlocked) headers.append("set-cookie", await createUnlockCookie(env.NOTION_TOKEN, slug, request.url));
+      return Response.json({ post: { ...post, locked: true }, locked: false, blocks, truncated: blockState.truncated }, { headers });
     }
     const blockState = newBlockReadState();
     const blocks = await getBlockChildren(env, page.id, blockState, 0);
@@ -455,10 +487,9 @@ async function notionSitePage(env: Env, slug: string): Promise<Response> {
 
 async function notionChildPage(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; password?: unknown; trail?: unknown; cursor?: unknown };
+  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
   const pageId = normalizeNotionId(body.pageId);
-  const supplied = typeof body.password === "string" ? body.password : "";
   const trail = Array.isArray(body.trail) ? body.trail.map(normalizeNotionId).filter(Boolean).slice(0, 8) : [];
   const cursor = normalizeNotionCursor(body.cursor);
   if (!slug || slug.length > 180 || !pageId || (body.cursor != null && !cursor)) return error(400, "Invalid child page request");
@@ -468,18 +499,7 @@ async function notionChildPage(env: Env, request: Request): Promise<Response> {
     if (!parent) return error(404, "Article not found");
     const expectedPassword = plain(parent.properties?.password);
     if (expectedPassword) {
-      if (!env.DB) return error(503, "Password protection is temporarily unavailable");
-      const attemptKey = `${request.headers.get("cf-connecting-ip") || "unknown"}:${slug.toLocaleLowerCase()}`;
-      const attempt = await getPasswordAttemptStatus(env.DB, attemptKey);
-      if (!attempt.allowed) return Response.json({ error: "尝试次数过多，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(attempt.retryAfter) } });
-      if (supplied !== expectedPassword) {
-        if (supplied) {
-          const failure = await recordPasswordFailure(env.DB, attemptKey);
-          if (!failure.allowed) return Response.json({ error: "尝试次数过多，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(failure.retryAfter) } });
-        }
-        return error(supplied ? 401 : 403, supplied ? "密码不正确" : "请先解锁父文章");
-      }
-      await clearPasswordAttempts(env.DB, attemptKey);
+      if (!await hasUnlockSession(request, env.NOTION_TOKEN, slug)) return error(403, "请先解锁父文章");
     }
 
     const childPage = await authorizedChildPage(env, parent, [...trail.filter((id) => id !== pageId), pageId]);
@@ -518,6 +538,36 @@ async function childPageResponse(env: Env, childPage: any, cursor: string): Prom
     nextCursor: page.nextCursor,
     truncated: blockState.truncated,
   } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+}
+
+async function notionChildDatabase(env: Env, request: Request): Promise<Response> {
+  if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  const body = await request.json().catch(() => ({})) as { slug?: unknown; databaseId?: unknown; trail?: unknown; cursor?: unknown; contentKind?: unknown };
+  const slug = typeof body.slug === "string" ? body.slug : "";
+  const databaseId = normalizeNotionId(body.databaseId);
+  const trail = Array.isArray(body.trail) ? body.trail.map(normalizeNotionId).filter(Boolean).slice(0, 8) : [];
+  const cursor = normalizeNotionCursor(body.cursor);
+  if (!slug || !databaseId || (body.cursor != null && !cursor)) return error(400, "Invalid child database request");
+  try {
+    const root = body.contentKind === "page" ? await findSitePage(env, slug) : await findPost(env, slug);
+    if (!root) return error(404, "Parent page not found");
+    if (body.contentKind !== "page" && plain(root.properties?.password) && !await hasUnlockSession(request, env.NOTION_TOKEN, slug)) return error(403, "请先解锁父文章");
+    const parent = trail.length ? await authorizedChildPage(env, root, trail) : root;
+    if (!parent) return error(404, "Parent page not found");
+    const state = newBlockReadState();
+    const blocks = await getBlockChildren(env, parent.id, state, 0);
+    if (!referencesDatabase(blocks, databaseId)) return error(404, "Child database not found");
+    const database = await notionFetch(env, `/databases/${databaseId}`);
+    const dataSourceId = normalizeNotionId(database.data_sources?.[0]?.id) || databaseId;
+    const result = await notionFetch(env, `/data_sources/${dataSourceId}/query`, { method: "POST", body: JSON.stringify({ page_size: 50, ...(cursor ? { start_cursor: cursor } : {}) }) });
+    const rows = (result.results || []).map((page: any) => ({
+      id: page.id,
+      title: notionPageTitle(page) || "未命名条目",
+      icon: page.icon?.type === "emoji" ? page.icon.emoji : undefined,
+      fields: Object.entries(page.properties || {}).filter(([name, property]: [string, any]) => !/password|secret|token|密码|密钥/i.test(name) && property?.type !== "title").slice(0, 6).map(([name, property]) => ({ name, value: notionPropertyText(property) })).filter((field) => field.value),
+    }));
+    return Response.json({ database: { id: databaseId, title: richText(database.title) || "子数据库", rows, hasMore: Boolean(result.has_more), nextCursor: result.next_cursor || undefined } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+  } catch (reason) { return notionError(reason); }
 }
 
 async function attachPreviewSignatures(blocks: any[], secret: string | undefined): Promise<void> {
@@ -946,6 +996,22 @@ function referencesPage(blocks: any[], pageId: string): boolean {
   return false;
 }
 
+function referencesDatabase(blocks: any[], databaseId: string): boolean {
+  return blocks.some((block) => normalizeNotionId(block.databaseId) === databaseId || (block.children?.length && referencesDatabase(block.children, databaseId)));
+}
+
+function notionPropertyText(property: any): string {
+  if (!property) return "";
+  if (property.type === "select") return property.select?.name || "";
+  if (property.type === "multi_select") return (property.multi_select || []).map((item: any) => item.name).join("、");
+  if (property.type === "date") return property.date?.start || "";
+  if (property.type === "checkbox") return property.checkbox ? "是" : "否";
+  if (property.type === "number") return property.number == null ? "" : String(property.number);
+  if (property.type === "url" || property.type === "email" || property.type === "phone_number") return property[property.type] || "";
+  if (property.type === "status") return property.status?.name || "";
+  return plain(property);
+}
+
 function notionPageIdFromUrl(value: unknown): string {
   if (typeof value !== "string") return "";
   try {
@@ -1074,7 +1140,7 @@ function normalizeBlock(raw: any): any | null {
     case "divider": return base;
     case "image": {
       const url = value.type === "external" ? value.external?.url : value.file?.url;
-      return { ...base, url: needsBrowserImageConversion(url) ? `/_notion/image?url=${encodeURIComponent(url)}` : url, caption: richText(value.caption) };
+      return { ...base, url: needsBrowserImageConversion(url) ? `/_notion/image?id=${encodeURIComponent(raw.id)}&url=${encodeURIComponent(url)}` : url, caption: richText(value.caption) };
     }
     case "bookmark": case "embed": case "video": case "file": case "pdf": case "audio": case "link_preview": {
       const url = value.url || value.external?.url || value.file?.url;
@@ -1083,7 +1149,12 @@ function normalizeBlock(raw: any): any | null {
       return { ...base, type: normalizedType, url, caption };
     }
     case "child_page": return { ...base, caption: value.title || "子页面", pageId: normalizeNotionId(raw.id) };
-    case "child_database": return { ...base, caption: value.title || "子数据库", url: `https://www.notion.so/${String(raw.id).replaceAll("-", "")}` };
+    case "child_database": return { ...base, caption: value.title || "子数据库", databaseId: normalizeNotionId(raw.id) };
+    case "link_to_page": {
+      const pageId = normalizeNotionId(value.page_id);
+      const databaseId = normalizeNotionId(value.database_id);
+      return pageId ? { ...base, type: "child_page", caption: "关联页面", pageId } : databaseId ? { ...base, type: "child_database", caption: "关联数据库", databaseId } : { ...base, type: "unsupported" };
+    }
     case "equation": return { ...base, caption: value.expression || "" };
     case "table_row": return { ...base, children: (value.cells || []).map((cell: any[], index: number) => ({ id: `${raw.id}-cell-${index}`, type: "table_cell", richText: normalizeRichText(cell) })) };
     case "unsupported": return { ...base, type: "unsupported" };

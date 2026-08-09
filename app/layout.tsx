@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
 import { THEME_BOOTSTRAP_SCRIPT } from "./components/introState";
 import "./globals.css";
+import "katex/dist/katex.min.css";
 
 function metadataBase(value: string | null): URL {
   try { return new URL(value || "https://1.530555.xyz"); }

@@ -71,6 +71,7 @@ export type ContentBlock = {
   id: string;
   type: ContentBlockType;
   pageId?: string;
+  databaseId?: string;
   richText?: RichText[];
   checked?: boolean;
   url?: string;
@@ -80,6 +81,14 @@ export type ContentBlock = {
   icon?: string;
   color?: string;
   children?: ContentBlock[];
+};
+
+export type ChildDatabase = {
+  id: string;
+  title: string;
+  rows: Array<{ id: string; title: string; icon?: string; fields: Array<{ name: string; value: string }> }>;
+  hasMore?: boolean;
+  nextCursor?: string;
 };
 
 export type ChildPage = {

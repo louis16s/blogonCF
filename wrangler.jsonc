@@ -11,6 +11,8 @@
     "directory": "dist/client",
     "binding": "ASSETS"
   },
+  "images": { "binding": "IMAGES" },
+  "triggers": { "crons": ["*/15 * * * *"] },
   "d1_databases": [
     {
       "binding": "DB",

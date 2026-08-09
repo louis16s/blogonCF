@@ -825,7 +825,7 @@ test("Notion HEIC files use the same-origin conversion endpoint", async () => {
   try {
     const response = await worker.fetch(new Request("http://localhost/api/content/post/photo"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     const payload = await response.json();
-    assert.match(payload.blocks[0].url, /^\/_notion\/image\?url=/);
+    assert.match(payload.blocks[0].url, /^\/_notion\/image\?id=.*&url=/);
     assert.equal(new URL(payload.blocks[0].url, "http://localhost").searchParams.get("url"), source);
     assert.equal(payload.blocks[1].url, "https://images.example.com/photo.heic", "non-allowlisted external images must not be proxied");
   } finally { globalThis.fetch = originalFetch; }
@@ -846,7 +846,7 @@ test("Notion image gateway proxies allowlisted HEIC and rejects SSRF hosts", asy
     const response = await worker.fetch(new Request(`http://localhost/_notion/image?url=${source}`), { ASSETS: assets }, context);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), "image/heic");
-    assert.equal(response.headers.get("cache-control"), "public, max-age=3600, stale-while-revalidate=86400");
+    assert.equal(response.headers.get("cache-control"), "private, max-age=3600");
     assert.equal(await response.text(), "heic-binary");
 
     const blocked = await worker.fetch(new Request("http://localhost/_notion/image?url=https%3A%2F%2Fexample.com%2Fprivate.heic"), { ASSETS: assets }, context);
@@ -1179,37 +1179,41 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     assert.equal(missing.status, 403);
     assert.equal(childBlockRequests, 0, "a missing parent password must never fetch child content");
 
-    const wrong = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: childId, password: "wrong" }) }), env, context);
+    const wrong = await worker.fetch(new Request("http://localhost/api/content/post/index", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "wrong" }) }), env, context);
     assert.equal(wrong.status, 401);
     assert.equal(childBlockRequests, 0, "a wrong parent password must never fetch child content");
 
-    const correct = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: childId, password: "correct" }) }), env, context);
+    const unlock = await worker.fetch(new Request("http://localhost/api/content/post/index", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "correct" }) }), env, context);
+    const cookie = unlock.headers.get("set-cookie").split(";", 1)[0];
+    assert.match(unlock.headers.get("set-cookie"), /HttpOnly; SameSite=Lax/);
+    const childHeaders = { "content-type": "application/json", cookie };
+    const correct = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: childId }) }), env, context);
     assert.equal(correct.status, 200);
     assert.equal(correct.headers.get("cache-control"), "no-store");
     assert.deepEqual(await correct.json(), { child: { id: childId, title: "第一章", icon: "📖", blocks: [{ id: "child-paragraph", type: "paragraph", richText: [{ text: "站内子页面正文" }] }], hasMore: false, truncated: false } });
     assert.equal(childBlockRequests, 1);
 
-    const nested = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: nestedId, password: "correct" }) }), env, context);
+    const nested = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: nestedId }) }), env, context);
     assert.equal(nested.status, 200);
     assert.equal((await nested.json()).child.id, nestedId, "nested ancestry must return the requested page rather than its intermediate parent");
     assert.equal(childBlockRequests, 2);
 
-    const referenced = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: referencedId, password: "correct" }) }), env, context);
+    const referenced = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: referencedId }) }), env, context);
     assert.equal(referenced.status, 200, "a page explicitly referenced by unlocked parent blocks must remain available on-site");
     assert.equal((await referenced.json()).child.title, "同步块引用页");
 
-    const nestedReference = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: nestedReferenceId, trail: [referencedId], password: "correct" }) }), env, context);
+    const nestedReference = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: nestedReferenceId, trail: [referencedId] }) }), env, context);
     assert.equal(nestedReference.status, 200, "a nested referenced page must be authorized through the verified trail");
     assert.equal((await nestedReference.json()).child.title, "引用页的下一级");
 
-    const richReference = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: richReferenceId, password: "correct" }) }), env, context);
+    const richReference = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: richReferenceId }) }), env, context);
     assert.equal(richReference.status, 200, "a Notion page linked from rich text must remain available on-site");
     assert.equal((await richReference.json()).child.title, "富文本引用页");
 
-    const unpublishedReference = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: unpublishedReferenceId, password: "correct" }) }), env, context);
+    const unpublishedReference = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: unpublishedReferenceId }) }), env, context);
     assert.equal(unpublishedReference.status, 404, "a referenced page outside the Published collection must stay private");
 
-    const outside = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: outsideId, password: "correct" }) }), env, context);
+    const outside = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: outsideId }) }), env, context);
     assert.equal(outside.status, 404);
     assert.equal(childBlockRequests, 5, "unpublished and unrelated pages must never expose their blocks");
   } finally { globalThis.fetch = originalFetch; }
@@ -1243,21 +1247,24 @@ test("large child pages stream through authenticated cursor chunks", async () =>
   };
   const env = { ASSETS: assets, DB: createRateLimitDb(), NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
   try {
-    const first = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "long-index", pageId: childId, password: "correct" }) }), env, context);
+    const unlock = await worker.fetch(new Request("http://localhost/api/content/post/long-index", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "correct" }) }), env, context);
+    const cookie = unlock.headers.get("set-cookie").split(";", 1)[0];
+    const childHeaders = { "content-type": "application/json", cookie };
+    const first = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "long-index", pageId: childId }) }), env, context);
     assert.equal(first.status, 200);
     const firstPayload = await first.json();
     assert.deepEqual(firstPayload.child.blocks.map((block) => block.id), ["chunk-1"]);
     assert.equal(firstPayload.child.hasMore, true);
     assert.equal(firstPayload.child.nextCursor, "cursor_2");
 
-    const second = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "long-index", pageId: childId, password: "correct", cursor: firstPayload.child.nextCursor }) }), env, context);
+    const second = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "long-index", pageId: childId, cursor: firstPayload.child.nextCursor }) }), env, context);
     assert.equal(second.status, 200);
     const secondPayload = await second.json();
     assert.deepEqual(secondPayload.child.blocks.map((block) => block.id), ["chunk-2"]);
     assert.equal(secondPayload.child.hasMore, false);
     assert.equal(secondPayload.child.nextCursor, undefined);
 
-    const invalid = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "long-index", pageId: childId, password: "correct", cursor: "$invalid" }) }), env, context);
+    const invalid = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "long-index", pageId: childId, cursor: "$invalid" }) }), env, context);
     assert.equal(invalid.status, 400);
     assert.equal(blockRequests.length, 2, "invalid cursors must be rejected before reading Notion blocks");
   } finally { globalThis.fetch = originalFetch; }

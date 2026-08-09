@@ -2,7 +2,7 @@
 
 import { ArrowLeft, ArrowRight, ArrowSquareOut, CaretRight, Eye, EyeSlash, FileText, LockKey, Rss } from "@phosphor-icons/react";
 import { FormEvent, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChildPage, ContentBlock, Post } from "../data/types";
+import type { ChildDatabase, ChildPage, ContentBlock, Post } from "../data/types";
 import { withoutHiddenNotionBlocks } from "../../shared/contentVisibility.js";
 import { CONTENT_REFRESH_INTERVAL_MS } from "./siteBootstrap";
 
@@ -69,7 +69,6 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const [childError, setChildError] = useState("");
   const [feeds, setFeeds] = useState<ExternalFeed[]>([]);
   const [feedsLoading, setFeedsLoading] = useState(false);
-  const passwordRef = useRef("");
   const childIdRef = useRef("");
   const childTrailRef = useRef<ChildPage[]>([]);
   const childRequestRef = useRef<AbortController | null>(null);
@@ -78,14 +77,13 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const contentEndpoint = contentKind === "page" ? "/api/content/page" : "/api/content/post";
   const childEndpoint = contentKind === "page" ? "/api/content/page-child" : "/api/content/child";
 
-  const loadChild = useCallback((pageId: string, passwordOverride?: string, updateHistory = true) => {
+  const loadChild = useCallback((pageId: string, _passwordOverride?: string, updateHistory = true) => {
     childRequestRef.current?.abort();
     const controller = new AbortController();
     childRequestRef.current = controller;
     setChildLoading(true); setChildOpening(true); setChildError("");
     scrollToArticleStart();
-    const password = passwordOverride ?? passwordRef.current;
-    requestChildPage(childEndpoint, { slug, pageId, password, trail: childTrailRef.current.map((item) => item.id) }, controller.signal)
+    requestChildPage(childEndpoint, { slug, pageId, trail: childTrailRef.current.map((item) => item.id) }, controller.signal)
       .then((child) => {
         childIdRef.current = child.id;
         setChildTrail((current) => {
@@ -119,7 +117,6 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     requestChildPage(childEndpoint, {
       slug,
       pageId: currentChild.id,
-      password: passwordRef.current,
       trail: childTrailRef.current.map((item) => item.id),
       cursor: currentChild.nextCursor,
     }, controller.signal)
@@ -154,7 +151,6 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
-        if (password && !data.locked) passwordRef.current = password;
         setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setTruncated(Boolean(data.truncated));
       })
       .catch((reason) => setError(reason.message || "文章暂时无法读取"))
@@ -167,9 +163,8 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     const refresh = async () => {
       if (inFlight) return;
       inFlight = true;
-      const password = passwordRef.current;
       try {
-        const response = await fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, password ? { method: "POST", signal: controller.signal, cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) } : { signal: controller.signal, cache: "no-store" });
+        const response = await fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, { signal: controller.signal, cache: "no-store" });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
         setPost(data.post);
@@ -179,7 +174,6 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
         setError("");
       } catch (reason) {
         if (reason instanceof Error && reason.name !== "AbortError") {
-          passwordRef.current = "";
           setError("实时同步暂时不可用，正在显示最近内容。");
         }
       } finally {
@@ -271,7 +265,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       </div>
       {post.tags.length ? <div className="tags">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
     </header> : null}
-    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} loading={childLoading} error={childError} /> : blocks.length ? <div className="notion-content"><Blocks blocks={visibleBlocks} onOpenChild={loadChild} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
+    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} loading={childLoading} error={childError} databaseContext={{ slug, contentKind, trail: childTrail.map((item) => item.id) }} breadcrumb={[post.title, ...childTrail.map((item) => item.title)]} /> : blocks.length ? <div className="notion-content"><Blocks blocks={visibleBlocks} onOpenChild={loadChild} databaseContext={{ slug, contentKind, trail: [] }} breadcrumb={[post.title]} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
   </>;
 }
 
@@ -298,7 +292,9 @@ function ChildLoading() {
   </section>;
 }
 
-function ChildDocument({ child, parentTitle, onBack, onOpenChild, onLoadMore, loading, error }: { child: ChildPage; parentTitle: string; onBack: () => void; onOpenChild: (pageId: string) => void; onLoadMore: () => void; loading: boolean; error: string }) {
+type DatabaseContext = { slug: string; contentKind: "post" | "page"; trail: string[] };
+
+function ChildDocument({ child, parentTitle, onBack, onOpenChild, onLoadMore, loading, error, databaseContext, breadcrumb }: { child: ChildPage; parentTitle: string; onBack: () => void; onOpenChild: (pageId: string) => void; onLoadMore: () => void; loading: boolean; error: string; databaseContext: DatabaseContext; breadcrumb: string[] }) {
   return <section className="child-document" aria-labelledby={`child-${child.id}`}>
     <nav className="child-document-nav" aria-label="子页面导航">
       <button type="button" onClick={onBack} aria-label={`返回 ${parentTitle}`}>
@@ -311,7 +307,7 @@ function ChildDocument({ child, parentTitle, onBack, onOpenChild, onLoadMore, lo
       <h2 id={`child-${child.id}`}>{child.title}</h2>
     </header>
     <div className="child-document-body">
-      <div className="notion-content"><Blocks blocks={child.blocks} onOpenChild={onOpenChild} /></div>
+      <div className="notion-content"><Blocks blocks={child.blocks} onOpenChild={onOpenChild} databaseContext={databaseContext} breadcrumb={breadcrumb} /></div>
     </div>
     {child.truncated ? <ContentLimitNotice /> : null}
     {child.hasMore ? <button className="child-page-more" type="button" onClick={onLoadMore} disabled={loading}>{loading ? "正在读取下一段…" : "继续读取"}</button> : null}
@@ -341,7 +337,7 @@ function PasswordForm({ onSubmit, error, loading }: { onSubmit: (value: string) 
       </div>
       <button className="password-submit" type="submit" disabled={loading}>{loading ? "正在验证…" : <><span>解锁文章</span><ArrowRight aria-hidden size={17} /></>}</button>
     </div>
-    <p id="password-hint" className="password-hint">密码只用于本次验证，不会保存在浏览器中。</p>
+    <p id="password-hint" className="password-hint">验证成功后会建立短期安全会话；密码不会写入浏览器存储。</p>
     {error && <p className="password-error" role="alert">{error}</p>}
   </form>;
 }
@@ -357,20 +353,20 @@ function collectHeadings(blocks: ContentBlock[]): TocItem[] {
   });
 }
 
-function Blocks({ blocks, onOpenChild, toc = collectHeadings(blocks) }: { blocks: ContentBlock[]; onOpenChild: (pageId: string) => void; toc?: TocItem[] }) {
+function Blocks({ blocks, onOpenChild, toc = collectHeadings(blocks), databaseContext, breadcrumb = [] }: { blocks: ContentBlock[]; onOpenChild: (pageId: string) => void; toc?: TocItem[]; databaseContext?: DatabaseContext; breadcrumb?: string[] }) {
   const output: ReactNode[] = [];
   for (let index = 0; index < blocks.length;) {
     const block = blocks[index];
     const listType = block.type === "bulleted_list_item" ? "ul" : block.type === "numbered_list_item" ? "ol" : "";
     if (!listType) {
-      output.push(<Block key={block.id} block={block} onOpenChild={onOpenChild} toc={toc} />);
+      output.push(<Block key={block.id} block={block} onOpenChild={onOpenChild} toc={toc} databaseContext={databaseContext} breadcrumb={breadcrumb} />);
       index += 1;
       continue;
     }
     const items: ContentBlock[] = [];
     while (index < blocks.length && blocks[index].type === block.type) items.push(blocks[index++]);
     const List = listType;
-    output.push(<List key={`${block.id}-list`} className="notion-list">{items.map((item) => <li key={item.id}><Rich value={item.richText} onOpenChild={onOpenChild} />{item.children?.length ? <Blocks blocks={item.children} onOpenChild={onOpenChild} toc={toc} /> : null}</li>)}</List>);
+    output.push(<List key={`${block.id}-list`} className="notion-list">{items.map((item) => <li key={item.id}><Rich value={item.richText} onOpenChild={onOpenChild} />{item.children?.length ? <Blocks blocks={item.children} onOpenChild={onOpenChild} toc={toc} databaseContext={databaseContext} breadcrumb={breadcrumb} /> : null}</li>)}</List>);
   }
   return <>{output}</>;
 }
@@ -479,8 +475,10 @@ function NotionHeicImage({ src, identity, alt, caption }: { src: string; identit
           controller.signal.throwIfAborted();
           const response = await fetch(sourceRef.current, { signal: controller.signal });
           if (!response.ok) throw new Error("Image fetch failed");
+          const blob = await response.blob();
+          if (!/image\/(?:hei[cf])/i.test(response.headers.get("content-type") || blob.type)) return blob;
           const { heicTo } = await import("heic-to/csp");
-          return heicTo({ blob: await response.blob(), type: "image/jpeg", quality: 0.86 });
+          return heicTo({ blob, type: "image/jpeg", quality: 0.86 });
         });
         if (!active) return;
         objectUrl = URL.createObjectURL(jpeg);
@@ -514,8 +512,39 @@ function NotionImage({ src, alt, caption }: { src: string; alt: string; caption?
   return <figure><img src={src} alt={alt} loading="lazy" />{caption ? <figcaption>{caption}</figcaption> : null}</figure>;
 }
 
-function Block({ block, onOpenChild, toc }: { block: ContentBlock; onOpenChild: (pageId: string) => void; toc: TocItem[] }) {
-  const children = block.children?.length ? <Blocks blocks={block.children} onOpenChild={onOpenChild} toc={toc} /> : null;
+function EquationBlock({ expression }: { expression: string }) {
+  const [html, setHtml] = useState("");
+  useEffect(() => {
+    let active = true;
+    import("katex").then(({ default: katex }) => {
+      if (active) setHtml(katex.renderToString(expression, { throwOnError: false, strict: "ignore", trust: false, displayMode: true }));
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [expression]);
+  return <div className="equation" aria-label={`数学公式：${expression}`}>{html ? <span dangerouslySetInnerHTML={{ __html: html }} /> : expression}</div>;
+}
+
+function ChildDatabaseBlock({ block, context }: { block: ContentBlock; context: DatabaseContext }) {
+  const [database, setDatabase] = useState<ChildDatabase>();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const load = async (cursor = "") => {
+    if (loading || !block.databaseId) return;
+    setLoading(true); setError("");
+    try {
+      const response = await fetch("/api/content/database", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...context, databaseId: block.databaseId, cursor: cursor || undefined }) });
+      const value = await response.json();
+      if (!response.ok) throw new Error(value.error || "数据库读取失败");
+      setDatabase((current) => current && cursor ? { ...value.database, rows: [...current.rows, ...value.database.rows] } : value.database);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "数据库读取失败"); }
+    finally { setLoading(false); }
+  };
+  if (!database) return <div className="notion-child-database"><button type="button" onClick={() => void load()} disabled={loading}><FileText aria-hidden size={18} /><span><small>NOTION DATABASE</small><strong>{block.caption || "子数据库"}</strong></span><CaretRight aria-hidden size={16} /></button>{error ? <p role="alert">{error}</p> : null}</div>;
+  return <section className="notion-child-database is-open"><header><small>NOTION DATABASE</small><h3>{database.title}</h3></header><div className="notion-database-grid">{database.rows.map((row) => <article key={row.id}><h4>{row.icon ? <span aria-hidden>{row.icon}</span> : null}{row.title}</h4>{row.fields.map((field) => <p key={field.name}><small>{field.name}</small><span>{field.value}</span></p>)}</article>)}</div>{database.hasMore ? <button type="button" onClick={() => void load(database.nextCursor)} disabled={loading}>{loading ? "正在读取…" : "继续读取"}</button> : null}{error ? <p role="alert">{error}</p> : null}</section>;
+}
+
+function Block({ block, onOpenChild, toc, databaseContext, breadcrumb }: { block: ContentBlock; onOpenChild: (pageId: string) => void; toc: TocItem[]; databaseContext?: DatabaseContext; breadcrumb: string[] }) {
+  const children = block.children?.length ? <Blocks blocks={block.children} onOpenChild={onOpenChild} toc={toc} databaseContext={databaseContext} breadcrumb={breadcrumb} /> : null;
   const className = block.color ? `notion-block notion-color-${block.color}` : "notion-block";
   switch (block.type) {
     case "paragraph": return <div className={className}><p><Rich value={block.richText} onOpenChild={onOpenChild} /></p>{children}</div>;
@@ -538,15 +567,15 @@ function Block({ block, onOpenChild, toc }: { block: ContentBlock; onOpenChild: 
     case "pdf": return block.url ? <figure className={`${className} notion-pdf`}><iframe src={block.url} title={block.caption || "PDF 文档"} loading="lazy" /><a href={block.url} target="_blank" rel="noreferrer">在新窗口打开 PDF<ArrowSquareOut aria-hidden size={15} /></a>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
     case "file": return block.url ? <a className="bookmark" href={block.url} target="_blank" rel="noreferrer"><span><strong>{block.caption || "下载附件"}</strong><small>{bookmarkSource(block.url)}</small></span><ArrowSquareOut aria-hidden size={16} /></a> : null;
     case "child_page": return block.pageId ? <a className={`${className} notion-child-page`} href={`?child=${encodeURIComponent(block.pageId)}`} onClick={(event) => { event.preventDefault(); onOpenChild(block.pageId!); }}><FileText aria-hidden size={18} /><strong>{block.caption || "子页面"}</strong><CaretRight aria-hidden size={16} /></a> : null;
-    case "child_database": return block.url ? <a className={`${className} notion-child-page`} href={block.url} target="_blank" rel="noreferrer"><FileText aria-hidden size={18} /><strong>{block.caption || "子数据库"}</strong><ArrowSquareOut aria-hidden size={16} /></a> : null;
-    case "equation": return <div className="equation" aria-label="数学公式">{block.caption}</div>;
+    case "child_database": return block.databaseId && databaseContext ? <ChildDatabaseBlock block={block} context={databaseContext} /> : null;
+    case "equation": return <EquationBlock expression={block.caption || ""} />;
     case "table": return <div className="notion-table" role="table">{children}</div>;
     case "table_row": return <div className="notion-table-row" role="row">{block.children?.map((cell, index) => <div role="cell" key={`${block.id}-${index}`}><Rich value={cell.richText} onOpenChild={onOpenChild} /></div>)}</div>;
     case "column_list": return <div className={`${className} columns`}>{children}</div>;
     case "column": return <div className="column">{children}</div>;
     case "synced_block": case "template": return <div className={className}>{children}</div>;
     case "table_of_contents": return toc.length ? <nav className={`${className} notion-toc`} aria-label="文章目录"><strong>目录</strong>{toc.map((item) => <a href={`#${item.id}`} style={{ "--toc-level": item.level } as CSSProperties} key={item.id}>{item.label}</a>)}</nav> : null;
-    case "breadcrumb": return <div className={`${className} notion-breadcrumb`}>当前位置</div>;
+    case "breadcrumb": return <nav className={`${className} notion-breadcrumb`} aria-label="页面层级">{breadcrumb.map((item, index) => <span key={`${item}-${index}`}>{index ? " / " : ""}{item}</span>)}</nav>;
     case "unsupported": return <aside className="unsupported">此内容块暂不支持显示。</aside>;
     default: return children ? <div>{children}</div> : <aside className="unsupported">未识别的内容块：{block.type}</aside>;
   }

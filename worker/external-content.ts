@@ -1,5 +1,7 @@
 /* External metadata and feed gateway. Kept separate from the Notion/SSR router. */
 /* eslint-disable @typescript-eslint/no-explicit-any -- normalized Notion blocks enter at this boundary. */
+import { readFeedCache, writeFeedCache } from "../db/feed-cache";
+import type { PasswordRateLimitDatabase } from "../db/rate-limit";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
 const RSS_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -141,10 +143,19 @@ function base64UrlToBuffer(value: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-export async function fetchExternalFeed(feedUrl: string): Promise<ExternalFeed | null> {
+export async function fetchExternalFeed(feedUrl: string, db?: PasswordRateLimitDatabase, force = false): Promise<ExternalFeed | null> {
   if (!feedUrl || feedUrl.length > 2_048 || !isSafeExternalUrl(feedUrl)) return null;
+  const now = Date.now();
   const cached = rssFeedCache.get(feedUrl);
-  if (cached && cached.expiresAt > Date.now()) return cached.feed;
+  if (!force && cached && cached.expiresAt > now) return cached.feed;
+  const stored = await readFeedCache(db, feedUrl);
+  if (!force && stored?.expires_at && stored.expires_at > now) {
+    try {
+      const feed = JSON.parse(stored.payload) as ExternalFeed;
+      rssFeedCache.set(feedUrl, { expiresAt: stored.expires_at, feed });
+      return feed;
+    } catch { /* Refresh a corrupt row. */ }
+  }
   let current = feedUrl;
   try {
     for (let redirect = 0; redirect < 3; redirect++) {
@@ -157,10 +168,15 @@ export async function fetchExternalFeed(feedUrl: string): Promise<ExternalFeed |
       }
       if (!response.ok || Number(response.headers.get("content-length") || "0") > MAX_FEED_BYTES) break;
       const feed = parseExternalFeed(await readLimitedText(response, MAX_FEED_BYTES), current);
-      rssFeedCache.set(feedUrl, { expiresAt: Date.now() + RSS_CACHE_TTL_MS, feed });
+      const fetchedAt = Date.now();
+      rssFeedCache.set(feedUrl, { expiresAt: fetchedAt + RSS_CACHE_TTL_MS, feed });
+      await writeFeedCache(db, feedUrl, JSON.stringify(feed), fetchedAt, fetchedAt + RSS_CACHE_TTL_MS);
       return feed;
     }
   } catch (reason) { console.warn(reason instanceof Error ? reason.message : "External RSS fetch failed"); }
+  if (stored?.payload) {
+    try { return JSON.parse(stored.payload) as ExternalFeed; } catch { /* Ignore corrupt stale rows. */ }
+  }
   rssFeedCache.set(feedUrl, { expiresAt: Date.now() + RSS_CACHE_TTL_MS, feed: null });
   return null;
 }
