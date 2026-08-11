@@ -93,7 +93,12 @@ export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts
               <Icon aria-hidden size={16} />{label}
             </button>
           ))}
-          {status === "ready" && <span>{sourceCount} 篇公开文章{partial ? " · 部分正文暂未读取" : " · 标题与正文"}</span>}
+          {status === "ready" && (
+            <span>
+              {posts.length} 篇公开文章 · {sourceCount} 篇参与词频
+              {partial ? " · 部分正文暂未读取" : ""}
+            </span>
+          )}
         </div>
 
         <div className={`word-cloud-canvas mode-${mode}`} aria-live="polite">

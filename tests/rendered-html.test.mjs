@@ -243,6 +243,8 @@ test("daylight theme uses a clear reference-led palette and word cloud offers si
   assert.match(css, /\.word-cloud-canvas\.mode-constellation/);
   assert.match(css, /\.word-cloud-canvas\.mode-rank/);
   assert.match(css, /@media \(max-width: 420px\)/);
+  assert.match(cloud, /\{posts\.length\} 篇公开文章/);
+  assert.match(cloud, /\{sourceCount\} 篇参与词频/);
   assert.match(css, /@media \(max-height: 680px\)/);
   assert.match(css, /@media \(max-width: 900px\) and \(max-height: 520px\)/);
   assert.match(css, /overscroll-behavior-inline: contain/);
