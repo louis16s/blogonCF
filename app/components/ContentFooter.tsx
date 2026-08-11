@@ -28,13 +28,19 @@ export function ContentFooter({ id, siteConfig, postCount }: ContentFooterProps)
   return (
     <footer id={id} className="content-footer">
       <div className="footer-copy">
-        <p className="footer-note">{typeof postCount === "number" ? `这里收录着 ${postCount} 个文章。不赶时间，慢慢翻。` : quote.lead}</p>
+        <p className="footer-note">{typeof postCount === "number" ? config.postCountText.replaceAll("{count}", String(postCount)) : quote.lead}</p>
         <p>{quote.sub}</p>
       </div>
       <div className="footer-signature">
         <p>© {config.author} {years}</p>
-        <p>在 <a href="https://www.notion.so/" target="_blank" rel="noreferrer">Notion</a> 创造，Cloudflare 带它兜风。</p>
+        <FooterCredit text={config.footerCredit} />
       </div>
     </footer>
   );
+}
+
+function FooterCredit({ text }: { text: string }) {
+  const match = /notion/i.exec(text);
+  if (!match) return <p>{text}</p>;
+  return <p>{text.slice(0, match.index)}<a href="https://www.notion.so/" target="_blank" rel="noreferrer">{match[0]}</a>{text.slice(match.index + match[0].length)}</p>;
 }

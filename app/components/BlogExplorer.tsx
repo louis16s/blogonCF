@@ -185,6 +185,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
     <div className="blog-frame">
       <SiteSidebar
         siteLinks={siteLinks}
+        siteConfig={siteConfig}
         postCount={posts.length}
         syncState={syncState}
         categories={categories}
@@ -196,7 +197,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
       <main className="blog-main">
         <header className="blog-toolbar">
           <div className="welcome-block">
-            <p className="welcome"><Sparkle aria-hidden size={19} weight="fill" /><span>blog 复活啦！<span className="welcome-tagline">是新的一年真好啊，绝胜烟柳满皇都！</span></span></p>
+            <p className="welcome"><Sparkle aria-hidden size={19} weight="fill" /><span>{siteConfig.homeNotice}<span className="welcome-tagline">{siteConfig.homeNoticeSubtitle}</span></span></p>
             {syncState === "unavailable" && posts.length > 0 && <button className="sync-warning" type="button" onClick={retrySync}>显示最近内容 · 重试同步</button>}
           </div>
 

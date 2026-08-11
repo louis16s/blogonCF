@@ -167,6 +167,11 @@ Notion 自动转换出的 `———[hide]———` 也会被识别。标记和
 
 - `AUTHOR`：页脚作者
 - `SINCE`：创始年份
+- `HOME_NOTICE`：首页公告主句
+- `HOME_NOTICE_SUBTITLE`：首页公告副句
+- `POST_COUNT_TEXT`：首页文章数量文案，使用 `{count}` 作为数量占位符
+- `FOOTER_CREDIT`：页脚来源说明；其中的 `Notion` 会保留官网链接
+- `REPOSITORY_URL`：侧栏项目仓库地址，仅接受 GitHub HTTPS 仓库链接
 - `FOOTER_QUOTES`：页脚随机短句；每行一组，主句与副句用 `｜` 分隔
 
 配置项需要启用；年份会从文本中提取四位数。未配置时使用项目默认值。

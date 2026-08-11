@@ -23,6 +23,11 @@ export type SiteLink = {
 export type SiteConfig = {
   author: string;
   since: string;
+  homeNotice: string;
+  homeNoticeSubtitle: string;
+  postCountText: string;
+  footerCredit: string;
+  repositoryUrl: string;
   footerQuotes: FooterQuote[];
 };
 
@@ -45,6 +50,11 @@ export const DEFAULT_FOOTER_QUOTES: FooterQuote[] = [
 export const DEFAULT_SITE_CONFIG: SiteConfig = {
   author: "louis16s",
   since: "2020",
+  homeNotice: "blog 复活啦！",
+  homeNoticeSubtitle: "是新的一年真好啊，绝胜烟柳满皇都！",
+  postCountText: "这里收录着 {count} 个文章。不赶时间，慢慢翻。",
+  footerCredit: "在 Notion 创造，Cloudflare 带它兜风。",
+  repositoryUrl: "https://github.com/louis16s/blogonCF",
   footerQuotes: DEFAULT_FOOTER_QUOTES,
 };
 

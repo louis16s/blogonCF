@@ -1093,7 +1093,16 @@ const DEFAULT_FOOTER_QUOTES = [
   { lead: "感谢看到最后。这里没有结论，只有一些留下来的光。", sub: "愿每一次记录，都比上一次更接近真实。" },
 ];
 
-function defaultSiteConfig() { return { author: "louis16s", since: "2020", footerQuotes: DEFAULT_FOOTER_QUOTES }; }
+function defaultSiteConfig() { return {
+  author: "louis16s",
+  since: "2020",
+  homeNotice: "blog 复活啦！",
+  homeNoticeSubtitle: "是新的一年真好啊，绝胜烟柳满皇都！",
+  postCountText: "这里收录着 {count} 个文章。不赶时间，慢慢翻。",
+  footerCredit: "在 Notion 创造，Cloudflare 带它兜风。",
+  repositoryUrl: "https://github.com/louis16s/blogonCF",
+  footerQuotes: DEFAULT_FOOTER_QUOTES,
+}; }
 
 function toPublicSiteConfig(pages: any[]) {
   const config = defaultSiteConfig();
@@ -1104,6 +1113,11 @@ function toPublicSiteConfig(pages: any[]) {
     const value = plain(properties["配置值"]).trim();
     if (key === "AUTHOR" && value) config.author = value.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 80) || config.author;
     if (key === "SINCE") config.since = value.match(/(?:19|20)\d{2}/)?.[0] || config.since;
+    if (key === "HOME_NOTICE" && value) config.homeNotice = cleanConfigText(value, 80) || config.homeNotice;
+    if (key === "HOME_NOTICE_SUBTITLE" && value) config.homeNoticeSubtitle = cleanConfigText(value, 140) || config.homeNoticeSubtitle;
+    if (key === "POST_COUNT_TEXT" && value) config.postCountText = cleanConfigText(value, 160) || config.postCountText;
+    if (key === "FOOTER_CREDIT" && value) config.footerCredit = cleanConfigText(value, 160) || config.footerCredit;
+    if (key === "REPOSITORY_URL" && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/i.test(value)) config.repositoryUrl = value.slice(0, 240);
     if (key === "FOOTER_QUOTES" && value) {
       const quotes = value.split(/\r?\n/)
         .map((line) => line.split(/\s*[｜|]\s*/, 2).map((part) => part.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").trim()))
@@ -1114,6 +1128,10 @@ function toPublicSiteConfig(pages: any[]) {
     }
   }
   return config;
+}
+
+function cleanConfigText(value: string, limit: number) {
+  return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").trim().slice(0, limit);
 }
 
 function title(property: any): string { return richText(property?.title); }

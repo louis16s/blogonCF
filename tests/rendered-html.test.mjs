@@ -195,15 +195,14 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(sidebar, /aboutLink && \(\s*<a href=\{aboutLink\.href\}/);
   assert.match(sidebar, /<a href=\{aboutLink\.href\}.*aboutLink\.title/s);
   assert.doesNotMatch(sidebar, /Notion<\/a> 创造，Cloudflare 带它兜风。/);
-  assert.match(footer, /在 <a href="https:\/\/www\.notion\.so\/"/);
-  assert.match(footer, /Notion<\/a> 创造，Cloudflare 带它兜风。/);
+  assert.match(footer, /<FooterCredit text=\{config\.footerCredit\}/);
+  assert.match(footer, /function FooterCredit/);
   assert.match(sidebar, /\$\{resolvedPostCount\} 篇公开文章/);
   assert.match(sidebar, /Notion 实时同步中/);
-  assert.match(sidebar, /href="https:\/\/github\.com\/louis16s\/blogonCF"[\s\S]*>blogonCF/);
+  assert.match(sidebar, /href=\{config\.repositoryUrl\}[\s\S]*>blogonCF/);
   assert.ok(sidebar.indexOf("newsLink.href") < sidebar.indexOf("rssLink.href"), "RSS should follow the news link");
   assert.ok(sidebar.indexOf('className="sidebar-cloud-link"') < sidebar.indexOf('className="sidebar-section sidebar-tools"'), "word cloud should precede tools");
-  assert.match(sidebar, /aria-label="返回主页" title="返回主页"/);
-  assert.doesNotMatch(sidebar, /HOME|<strong>返回主页/);
+  assert.doesNotMatch(sidebar, /sidebar-home-link|showHomeLink|返回主页/);
   assert.ok(sidebar.indexOf('>blogonCF</a>') < sidebar.lastIndexOf("rssLink &&"), "RSS should follow blogonCF in the sidebar footer");
   assert.doesNotMatch(sidebar, /©/);
   assert.doesNotMatch(blog, /className="sync-meta"/);
@@ -214,7 +213,7 @@ test("overview renders every article immediately while retaining search and cate
   assert.doesNotMatch(blog, /SortMode|最新优先|最早优先|sort-select/);
   assert.doesNotMatch(blog, /同步 Notion 中的跳转菜单/);
   assert.doesNotMatch(blog, /首页全部展开/);
-  assert.match(footer, /这里收录着 \$\{postCount\} 个文章。不赶时间，慢慢翻。/);
+  assert.match(footer, /config\.postCountText\.replaceAll\("\{count\}", String\(postCount\)\)/);
   assert.match(footer, /config\.footerQuotes/);
   assert.match(footer, /Math\.random\(\) \* quotes\.length/);
   assert.match(footer, /© \{config\.author\} \{years\}/);
@@ -457,10 +456,11 @@ test("article header stays compact and the password form supports keyboard submi
   assert.match(css, /\.article-shell article \{[^}]*padding: 8px 0 70px;/);
   assert.match(articlePage, /<SiteSidebar \/>/);
   assert.doesNotMatch(articlePage, /showHomeLink/);
-  assert.match(sitePage, /<SiteSidebar showHomeLink \/>/);
+  assert.match(sitePage, /<SiteSidebar \/>/);
+  assert.doesNotMatch(sitePage, /showHomeLink|返回主页/);
   assert.doesNotMatch(articlePage, /返回全部文章|article-return/);
   assert.doesNotMatch(sitePage, /返回全部文章|article-return/);
-  assert.match(css, /\.sidebar-home-link \{/);
+  assert.doesNotMatch(css, /\.sidebar-home-link/);
   assert.match(article, /className="bookmark-preview"/);
   assert.match(article, /className="bookmark-copy"/);
   assert.match(article, /\/api\/content\/link-preview\?url=/);
@@ -500,9 +500,7 @@ test("about and other Published Notion pages render inside the site shell", asyn
     assert.match(html, /这是本站渲染的关于我正文。/);
     assert.match(html, /爱范儿/);
     assert.match(html, /ifanr\.com/);
-    assert.match(html, /class="sidebar-home-link"/);
-    assert.match(html, /返回主页/);
-    assert.doesNotMatch(html, />返回主页</);
+    assert.doesNotMatch(html, /sidebar-home-link|返回主页/);
     assert.doesNotMatch(html, /返回全部文章/);
     assert.doesNotMatch(html, /href="https:\/\/www\.notion\.so\/118ad771/);
     assert.doesNotMatch(html, /fas fa-info/);
@@ -878,6 +876,11 @@ test("content endpoint maps only filtered metadata while keeping browser respons
       { id: "author", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "Notion 作者" }] }, "其他私密项": { rich_text: [{ plain_text: "不得输出" }] } } },
       { id: "since", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "`SINCE`" }] }, "配置值": { rich_text: [{ plain_text: "始于 2019 年" }] } } },
       { id: "quotes", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "FOOTER_QUOTES" }] }, "配置值": { rich_text: [{ plain_text: "第一句｜第二句\n第三句 | 第四句" }] } } },
+      { id: "notice", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "HOME_NOTICE" }] }, "配置值": { rich_text: [{ plain_text: "新的公告" }] } } },
+      { id: "notice-subtitle", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "HOME_NOTICE_SUBTITLE" }] }, "配置值": { rich_text: [{ plain_text: "新的副句" }] } } },
+      { id: "count-text", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "POST_COUNT_TEXT" }] }, "配置值": { rich_text: [{ plain_text: "共 {count} 篇" }] } } },
+      { id: "credit", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "FOOTER_CREDIT" }] }, "配置值": { rich_text: [{ plain_text: "由 Notion 与 Cloudflare 驱动" }] } } },
+      { id: "repository", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "REPOSITORY_URL" }] }, "配置值": { rich_text: [{ plain_text: "https://github.com/example/blog" }] } } },
       { id: "disabled", properties: { "启用": { checkbox: false }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "禁用作者" }] } } },
     ] });
     assert.match(String(input), /\/v1\/data_sources\/source-id\/query$/);
@@ -908,6 +911,11 @@ test("content endpoint maps only filtered metadata while keeping browser respons
     assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://hd.530555.xyz", "tool"], ["带跳转的工具", "https://annotated.example", "tool"], ["关于我", "/about", "nav"], ["资讯", "/page/links", "nav"]]);
     assert.equal(payload.config.author, "Notion 作者");
     assert.equal(payload.config.since, "2019");
+    assert.equal(payload.config.homeNotice, "新的公告");
+    assert.equal(payload.config.homeNoticeSubtitle, "新的副句");
+    assert.equal(payload.config.postCountText, "共 {count} 篇");
+    assert.equal(payload.config.footerCredit, "由 Notion 与 Cloudflare 驱动");
+    assert.equal(payload.config.repositoryUrl, "https://github.com/example/blog");
     assert.deepEqual(payload.config.footerQuotes, [{ lead: "第一句", sub: "第二句" }, { lead: "第三句", sub: "第四句" }]);
     assert.doesNotMatch(JSON.stringify(payload), /不得输出|禁用作者/);
     assert.deepEqual(requestBody.filter.and.map((item) => item.property), ["type", "status"]);

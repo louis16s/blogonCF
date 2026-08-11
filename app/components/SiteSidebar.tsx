@@ -9,16 +9,16 @@ import {
   ArrowSquareOut,
   FolderOpen,
   GithubLogo,
-  HouseLine,
   Info,
   List,
   Newspaper,
   Rss,
   Wrench,
 } from "@phosphor-icons/react";
-import type { SiteLink } from "../data/types";
+import type { SiteConfig, SiteLink } from "../data/types";
 import { usePersistedDisclosure } from "./usePersistedDisclosure";
 import { loadSiteBootstrap } from "./siteBootstrap";
+import { useSiteConfig } from "./useSiteConfig";
 import { useSiteNavigation } from "./useSiteNavigation";
 
 export type ContentSyncState = "loading" | "live" | "unavailable";
@@ -30,11 +30,12 @@ type SidebarProps = {
   categories?: string[];
   activeCategory?: string;
   onCategoryChange?: (category: string) => void;
-  showHomeLink?: boolean;
+  siteConfig?: SiteConfig;
 };
 
-export function SiteSidebar({ siteLinks = [], postCount, syncState, categories = [], activeCategory, onCategoryChange, showHomeLink = false }: SidebarProps) {
+export function SiteSidebar({ siteLinks = [], postCount, syncState, categories = [], activeCategory, onCategoryChange, siteConfig }: SidebarProps) {
   const resolvedLinks = useSiteNavigation(siteLinks);
+  const config = useSiteConfig(siteConfig);
   const toolsDisclosure = usePersistedDisclosure({ key: "blog.sidebar.tools.v1" });
   const categoriesDisclosure = usePersistedDisclosure({ key: "blog.sidebar.categories.v2", defaultOpen: false });
   const [articlePageSync, setArticlePageSync] = useState<{ count?: number; state: ContentSyncState }>({ state: "loading" });
@@ -77,10 +78,9 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           <Link className="sidebar-identity" href="/" aria-label="返回首页">
             {/* This is the avatar used by the reference site. */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/louis16s-avatar.jpg" alt="louis16s" width="52" height="52" />
-            <strong>louis16s</strong>
+            <img src="/louis16s-avatar.jpg" alt={config.author} width="52" height="52" />
+            <strong>{config.author}</strong>
           </Link>
-          {showHomeLink && <Link className="sidebar-home-link" href="/" aria-label="返回主页" title="返回主页"><HouseLine aria-hidden size={17} weight="duotone" /></Link>}
         </div>
 
         <nav className="sidebar-nav" aria-label="主导航">
@@ -184,7 +184,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
               <span>{countLabel}</span>
               <span className={`source ${resolvedSyncState === "live" ? "live" : ""}`}>{syncLabel}</span>
             </div>
-            <a href="https://github.com/louis16s/blogonCF" target="_blank" rel="noreferrer">blogonCF<small>GitHub</small></a>
+            <a href={config.repositoryUrl} target="_blank" rel="noreferrer">blogonCF<small>GitHub</small></a>
           </nav>
         </details>
 
@@ -195,7 +195,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           <span>{countLabel}</span>
           <span className={`source ${resolvedSyncState === "live" ? "live" : ""}`}>{syncLabel}</span>
         </div>
-        <a className="sidebar-repo-link" href="https://github.com/louis16s/blogonCF" target="_blank" rel="noreferrer"><GithubLogo aria-hidden size={14} />blogonCF</a>
+        <a className="sidebar-repo-link" href={config.repositoryUrl} target="_blank" rel="noreferrer"><GithubLogo aria-hidden size={14} />blogonCF</a>
         {rssLink && <Link className="sidebar-repo-link" href={rssLink.href}><Rss aria-hidden size={14} />RSS 订阅</Link>}
       </div>
     </aside>
