@@ -1355,7 +1355,7 @@ test("article renderer opens child pages internally instead of linking to Notion
   assert.match(article, /返回上一级/);
   assert.match(article, /new IntersectionObserver/);
   assert.match(article, /rootMargin: "1200px 0px"/);
-  assert.doesNotMatch(article, />继续读取</);
+  assert.doesNotMatch(article, /继续读取/);
   assert.doesNotMatch(css, /\.child-document::before/);
   assert.match(css, /\.child-document-head \{[^}]*border-bottom:/);
   assert.match(css, /\.child-document-body>\.notion-content \{ padding-top:/);
