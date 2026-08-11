@@ -12,9 +12,8 @@
 
 - 首页直接显示全部公开文章，按 Notion 分类组织
 - Notion 常用块、公式、面包屑、关联页面、嵌套子页面、子数据库、图片和带密码文章的站内渲染
-- `Menu + Page` 自动配对，同时兼容 NotionNext 的旧配置方式
-- 已发布的 `Page` 即使没有对应 `Menu`，也会自动成为本站页面和导航入口
-- `SubMenu`/旧式带链接记录自动作为小工具
+- `Page` 直接成为站内页面和导航入口，不需要重复菜单记录
+- `Link` 作为外部小工具或跳转入口
 - RSS、外部订阅聚合、全文搜索、多样式词云和浅色/深色主题
 - Cloudflare D1 密码尝试限流
 - 响应式桌面与移动端布局
@@ -44,7 +43,7 @@ cd my-blog && pnpm setup:cloudflare
 | --- | --- | --- | --- |
 | `NOTION_TOKEN` | Secret | 是 | Notion Integration 的内部集成密钥 |
 | `NOTION_DATA_SOURCE_ID` | Variable | 建议 | 博客数据库的 Data Source ID；省略时使用项目默认示例值 |
-| `NOTION_CONFIG_DATA_SOURCE_ID` | Variable | 可选 | NotionNext 配置中心的 Data Source ID |
+| `NOTION_CONFIG_DATA_SOURCE_ID` | Variable | 可选 | 站点公共配置数据库的 Data Source ID |
 | `SITE_URL` | Variable | 可选 | RSS 与站点地图使用的规范站点地址；未设置时使用当前请求域名 |
 
 无论使用哪种方式，都要把文章数据库和可选的配置数据库共享给同一个 Notion Integration。
@@ -118,45 +117,28 @@ pnpm release
 
 ## Notion 数据库约定
 
-项目沿用 NotionNext 的核心字段。字段名区分大小写时请保持一致。
+项目直接读取 Notion 数据库。字段名区分大小写时请保持一致。
 
 | 字段 | 类型 | 用途 |
 | --- | --- | --- |
 | `title` | Title | 标题 |
-| `type` | Select | `Post`、`Page`、`Menu` 或 `SubMenu` |
+| `type` | Select | `Post`、`Page` 或 `Link` |
 | `status` | Select | 只有 `Published` 对外可见 |
-| `slug` | Rich text | 文章/页面路径，或菜单、小工具的跳转地址 |
+| `slug` | Rich text | 文章/页面路径，或 Link 的跳转地址 |
 | `summary` | Rich text | 摘要；其中的 Notion 超链接也可作为跳转目标 |
 | `category` | Select | 文章分类 |
 | `tags` | Multi-select | 文章标签 |
 | `date` | Date | 发布时间和排序 |
 | `password` | Rich text | 非空时启用密码保护 |
 
-### Menu 与 Page 如何配对
-
-推荐使用清晰的两条记录：
-
-```text
-Menu: title=关于我, slug=me, status=Published
-Page: title=关于我_, slug=me, status=Published
-```
-
-系统按以下顺序配对：
-
-1. Menu 属性中的 Notion 页面链接指向 Page
-2. 两者 `slug` 相同
-3. 去掉 Page 标题末尾下划线后，标题相同
-
-配对后，Menu 提供入口名称和图标，Page 提供本站渲染的正文。若只有 Page，仍会自动生成入口；若旧配置只有 Menu，仍按其安全链接处理。`RSS` 会固定映射到 `/rss.xml`。
-
-### NotionNext 兼容建议
+### 内容类型
 
 - 文章继续使用 `Post + Published`
 - 独立内容页使用 `Page + Published`
-- 一级入口使用 `Menu + Published`
-- 小工具使用 `SubMenu + Published`，目标可写在 URL 属性、`slug` 的文字链接或其他带链接的富文本属性中
+- 外部小工具使用 `Link + Published`，目标可写在 URL 属性、`slug` 的文字链接或其他带链接的富文本属性中
 - “关于我”可使用 `me` slug，会映射到 `/about`
 - 其余页面使用 `/page/{slug}`
+- 标题或 slug 为 `RSS` 的 Page 会映射到 `/rss.xml`
 
 ### 资讯页聚合外部 RSS
 
@@ -189,7 +171,7 @@ Notion 自动转换出的 `———[hide]———` 也会被识别。标记和
 
 配置项需要启用；年份会从文本中提取四位数。未配置时使用项目默认值。
 
-`type` 应保持为单选（Select）。NotionNext 会分别读取 `Menu` 作为入口、`Page` 作为正文，再通过相同 slug 或页面链接把两条记录配对。不要把 `type` 改成 Multi-select；NotionNext 和本项目都按单个 `select.name` 判断类型，多选会破坏现有兼容。
+`type` 应保持为单选（Select）。不要改成 Multi-select，否则查询条件无法稳定区分文章、页面和外部链接。
 
 ## 本地开发
 

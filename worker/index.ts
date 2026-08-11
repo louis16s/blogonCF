@@ -679,7 +679,10 @@ async function queryPosts(env: Env, slug?: string, pageSize = 100): Promise<any[
 
 async function querySitePages(env: Env, slug?: string, pageSize = 100): Promise<any[]> {
   const filters: any[] = [
-    { property: "type", select: { equals: "Page" } },
+    { or: [
+      { property: "type", select: { equals: "Page" } },
+      { property: "type", select: { equals: "Menu" } },
+    ] },
     { property: "status", select: { equals: "Published" } },
   ];
   if (slug) filters.push({ property: "slug", rich_text: { equals: slug } });
@@ -690,7 +693,7 @@ async function querySitePages(env: Env, slug?: string, pageSize = 100): Promise<
       method: "POST",
       body: JSON.stringify({ filter: { and: filters }, sorts: [{ property: "date", direction: "descending" }], page_size: pageSize, ...(cursor ? { start_cursor: cursor } : {}) }),
     });
-    if (Array.isArray(payload.results)) results.push(...payload.results.filter((page: any) => page.properties?.type?.select?.name === "Page"));
+    if (Array.isArray(payload.results)) results.push(...payload.results.filter((page: any) => ["Page", "Menu"].includes(page.properties?.type?.select?.name)));
     cursor = !slug && payload.has_more && typeof payload.next_cursor === "string" ? payload.next_cursor : undefined;
   } while (cursor);
   return results;
@@ -727,20 +730,13 @@ async function querySiteLinks(env: Env): Promise<any[]> {
     const payload = await notionFetch(env, `/data_sources/${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID}/query`, {
       method: "POST",
       body: JSON.stringify({
-        filter: { and: [
-          { property: "status", select: { equals: "Published" } },
-          { or: [
-            { property: "type", select: { equals: "Menu" } },
-            { property: "type", select: { equals: "SubMenu" } },
-            { property: "type", select: { equals: "Page" } },
-          ] },
-        ] },
+        filter: { and: [{ property: "status", select: { equals: "Published" } }] },
         sorts: [{ property: "date", direction: "descending" }],
         page_size: 100,
         ...(cursor ? { start_cursor: cursor } : {}),
       }),
     });
-    if (Array.isArray(payload.results)) results.push(...payload.results);
+    if (Array.isArray(payload.results)) results.push(...payload.results.filter((page: any) => ["Page", "Link", "Menu", "SubMenu"].includes(page.properties?.type?.select?.name)));
     cursor = payload.has_more && typeof payload.next_cursor === "string" ? payload.next_cursor : undefined;
   } while (cursor);
   return results;
@@ -872,7 +868,7 @@ function isRssSitePage(page: ReturnType<typeof toSitePagePost>): boolean {
 
 function toSiteLink(page: any) {
   const properties = page.properties || {};
-  const menuType = properties.type?.select?.name;
+  const contentType = properties.type?.select?.name;
   const linkTitle = (title(properties.title) || "未命名链接").replace(/_+$/, "");
   const pageSlug = plain(properties.slug).trim();
   const isAbout = pageSlug === "me" || linkTitle.includes("关于");
@@ -880,11 +876,9 @@ function toSiteLink(page: any) {
     .map(notionPropertyLink)
     .find(Boolean) || pageSlug;
   const target = configuredTarget;
-  const linkedNotionPageId = notionPageIdFromUrl(target);
-  const pageHref = menuType === "Page"
+  const isInternalPage = contentType === "Page" || contentType === "Menu";
+  const pageHref = isInternalPage
     ? isAbout ? "/about" : pageSlug ? `/page/${encodeURIComponent(pageSlug)}` : `/page/${encodeURIComponent(page.id)}`
-    : menuType === "Menu" && isAbout ? "/about"
-    : menuType === "Menu" && linkedNotionPageId ? `/page/${encodeURIComponent(linkedNotionPageId)}`
     : "";
   const external = !pageHref && /^https?:\/\//i.test(target);
   const internal = /^\/(?!\/)/.test(target);
@@ -898,56 +892,13 @@ function toSiteLink(page: any) {
     summary: plain(properties.summary),
     icon: notionDisplayEmoji(page),
     external,
-    kind: rss ? "rss" as const : menuType === "Menu" || menuType === "Page" ? "nav" as const : "tool" as const,
+    kind: rss ? "rss" as const : isInternalPage ? "nav" as const : "tool" as const,
   };
 }
 
 function toSiteLinks(pages: any[]) {
-  const contentPages = pages.filter((page) => page.properties?.type?.select?.name === "Page");
-  const linkedPageIds = new Set<string>();
-  const candidates: ReturnType<typeof toSiteLink>[] = [];
-
-  for (const page of pages) {
-    const type = page.properties?.type?.select?.name;
-    if (type === "Page") continue;
-    const menuLink = toSiteLink(page);
-    if (type !== "Menu" || menuLink.kind === "rss") {
-      candidates.push(menuLink);
-      continue;
-    }
-
-    const menuTitle = title(page.properties?.title).replace(/_+$/, "").trim();
-    const menuSlug = plain(page.properties?.slug).trim();
-    const targetId = Object.values(page.properties || {})
-      .map(notionPropertyLink)
-      .map(notionPageIdFromUrl)
-      .find(Boolean);
-    const matchedPage = contentPages.find((contentPage) => {
-      const pageTitle = title(contentPage.properties?.title).replace(/_+$/, "").trim();
-      const pageSlug = plain(contentPage.properties?.slug).trim();
-      return (targetId && normalizeNotionId(contentPage.id) === targetId)
-        || (menuSlug && menuSlug === pageSlug)
-        || (menuTitle && menuTitle === pageTitle);
-    });
-    if (!matchedPage) {
-      candidates.push(menuLink);
-      continue;
-    }
-    linkedPageIds.add(normalizeNotionId(matchedPage.id));
-    candidates.push({
-      ...menuLink,
-      href: sitePagePath(toSitePagePost(matchedPage)),
-      external: false,
-      kind: "nav",
-    });
-  }
-
-  for (const page of contentPages) {
-    if (!linkedPageIds.has(normalizeNotionId(page.id))) candidates.push(toSiteLink(page));
-  }
-
   const seen = new Set<string>();
-  return candidates.filter((link) => {
+  return pages.map(toSiteLink).filter((link) => {
     if (!link.href || link.title.includes("归档") || /(?:^|\/)archive(?:\/|$|#)/i.test(link.href)) return false;
     const identity = `${link.kind}:${link.href}`;
     if (seen.has(identity)) return false;

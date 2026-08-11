@@ -8,7 +8,7 @@
     "type": "git",
     "url": "https://github.com/louis16s/blogonCF.git"
   },
-  "keywords": ["notion", "cloudflare-workers", "blog", "vinext", "notionnext"],
+  "keywords": ["notion", "cloudflare-workers", "blog", "vinext"],
   "packageManager": "pnpm@11.9.0",
   "cloudflare": {
     "bindings": {
@@ -19,7 +19,7 @@
         "description": "Data Source ID of the Notion database containing posts."
       },
       "NOTION_CONFIG_DATA_SOURCE_ID": {
-        "description": "Optional Data Source ID of the NotionNext configuration database."
+        "description": "Optional Data Source ID of the site configuration database."
       },
       "SITE_URL": {
         "description": "Optional canonical public URL used by RSS and sitemap output."

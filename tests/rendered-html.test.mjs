@@ -81,8 +81,8 @@ test("homepage raw HTML contains the live Notion article index, tools, and foote
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "测试作者" }] } } },
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "SINCE" }] }, "配置值": { rich_text: [{ plain_text: "2021" }] } } },
     ] });
-    if (body.includes('"Menu"')) return Response.json({ results: [{ id: "menu", icon: { type: "emoji", emoji: "🧰" }, properties: {
-      title: { title: [{ plain_text: "测试工具" }] }, slug: { rich_text: [{ plain_text: "https://tool.example" }] }, summary: { rich_text: [{ plain_text: "外部工具" }] },
+    if (body.includes('"Published"') && !body.includes('"Post"')) return Response.json({ results: [{ id: "link", icon: { type: "emoji", emoji: "🧰" }, properties: {
+      type: { select: { name: "Link" } }, title: { title: [{ plain_text: "测试工具" }] }, slug: { rich_text: [{ plain_text: "https://tool.example" }] }, summary: { rich_text: [{ plain_text: "外部工具" }] },
     } }] });
     return Response.json({ results: [
       { id: "penang", icon: { type: "emoji", emoji: "🌴" }, properties: { title: { title: [{ plain_text: "2026槟城" }] }, slug: { rich_text: [{ plain_text: "Penang" }] }, summary: { rich_text: [] }, category: { select: { name: "旅行游记" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] } } },
@@ -113,7 +113,7 @@ test("public site bootstrap deduplicates upstream Notion reads within its freshn
     const url = String(input);
     const body = String(init.body || "");
     if (url.includes("/data_sources/config-source/query")) return Response.json({ results: [] });
-    if (body.includes('"Menu"')) return Response.json({ results: [] });
+    if (body.includes('"Published"') && !body.includes('"Post"')) return Response.json({ results: [] });
     return Response.json({ results: [{ id: "cached-post", properties: {
       title: { title: [{ plain_text: "缓存文章" }] }, slug: { rich_text: [{ plain_text: "cached" }] }, summary: { rich_text: [] },
       category: { select: { name: "开发" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
@@ -481,7 +481,7 @@ test("about and other Published Notion pages render inside the site shell", asyn
     ], has_more: false });
     if (url.includes("/data_sources/source-id/query")) {
       const body = JSON.parse(init.body);
-      assert.ok(body.filter.and.some((item) => item.property === "type" && item.select?.equals === "Page"));
+      assert.ok(body.filter.and.some((item) => item.or?.some((entry) => entry.property === "type" && entry.select?.equals === "Page")));
       return Response.json({ results: [{ id: pageId, properties: {
         type: { select: { name: "Page" } }, status: { select: { name: "Published" } },
         title: { title: [{ plain_text: "关于我_" }] }, slug: { rich_text: [{ plain_text: "me" }] }, summary: { rich_text: [{ plain_text: "关于 louis16s" }] }, icon: { rich_text: [{ plain_text: "fas fa-info" }] },
@@ -534,9 +534,8 @@ test("site page routing keeps all Published Page content internal while tools re
     readFile(new URL("../app/about/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/page/[slug]/page.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(workerSource, /menuType === "Page"[\s\S]*\? isAbout \? "\/about" : pageSlug \? `\/page\//);
-  assert.match(workerSource, /menuType === "Menu" && linkedNotionPageId \? `\/page\//);
-  assert.match(workerSource, /menuType === "Menu" \|\| menuType === "Page" \? "nav" as const : "tool"/);
+  assert.match(workerSource, /const isInternalPage = contentType === "Page" \|\| contentType === "Menu"/);
+  assert.match(workerSource, /isInternalPage \? "nav" as const : "tool"/);
   assert.match(pageScreen, /contentKind="page"/);
   assert.match(aboutRoute, /SiteContentPage slug="about"/);
   assert.match(genericRoute, /SiteContentPage slug=\{decoded\}/);
@@ -603,7 +602,7 @@ test("content endpoint follows Notion pagination cursors", async () => {
   globalThis.fetch = async (input, init) => {
     if (String(input).includes("fffad771-48f4-8181-b48e-000b8cf60e1b")) return Response.json({ results: [], has_more: false });
     const body = JSON.parse(init.body);
-    if (body.filter.and.some((item) => item.or)) return Response.json({ results: [], has_more: false });
+    if (body.filter.and.length === 1 && body.filter.and[0].property === "status") return Response.json({ results: [], has_more: false });
     bodies.push(body);
     return bodies.length === 1 ? Response.json({ results: [page("a", "a")], has_more: true, next_cursor: "cursor-2" }) : Response.json({ results: [page("b", "b")], has_more: false });
   };
@@ -882,11 +881,11 @@ test("content endpoint maps only filtered metadata while keeping browser respons
     ] });
     assert.match(String(input), /\/v1\/data_sources\/source-id\/query$/);
     const body = JSON.parse(init.body);
-    if (body.filter.and.some((item) => item.or)) return Response.json({ results: [
-      { id: "rss", properties: { title: { title: [{ plain_text: "RSS" }] }, slug: { rich_text: [{ plain_text: "rss/feed.xml" }] }, summary: { rich_text: [{ plain_text: "订阅" }] }, icon: { rich_text: [] } } },
-      { id: "tool", icon: { type: "emoji", emoji: "👾" }, properties: { title: { title: [{ plain_text: "超焦距" }] }, slug: { rich_text: [{ plain_text: "https://hd.530555.xyz" }] }, summary: { rich_text: [{ plain_text: "跳转hd" }] }, icon: { rich_text: [] } } },
-      { id: "annotated", properties: { title: { title: [{ plain_text: "带跳转的工具" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [{ plain_text: "Notion 注释链接", href: "https://annotated.example" }] }, icon: { rich_text: [] } } },
-      { id: "archive", properties: { type: { select: { name: "Menu" } }, title: { title: [{ plain_text: "历史归档" }] }, slug: { rich_text: [{ plain_text: "/archive" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
+    if (body.filter.and.length === 1 && body.filter.and[0].property === "status") return Response.json({ results: [
+      { id: "rss", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "RSS" }] }, slug: { rich_text: [{ plain_text: "rss/feed.xml" }] }, summary: { rich_text: [{ plain_text: "订阅" }] }, icon: { rich_text: [] } } },
+      { id: "tool", icon: { type: "emoji", emoji: "👾" }, properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "超焦距" }] }, slug: { rich_text: [{ plain_text: "https://hd.530555.xyz" }] }, summary: { rich_text: [{ plain_text: "跳转hd" }] }, icon: { rich_text: [] } } },
+      { id: "annotated", properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "带跳转的工具" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [{ plain_text: "Notion 注释链接", href: "https://annotated.example" }] }, icon: { rich_text: [] } } },
+      { id: "archive", properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "历史归档" }] }, slug: { rich_text: [{ plain_text: "/archive" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
       { id: "118ad771-48f4-8006-8e05-f46d51bd244c", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "关于我_" }] }, slug: { rich_text: [{ plain_text: "me" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
       { id: "fffad771-48f4-816c-b993-d78a936a4c78", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "资讯_" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
       { id: "broken", properties: { title: { title: [{ plain_text: "资讯" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
@@ -921,8 +920,8 @@ test("navigation endpoint returns only live Notion-configured jump links", async
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => Response.json({ results: [
-    { id: "tool", icon: { type: "emoji", emoji: "🧭" }, properties: { title: { title: [{ plain_text: "导航工具" }] }, slug: { rich_text: [{ plain_text: "打开", href: "https://nav.example" }] }, summary: { rich_text: [] } } },
-    { id: "uppercase-url", properties: { type: { select: { name: "SubMenu" } }, title: { title: [{ plain_text: "URL 属性工具" }] }, slug: { rich_text: [{ plain_text: "tool" }] }, URL: { url: "https://uppercase.example/tool" }, summary: { rich_text: [] } } },
+    { id: "tool", icon: { type: "emoji", emoji: "🧭" }, properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "导航工具" }] }, slug: { rich_text: [{ plain_text: "打开", href: "https://nav.example" }] }, summary: { rich_text: [] } } },
+    { id: "uppercase-url", properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "URL 属性工具" }] }, slug: { rich_text: [{ plain_text: "tool" }] }, URL: { url: "https://uppercase.example/tool" }, summary: { rich_text: [] } } },
     { id: "118ad771-48f4-8006-8e05-f46d51bd244c", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "关于我_" }] }, slug: { rich_text: [{ plain_text: "me" }] }, summary: { rich_text: [] } } },
     { id: "fffad771-48f4-816c-b993-d78a936a4c78", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "资讯_" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] } } },
     { id: "fffad771-48f4-810c-987c-000c02fa3dea", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "RSS_" }] }, slug: { rich_text: [{ plain_text: "rss-page" }] }, summary: { rich_text: [] } } },
@@ -950,7 +949,7 @@ test("navigation endpoint follows Notion pagination", async () => {
     const body = JSON.parse(init.body || "{}");
     cursors.push(body.start_cursor);
     const page = (id, titleText, slug) => ({ id, properties: {
-      type: { select: { name: "SubMenu" } },
+      type: { select: { name: "Link" } },
       title: { title: [{ plain_text: titleText }] },
       slug: { rich_text: [{ plain_text: slug }] },
       summary: { rich_text: [] },
@@ -971,10 +970,10 @@ test("legacy icon properties accept one emoji and reject icon classes or mixed t
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => Response.json({ results: [
-    { id: "native", icon: { type: "emoji", emoji: "📷" }, properties: { title: { title: [{ plain_text: "原生图标" }] }, slug: { rich_text: [{ plain_text: "https://native.example" }] }, icon: { rich_text: [{ plain_text: "fas fa-camera" }] } } },
-    { id: "legacy", properties: { title: { title: [{ plain_text: "旧字段 Emoji" }] }, slug: { rich_text: [{ plain_text: "https://legacy.example" }] }, icon: { rich_text: [{ plain_text: "👨‍💻" }] } } },
-    { id: "class", properties: { title: { title: [{ plain_text: "图标类" }] }, slug: { rich_text: [{ plain_text: "https://class.example" }] }, icon: { rich_text: [{ plain_text: "fas fa-info" }] } } },
-    { id: "mixed", properties: { title: { title: [{ plain_text: "混合文本" }] }, slug: { rich_text: [{ plain_text: "https://mixed.example" }] }, icon: { rich_text: [{ plain_text: "fas fa-info 😀" }] } } },
+    { id: "native", icon: { type: "emoji", emoji: "📷" }, properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "原生图标" }] }, slug: { rich_text: [{ plain_text: "https://native.example" }] }, icon: { rich_text: [{ plain_text: "fas fa-camera" }] } } },
+    { id: "legacy", properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "旧字段 Emoji" }] }, slug: { rich_text: [{ plain_text: "https://legacy.example" }] }, icon: { rich_text: [{ plain_text: "👨‍💻" }] } } },
+    { id: "class", properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "图标类" }] }, slug: { rich_text: [{ plain_text: "https://class.example" }] }, icon: { rich_text: [{ plain_text: "fas fa-info" }] } } },
+    { id: "mixed", properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "混合文本" }] }, slug: { rich_text: [{ plain_text: "https://mixed.example" }] }, icon: { rich_text: [{ plain_text: "fas fa-info 😀" }] } } },
   ] });
   try {
     const response = await worker.fetch(new Request("http://localhost/api/content/navigation"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
@@ -1161,7 +1160,7 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     if (url.includes(`/blocks/${richReferenceId}/children`)) { childBlockRequests++; return Response.json({ results: [], has_more: false }); }
     if (url.includes("/data_sources/") && init.body) {
       const body = JSON.parse(init.body);
-      const pageFilter = body.filter?.and?.some((item) => item.property === "type" && item.select?.equals === "Page");
+      const pageFilter = body.filter?.and?.some((item) => item.or?.some((entry) => entry.property === "type" && entry.select?.equals === "Page"));
       if (pageFilter) return Response.json({ results: [referencedId, richReferenceId].map((id) => ({
         id,
         properties: {
