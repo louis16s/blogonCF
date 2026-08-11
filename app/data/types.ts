@@ -97,5 +97,6 @@ export type ChildPage = {
   icon?: string;
   accessSignature?: string;
   blocks: ContentBlock[];
+  nextCursor?: string;
   truncated?: boolean;
 };

@@ -4,6 +4,7 @@ import { createRequestContext } from "./request-context";
 export type ArticlePayload = {
   post?: Post;
   blocks?: ContentBlock[];
+  nextCursor?: string;
   truncated?: boolean;
   locked?: boolean;
   error?: string;

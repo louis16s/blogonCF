@@ -534,7 +534,8 @@ test("site page routing keeps all Published Page content internal while tools re
     readFile(new URL("../app/about/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/page/[slug]/page.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(workerSource, /const isInternalPage = contentType === "Page" \|\| contentType === "Menu"/);
+  assert.match(workerSource, /const isInternalPage = contentType === "Page"/);
+  assert.doesNotMatch(workerSource, /"Menu"|"SubMenu"/);
   assert.match(workerSource, /isInternalPage \? "nav" as const : "tool"/);
   assert.match(pageScreen, /contentKind="page"/);
   assert.match(aboutRoute, /SiteContentPage slug="about"/);
@@ -602,7 +603,7 @@ test("content endpoint follows Notion pagination cursors", async () => {
   globalThis.fetch = async (input, init) => {
     if (String(input).includes("fffad771-48f4-8181-b48e-000b8cf60e1b")) return Response.json({ results: [], has_more: false });
     const body = JSON.parse(init.body);
-    if (body.filter.and.length === 1 && body.filter.and[0].property === "status") return Response.json({ results: [], has_more: false });
+    if (body.filter.and.some((item) => item.or?.some((entry) => entry.select?.equals === "Link"))) return Response.json({ results: [], has_more: false });
     bodies.push(body);
     return bodies.length === 1 ? Response.json({ results: [page("a", "a")], has_more: true, next_cursor: "cursor-2" }) : Response.json({ results: [page("b", "b")], has_more: false });
   };
@@ -881,7 +882,7 @@ test("content endpoint maps only filtered metadata while keeping browser respons
     ] });
     assert.match(String(input), /\/v1\/data_sources\/source-id\/query$/);
     const body = JSON.parse(init.body);
-    if (body.filter.and.length === 1 && body.filter.and[0].property === "status") return Response.json({ results: [
+    if (body.filter.and.some((item) => item.or?.some((entry) => entry.select?.equals === "Link"))) return Response.json({ results: [
       { id: "rss", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "RSS" }] }, slug: { rich_text: [{ plain_text: "rss/feed.xml" }] }, summary: { rich_text: [{ plain_text: "订阅" }] }, icon: { rich_text: [] } } },
       { id: "tool", icon: { type: "emoji", emoji: "👾" }, properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "超焦距" }] }, slug: { rich_text: [{ plain_text: "https://hd.530555.xyz" }] }, summary: { rich_text: [{ plain_text: "跳转hd" }] }, icon: { rich_text: [] } } },
       { id: "annotated", properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "带跳转的工具" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [{ plain_text: "Notion 注释链接", href: "https://annotated.example" }] }, icon: { rich_text: [] } } },
@@ -1268,6 +1269,53 @@ test("large child pages resolve every Notion cursor in one authenticated respons
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("long articles return bounded chunks and expose a continuation cursor", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const pageId = "abababab-abab-4bab-8bab-abababababab";
+  const blockRequests = [];
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes(`/blocks/${pageId}/children`)) {
+      blockRequests.push(url);
+      const cursor = new URL(url).searchParams.get("start_cursor") || "page_1";
+      const pageNumber = Number(cursor.replace("page_", ""));
+      const count = pageNumber === 4 ? 1 : 100;
+      return Response.json({
+        results: Array.from({ length: count }, (_, index) => ({
+          id: `block-${pageNumber}-${index}`,
+          type: "paragraph",
+          has_children: false,
+          paragraph: { rich_text: [{ plain_text: `第 ${pageNumber}-${index} 段`, annotations: {} }] },
+        })),
+        has_more: pageNumber < 4,
+        next_cursor: pageNumber < 4 ? `page_${pageNumber + 1}` : null,
+      });
+    }
+    if (url.includes("/data_sources/source-id/query")) return Response.json({ results: [{ id: pageId, properties: {
+      type: { select: { name: "Post" } }, status: { select: { name: "Published" } },
+      title: { title: [{ plain_text: "超长文章" }] }, slug: { rich_text: [{ plain_text: "long-post" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
+    } }], has_more: false });
+    throw new Error(`Unexpected request: ${url} ${init.method || "GET"}`);
+  };
+  try {
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
+    const first = await worker.fetch(new Request("http://localhost/api/content/post/long-post"), env, context);
+    assert.equal(first.status, 200);
+    const firstPayload = await first.json();
+    assert.equal(firstPayload.blocks.length, 300);
+    assert.equal(firstPayload.nextCursor, "page_4");
+    assert.equal(blockRequests.length, 3);
+
+    const second = await worker.fetch(new Request("http://localhost/api/content/post/long-post?cursor=page_4"), env, context);
+    assert.equal(second.status, 200);
+    const secondPayload = await second.json();
+    assert.equal(secondPayload.blocks.length, 1);
+    assert.equal(secondPayload.nextCursor, undefined);
+    assert.equal(blockRequests.length, 4);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("a child-page UUID cannot bypass the published article collection", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
@@ -1340,8 +1388,9 @@ test("article renderer opens child pages internally instead of linking to Notion
   assert.match(article, /const isChildView = childOpening \|\| Boolean\(activeChild\)/);
   assert.match(article, /\{!isChildView \? <header className="article-head">/);
   assert.match(article, /返回上一级/);
-  assert.doesNotMatch(article, /ChildPageLoadSentinel|nextCursor|loadMoreChild/);
   assert.doesNotMatch(article, /继续读取/);
+  assert.match(article, /ContentPrefetchSentinel/);
+  assert.match(article, /rootMargin: "2400px 0px"/);
   assert.doesNotMatch(css, /\.child-document::before/);
   assert.match(css, /\.child-document-head \{[^}]*border-bottom:/);
   assert.match(css, /\.child-document-body>\.notion-content \{ padding-top:/);

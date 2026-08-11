@@ -14,6 +14,7 @@ export function SiteContentPage({ slug, payload, fetched = true }: { slug: strin
             contentKind="page"
             initialPost={payload?.post}
             initialBlocks={payload?.blocks || []}
+            initialNextCursor={payload?.nextCursor}
             initialLocked={false}
             initialFetched={fetched}
             initialError={payload?.error || ""}

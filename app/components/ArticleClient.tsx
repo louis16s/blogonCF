@@ -25,6 +25,7 @@ type ArticleClientProps = {
   contentKind?: "post" | "page";
   initialPost?: Post;
   initialBlocks?: ContentBlock[];
+  initialNextCursor?: string;
   initialLocked?: boolean;
   initialFetched?: boolean;
   initialError?: string;
@@ -62,15 +63,18 @@ function scrollToArticleStart() {
   });
 }
 
-export function ArticleClient({ slug, contentKind = "post", initialPost, initialBlocks = [], initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false }: ArticleClientProps) {
+export function ArticleClient({ slug, contentKind = "post", initialPost, initialBlocks = [], initialNextCursor, initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false }: ArticleClientProps) {
   const [post, setPost] = useState<Post | undefined>(initialPost);
   const [blocks, setBlocks] = useState<ContentBlock[]>(initialBlocks);
   const [locked, setLocked] = useState(initialLocked);
   const [loading, setLoading] = useState(!initialFetched);
   const [error, setError] = useState(initialError);
   const [truncated, setTruncated] = useState(initialTruncated);
+  const [nextCursor, setNextCursor] = useState(initialNextCursor);
+  const [continuationLoading, setContinuationLoading] = useState(false);
   const [childTrail, setChildTrail] = useState<ChildPage[]>([]);
   const [childOpening, setChildOpening] = useState(false);
+  const [childContinuationLoading, setChildContinuationLoading] = useState(false);
   const [childError, setChildError] = useState("");
   const [feeds, setFeeds] = useState<ExternalFeed[]>([]);
   const [feedsLoading, setFeedsLoading] = useState(false);
@@ -79,6 +83,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const childRequestRef = useRef<AbortController | null>(null);
   const skipInitialRefresh = useRef(initialFetched);
   const lastRefreshAt = useRef(0);
+  const continuationLoadedRef = useRef(false);
   const contentEndpoint = contentKind === "page" ? "/api/content/page" : "/api/content/post";
   const childEndpoint = contentKind === "page" ? "/api/content/page-child" : "/api/content/child";
 
@@ -86,7 +91,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     childRequestRef.current?.abort();
     const controller = new AbortController();
     childRequestRef.current = controller;
-    setChildOpening(true); setChildError("");
+    setChildOpening(true); setChildContinuationLoading(false); setChildError("");
     scrollToArticleStart();
     requestChildPage(childEndpoint, { slug, pageId, accessSignature, trail: childTrailRef.current.map((item) => item.id) }, controller.signal)
       .then((child) => {
@@ -112,8 +117,50 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       });
   }, [childEndpoint, slug]);
 
+  const loadMoreChild = useCallback(() => {
+    const currentChild = childTrailRef.current.at(-1);
+    if (!currentChild?.nextCursor || childRequestRef.current) return;
+    const controller = new AbortController();
+    childRequestRef.current = controller;
+    setChildContinuationLoading(true);
+    requestChildPage(childEndpoint, { slug, pageId: currentChild.id, accessSignature: currentChild.accessSignature, trail: childTrailRef.current.map((item) => item.id), cursor: currentChild.nextCursor }, controller.signal)
+      .then((page) => setChildTrail((current) => {
+        const index = current.findIndex((item) => item.id === page.id);
+        if (index < 0) return current;
+        const next = [...current];
+        next[index] = { ...next[index], blocks: [...next[index].blocks, ...page.blocks], nextCursor: page.nextCursor, truncated: Boolean(next[index].truncated || page.truncated) };
+        childTrailRef.current = next;
+        return next;
+      }))
+      .catch((reason) => { if (reason.name !== "AbortError") setChildError(reason.message || "后续内容暂时无法读取"); })
+      .finally(() => {
+        if (childRequestRef.current === controller) {
+          childRequestRef.current = null;
+          setChildContinuationLoading(false);
+        }
+      });
+  }, [childEndpoint, slug]);
+
+  const loadMoreContent = useCallback(() => {
+    if (!nextCursor || continuationLoading) return;
+    setContinuationLoading(true);
+    const separator = `${contentEndpoint}/${encodeURIComponent(slug)}`;
+    fetch(`${separator}?cursor=${encodeURIComponent(nextCursor)}`, { credentials: "same-origin", cache: "no-store" })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok || data.locked) throw new Error(data.error || "后续内容暂时无法读取");
+        continuationLoadedRef.current = true;
+        setBlocks((current) => [...current, ...(data.blocks || [])]);
+        setNextCursor(data.nextCursor);
+        setTruncated((current) => Boolean(current || data.truncated));
+      })
+      .catch((reason) => setError(reason.message || "后续内容暂时无法读取"))
+      .finally(() => setContinuationLoading(false));
+  }, [contentEndpoint, continuationLoading, nextCursor, slug]);
+
   const load = (password?: string) => {
     setLoading(true); setError("");
+    continuationLoadedRef.current = false;
     fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, password ? { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) } : { credentials: "same-origin" })
       .then(async (response) => {
         const data = await response.json();
@@ -122,10 +169,10 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
           const verification = await fetch(`/api/content/unlock-session?slug=${encodeURIComponent(slug)}`, { credentials: "same-origin", cache: "no-store" });
           const verified = await verification.json();
           if (!verification.ok || !verified.unlocked) throw new Error("安全会话未能建立，请允许本站 Cookie 后重试");
-          setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setTruncated(Boolean(data.truncated));
+          setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setNextCursor(data.nextCursor); setTruncated(Boolean(data.truncated));
           return;
         }
-        setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setTruncated(Boolean(data.truncated));
+        setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setNextCursor(data.nextCursor); setTruncated(Boolean(data.truncated));
       })
       .catch((reason) => setError(reason.message || "文章暂时无法读取"))
       .finally(() => setLoading(false));
@@ -143,8 +190,11 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
         if (!response.ok) throw new Error(data.error || "文章读取失败");
         setPost(data.post);
         setLocked(Boolean(data.locked));
-        setBlocks(data.blocks || []);
-        setTruncated(Boolean(data.truncated));
+        if (!continuationLoadedRef.current) {
+          setBlocks(data.blocks || []);
+          setNextCursor(data.nextCursor);
+        }
+        setTruncated((current) => continuationLoadedRef.current ? Boolean(current || data.truncated) : Boolean(data.truncated));
         setError("");
       } catch (reason) {
         if (reason instanceof Error && reason.name !== "AbortError") {
@@ -238,7 +288,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       </div>
       {post.tags.length ? <div className="tags">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
     </header> : null}
-    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} error={childError} databaseContext={{ slug, contentKind, trail: childTrail.map((item) => item.id) }} breadcrumb={[post.title, ...childTrail.map((item) => item.title)]} /> : blocks.length ? <div className="notion-content"><Blocks blocks={visibleBlocks} onOpenChild={loadChild} databaseContext={{ slug, contentKind, trail: [] }} breadcrumb={[post.title]} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}</div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
+    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} continuationLoading={childContinuationLoading} error={childError} databaseContext={{ slug, contentKind, trail: childTrail.map((item) => item.id) }} breadcrumb={[post.title, ...childTrail.map((item) => item.title)]} /> : blocks.length ? <div className="notion-content"><Blocks blocks={visibleBlocks} onOpenChild={loadChild} databaseContext={{ slug, contentKind, trail: [] }} breadcrumb={[post.title]} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}<ContentPrefetchSentinel pending={Boolean(nextCursor)} loading={continuationLoading} onLoad={loadMoreContent} /></div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
   </>;
 }
 
@@ -267,7 +317,7 @@ function ChildLoading() {
 
 type DatabaseContext = { slug: string; contentKind: "post" | "page"; trail: string[] };
 
-function ChildDocument({ child, parentTitle, onBack, onOpenChild, error, databaseContext, breadcrumb }: { child: ChildPage; parentTitle: string; onBack: () => void; onOpenChild: (pageId: string, accessSignature?: string) => void; error: string; databaseContext: DatabaseContext; breadcrumb: string[] }) {
+function ChildDocument({ child, parentTitle, onBack, onOpenChild, onLoadMore, continuationLoading, error, databaseContext, breadcrumb }: { child: ChildPage; parentTitle: string; onBack: () => void; onOpenChild: (pageId: string, accessSignature?: string) => void; onLoadMore: () => void; continuationLoading: boolean; error: string; databaseContext: DatabaseContext; breadcrumb: string[] }) {
   return <section className="child-document" aria-labelledby={`child-${child.id}`}>
     <nav className="child-document-nav" aria-label="子页面导航">
       <button type="button" onClick={onBack} aria-label={`返回 ${parentTitle}`}>
@@ -283,8 +333,25 @@ function ChildDocument({ child, parentTitle, onBack, onOpenChild, error, databas
       <div className="notion-content"><Blocks blocks={child.blocks} onOpenChild={onOpenChild} databaseContext={databaseContext} breadcrumb={breadcrumb} /></div>
     </div>
     {child.truncated ? <ContentLimitNotice /> : null}
+    <ContentPrefetchSentinel pending={Boolean(child.nextCursor)} loading={continuationLoading} onLoad={onLoadMore} />
     {error ? <p className="child-page-error" role="alert">{error}</p> : null}
   </section>;
+}
+
+function ContentPrefetchSentinel({ pending, loading, onLoad }: { pending: boolean; loading: boolean; onLoad: () => void }) {
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node || !pending || loading) return;
+    if (!("IntersectionObserver" in window)) { onLoad(); return; }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) onLoad();
+    }, { rootMargin: "2400px 0px" });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [loading, onLoad, pending]);
+  if (!pending && !loading) return null;
+  return <div ref={sentinelRef} className="content-prefetch-sentinel" aria-live="polite">{loading ? "正在准备后续内容…" : null}</div>;
 }
 
 function ContentLimitNotice() {
