@@ -455,7 +455,8 @@ test("article header stays compact and the password form supports keyboard submi
   assert.match(article, /autoFocus/);
   assert.match(css, /\.article-title-row \{ display: grid;/);
   assert.match(css, /\.article-shell article \{[^}]*padding: 8px 0 70px;/);
-  assert.match(articlePage, /<SiteSidebar showHomeLink \/>/);
+  assert.match(articlePage, /<SiteSidebar \/>/);
+  assert.doesNotMatch(articlePage, /showHomeLink/);
   assert.match(sitePage, /<SiteSidebar showHomeLink \/>/);
   assert.doesNotMatch(articlePage, /返回全部文章|article-return/);
   assert.doesNotMatch(sitePage, /返回全部文章|article-return/);
@@ -1188,10 +1189,15 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     const cookie = unlock.headers.get("set-cookie").split(";", 1)[0];
     assert.match(unlock.headers.get("set-cookie"), /HttpOnly; SameSite=Lax/);
     const childHeaders = { "content-type": "application/json", cookie };
+    const session = await worker.fetch(new Request("http://localhost/api/content/unlock-session?slug=index", { headers: { cookie } }), env, context);
+    assert.equal(session.status, 200);
+    assert.deepEqual(await session.json(), { unlocked: true });
     const correct = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: childId }) }), env, context);
     assert.equal(correct.status, 200);
     assert.equal(correct.headers.get("cache-control"), "no-store");
-    assert.deepEqual(await correct.json(), { child: { id: childId, title: "第一章", icon: "📖", blocks: [{ id: "child-paragraph", type: "paragraph", richText: [{ text: "站内子页面正文" }] }], hasMore: false, truncated: false } });
+    const correctPayload = await correct.json();
+    assert.deepEqual({ ...correctPayload.child, accessSignature: undefined }, { id: childId, title: "第一章", icon: "📖", blocks: [{ id: "child-paragraph", type: "paragraph", richText: [{ text: "站内子页面正文" }] }], hasMore: false, truncated: false, accessSignature: undefined });
+    assert.match(correctPayload.child.accessSignature, /^[A-Za-z0-9_-]{40,}$/);
     assert.equal(childBlockRequests, 1);
 
     const nested = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: nestedId }) }), env, context);
@@ -1347,6 +1353,10 @@ test("article renderer opens child pages internally instead of linking to Notion
   assert.match(article, /const isChildView = childOpening \|\| Boolean\(activeChild\)/);
   assert.match(article, /\{!isChildView \? <header className="article-head">/);
   assert.match(article, /返回上一级/);
+  assert.match(article, /new IntersectionObserver/);
+  assert.match(article, /rootMargin: "1200px 0px"/);
+  assert.doesNotMatch(article, />继续读取</);
+  assert.doesNotMatch(css, /\.child-document::before/);
   assert.match(css, /\.child-document-head \{[^}]*border-bottom:/);
   assert.match(css, /\.child-document-body>\.notion-content \{ padding-top:/);
   assert.doesNotMatch(article, /case "child_page"[^\n]+notion\.so/);

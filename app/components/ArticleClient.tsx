@@ -123,6 +123,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     requestChildPage(childEndpoint, {
       slug,
       pageId: currentChild.id,
+      accessSignature: currentChild.accessSignature,
       trail: childTrailRef.current.map((item) => item.id),
       cursor: currentChild.nextCursor,
     }, controller.signal)
@@ -136,6 +137,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
             blocks: [...next[index].blocks, ...page.blocks],
             hasMore: page.hasMore,
             nextCursor: page.nextCursor,
+            accessSignature: page.accessSignature || next[index].accessSignature,
             truncated: Boolean(next[index].truncated || page.truncated),
           };
           childTrailRef.current = next;
@@ -158,10 +160,10 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
         if (password && !data.locked) {
-          const verification = await fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, { credentials: "same-origin", cache: "no-store" });
+          const verification = await fetch(`/api/content/unlock-session?slug=${encodeURIComponent(slug)}`, { credentials: "same-origin", cache: "no-store" });
           const verified = await verification.json();
-          if (!verification.ok || verified.locked) throw new Error("安全会话未能建立，请允许本站 Cookie 后重试");
-          setPost(verified.post); setLocked(Boolean(verified.locked)); setBlocks(verified.blocks || []); setTruncated(Boolean(verified.truncated));
+          if (!verification.ok || !verified.unlocked) throw new Error("安全会话未能建立，请允许本站 Cookie 后重试");
+          setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setTruncated(Boolean(data.truncated));
           return;
         }
         setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setTruncated(Boolean(data.truncated));
@@ -323,10 +325,33 @@ function ChildDocument({ child, parentTitle, onBack, onOpenChild, onLoadMore, lo
       <div className="notion-content"><Blocks blocks={child.blocks} onOpenChild={onOpenChild} databaseContext={databaseContext} breadcrumb={breadcrumb} /></div>
     </div>
     {child.truncated ? <ContentLimitNotice /> : null}
-    {child.hasMore ? <button className="child-page-more" type="button" onClick={onLoadMore} disabled={loading}>{loading ? "正在读取下一段…" : "继续读取"}</button> : null}
+    <ChildPageLoadSentinel hasMore={Boolean(child.hasMore)} loading={loading} onLoadMore={onLoadMore} />
     {loading && !child.hasMore ? <p className="child-page-status" role="status">正在读取子页面…</p> : null}
     {error ? <p className="child-page-error" role="alert">{error}</p> : null}
   </section>;
+}
+
+function ChildPageLoadSentinel({ hasMore, loading, onLoadMore }: { hasMore: boolean; loading: boolean; onLoadMore: () => void }) {
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node || !hasMore || loading) return;
+    if (!("IntersectionObserver" in window)) {
+      onLoadMore();
+      return;
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) onLoadMore();
+    }, { rootMargin: "1200px 0px" });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMore, loading, onLoadMore]);
+
+  if (!hasMore && !loading) return null;
+  return <div ref={sentinelRef} className="child-page-sentinel" role="status" aria-live="polite">
+    {loading ? <><span aria-hidden />正在载入后续内容…</> : <span className="visually-hidden">后续内容将在接近此处时自动载入</span>}
+  </div>;
 }
 
 function ContentLimitNotice() {

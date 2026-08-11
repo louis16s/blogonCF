@@ -61,6 +61,7 @@ const worker = {
     if (url.pathname === "/api/content/rss-feeds" && request.method === "GET") return notionExternalRss(env, url);
     if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url, request, env.NOTION_TOKEN);
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") return notionWordCloud(env);
+    if (url.pathname === "/api/content/unlock-session" && request.method === "GET") return notionUnlockSession(env, request, url);
     if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
     if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request);
     if (url.pathname === "/api/content/database" && request.method === "POST") return notionChildDatabase(env, request);
@@ -469,6 +470,17 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
   } catch (reason) { return notionError(reason); }
 }
 
+async function notionUnlockSession(env: Env, request: Request, url: URL): Promise<Response> {
+  if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  const slug = url.searchParams.get("slug") || "";
+  if (!slug || slug.length > 180) return error(400, "Invalid article slug");
+  const unlocked = await hasUnlockSession(request, env.NOTION_TOKEN, slug);
+  return Response.json({ unlocked }, {
+    status: unlocked ? 200 : 403,
+    headers: { ...jsonHeaders, "cache-control": "no-store" },
+  });
+}
+
 async function notionSitePage(env: Env, slug: string): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   if (!slug || slug.length > 180) return error(400, "Invalid page slug");
@@ -535,10 +547,12 @@ async function childPageResponse(env: Env, childPage: any, cursor: string, rootP
   const page = await getBlockChildrenPage(env, childPage.id, blockState, 0, cursor);
   await attachPreviewSignatures(page.blocks, env.NOTION_TOKEN);
   await attachChildAccessSignatures(page.blocks, env.NOTION_TOKEN, rootPageId);
+  const accessSignature = await createChildAccessSignature(env.NOTION_TOKEN!, normalizeNotionId(rootPageId)!, normalizeNotionId(childPage.id)!);
   return Response.json({ child: {
     id: childPage.id,
     title: notionPageTitle(childPage) || "未命名子页面",
     icon: childPage.icon?.type === "emoji" ? childPage.icon.emoji : undefined,
+    accessSignature,
     blocks: page.blocks,
     hasMore: Boolean(page.nextCursor),
     nextCursor: page.nextCursor,
