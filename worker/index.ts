@@ -31,7 +31,6 @@ const NOTION_IMAGE_HOSTS = new Set(["prod-files-secure.s3.us-west-2.amazonaws.co
 const MAX_BLOCKS = 10_000;
 const MAX_BLOCK_DEPTH = 12;
 const MAX_INDEX_BLOCKS_PER_POST = 800;
-const MAX_CHILD_BLOCKS_PER_CHUNK = 2_000;
 const WORD_CLOUD_CACHE_TTL_MS = 10 * 60 * 1000;
 const SITE_BOOTSTRAP_CACHE_TTL_MS = 5 * 60 * 1000;
 const SITE_BOOTSTRAP_STALE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -502,13 +501,12 @@ async function notionSitePage(env: Env, slug: string): Promise<Response> {
 
 async function notionChildPage(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown; accessSignature?: unknown };
+  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; accessSignature?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
   const pageId = normalizeNotionId(body.pageId);
   const trail = Array.isArray(body.trail) ? body.trail.map(normalizeNotionId).filter(Boolean).slice(0, 8) : [];
-  const cursor = normalizeNotionCursor(body.cursor);
   const accessSignature = typeof body.accessSignature === "string" ? body.accessSignature : "";
-  if (!slug || slug.length > 180 || !pageId || (body.cursor != null && !cursor)) return error(400, "Invalid child page request");
+  if (!slug || slug.length > 180 || !pageId) return error(400, "Invalid child page request");
 
   try {
     const parent = await findPost(env, slug);
@@ -520,54 +518,50 @@ async function notionChildPage(env: Env, request: Request): Promise<Response> {
 
     const childPage = await resolveChildPage(env, parent, trail, pageId, accessSignature);
     if (!childPage) return error(404, "没有找到这个子页面，或它已从当前文章移除");
-    return childPageResponse(env, childPage, cursor, parent.id);
+    return childPageResponse(env, childPage, parent.id);
   } catch (reason) { return notionError(reason); }
 }
 
 async function notionSitePageChild(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown; accessSignature?: unknown };
+  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; accessSignature?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
   const pageId = normalizeNotionId(body.pageId);
   const trail = Array.isArray(body.trail) ? body.trail.map(normalizeNotionId).filter(Boolean).slice(0, 8) : [];
-  const cursor = normalizeNotionCursor(body.cursor);
   const accessSignature = typeof body.accessSignature === "string" ? body.accessSignature : "";
-  if (!slug || slug.length > 180 || !pageId || (body.cursor != null && !cursor)) return error(400, "Invalid child page request");
+  if (!slug || slug.length > 180 || !pageId) return error(400, "Invalid child page request");
   try {
     const parent = await findSitePage(env, slug);
     if (!parent) return error(404, "Page not found");
     const childPage = await resolveChildPage(env, parent, trail, pageId, accessSignature);
     if (!childPage) return error(404, "没有找到这个子页面，或它已从当前页面移除");
-    return childPageResponse(env, childPage, cursor, parent.id);
+    return childPageResponse(env, childPage, parent.id);
   } catch (reason) { return notionError(reason); }
 }
 
-async function childPageResponse(env: Env, childPage: any, cursor: string, rootPageId: string): Promise<Response> {
-  const blockState: BlockReadState = { remaining: MAX_CHILD_BLOCKS_PER_CHUNK, truncated: false };
-  const page = await getBlockChildrenPage(env, childPage.id, blockState, 0, cursor);
-  await attachPreviewSignatures(page.blocks, env.NOTION_TOKEN);
-  await attachChildAccessSignatures(page.blocks, env.NOTION_TOKEN, rootPageId);
+async function childPageResponse(env: Env, childPage: any, rootPageId: string): Promise<Response> {
+  const blockState = newBlockReadState();
+  const blocks = await getBlockChildren(env, childPage.id, blockState, 0);
+  await attachPreviewSignatures(blocks, env.NOTION_TOKEN);
+  await attachChildAccessSignatures(blocks, env.NOTION_TOKEN, rootPageId);
   const accessSignature = await createChildAccessSignature(env.NOTION_TOKEN!, normalizeNotionId(rootPageId)!, normalizeNotionId(childPage.id)!);
   return Response.json({ child: {
     id: childPage.id,
     title: notionPageTitle(childPage) || "未命名子页面",
     icon: childPage.icon?.type === "emoji" ? childPage.icon.emoji : undefined,
     accessSignature,
-    blocks: page.blocks,
-    hasMore: Boolean(page.nextCursor),
-    nextCursor: page.nextCursor,
+    blocks,
     truncated: blockState.truncated,
   } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
 }
 
 async function notionChildDatabase(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const body = await request.json().catch(() => ({})) as { slug?: unknown; databaseId?: unknown; trail?: unknown; cursor?: unknown; contentKind?: unknown };
+  const body = await request.json().catch(() => ({})) as { slug?: unknown; databaseId?: unknown; trail?: unknown; contentKind?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
   const databaseId = normalizeNotionId(body.databaseId);
   const trail = Array.isArray(body.trail) ? body.trail.map(normalizeNotionId).filter(Boolean).slice(0, 8) : [];
-  const cursor = normalizeNotionCursor(body.cursor);
-  if (!slug || !databaseId || (body.cursor != null && !cursor)) return error(400, "Invalid child database request");
+  if (!slug || !databaseId) return error(400, "Invalid child database request");
   try {
     const root = body.contentKind === "page" ? await findSitePage(env, slug) : await findPost(env, slug);
     if (!root) return error(404, "Parent page not found");
@@ -579,14 +573,20 @@ async function notionChildDatabase(env: Env, request: Request): Promise<Response
     if (!referencesDatabase(blocks, databaseId)) return error(404, "Child database not found");
     const database = await notionFetch(env, `/databases/${databaseId}`);
     const dataSourceId = normalizeNotionId(database.data_sources?.[0]?.id) || databaseId;
-    const result = await notionFetch(env, `/data_sources/${dataSourceId}/query`, { method: "POST", body: JSON.stringify({ page_size: 50, ...(cursor ? { start_cursor: cursor } : {}) }) });
-    const rows = (result.results || []).map((page: any) => ({
+    const pages: any[] = [];
+    let cursor: string | undefined;
+    do {
+      const result = await notionFetch(env, `/data_sources/${dataSourceId}/query`, { method: "POST", body: JSON.stringify({ page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) }) });
+      if (Array.isArray(result.results)) pages.push(...result.results);
+      cursor = result.has_more && typeof result.next_cursor === "string" ? normalizeNotionCursor(result.next_cursor) || undefined : undefined;
+    } while (cursor && pages.length < MAX_BLOCKS);
+    const rows = pages.slice(0, MAX_BLOCKS).map((page: any) => ({
       id: page.id,
       title: notionPageTitle(page) || "未命名条目",
       icon: page.icon?.type === "emoji" ? page.icon.emoji : undefined,
       fields: Object.entries(page.properties || {}).filter(([name, property]: [string, any]) => !/password|secret|token|密码|密钥/i.test(name) && property?.type !== "title").slice(0, 6).map(([name, property]) => ({ name, value: notionPropertyText(property) })).filter((field) => field.value),
     }));
-    return Response.json({ database: { id: databaseId, title: richText(database.title) || "子数据库", rows, hasMore: Boolean(result.has_more), nextCursor: result.next_cursor || undefined } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    return Response.json({ database: { id: databaseId, title: richText(database.title) || "子数据库", rows } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -784,30 +784,6 @@ async function getBlockChildren(env: Env, id: string, budget: BlockReadState, de
     cursor = payload.has_more && budget.remaining > 0 ? payload.next_cursor : undefined;
   } while (cursor);
   return output;
-}
-
-async function getBlockChildrenPage(env: Env, id: string, budget: BlockReadState, depth: number, cursor = "") {
-  if (depth > MAX_BLOCK_DEPTH || budget.remaining <= 0) {
-    budget.truncated = true;
-    return { blocks: [] as any[], nextCursor: undefined as string | undefined };
-  }
-  const query = new URLSearchParams({ page_size: "100" });
-  if (cursor) query.set("start_cursor", cursor);
-  const payload = await notionFetch(env, `/blocks/${id}/children?${query}`);
-  const blocks: any[] = [];
-  for (const raw of payload.results || []) {
-    if (budget.remaining-- <= 0) { budget.truncated = true; break; }
-    const block = normalizeBlock(raw);
-    if (!block) continue;
-    const hasInlineChildren = raw.has_children && raw.type !== "child_page" && raw.type !== "child_database";
-    if (hasInlineChildren && budget.remaining > 0) block.children = await getBlockChildren(env, raw.id, budget, depth + 1);
-    blocks.push(block);
-  }
-  const nextCursor = payload.has_more && budget.remaining > 0 && typeof payload.next_cursor === "string"
-    ? normalizeNotionCursor(payload.next_cursor) || undefined
-    : undefined;
-  if (payload.has_more && !nextCursor) budget.truncated = true;
-  return { blocks, nextCursor };
 }
 
 async function mapWithConcurrency<T, U>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<U>): Promise<U[]> {

@@ -89,8 +89,6 @@ export type ChildDatabase = {
   id: string;
   title: string;
   rows: Array<{ id: string; title: string; icon?: string; fields: Array<{ name: string; value: string }> }>;
-  hasMore?: boolean;
-  nextCursor?: string;
 };
 
 export type ChildPage = {
@@ -99,7 +97,5 @@ export type ChildPage = {
   icon?: string;
   accessSignature?: string;
   blocks: ContentBlock[];
-  hasMore?: boolean;
-  nextCursor?: string;
   truncated?: boolean;
 };

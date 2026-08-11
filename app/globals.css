@@ -33,7 +33,6 @@
 }
 
 * { box-sizing: border-box; }
-.visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; clip-path: inset(50%) !important; white-space: nowrap !important; }
 html { scroll-behavior: smooth; background: var(--bg); }
 body { margin: 0; background: var(--bg); color: var(--ink); font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif; -webkit-font-smoothing: antialiased; transition: background-color .35s var(--ease-soft), color .35s var(--ease-soft); }
 body.intro-playing { overflow: hidden; }
@@ -352,12 +351,10 @@ html[data-intro="playing"] .site-intro { display: grid; }
 @keyframes child-loading-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @keyframes child-loading-mark { 0%, 100% { transform: translateY(0); opacity: 1; } 50% { transform: translateY(-3px); opacity: .65; } }
 @keyframes child-document-arrive { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
-.child-page-sentinel { min-height: 34px; display: flex; align-items: center; gap: 8px; margin-top: 18px; color: var(--subtle); font-size: 11px; }
-.child-page-sentinel>span:not(.visually-hidden) { width: 5px; height: 5px; background: currentColor; border-radius: 50%; animation: sync-blink 1.2s ease-in-out infinite; }
 @supports (content-visibility: auto) {
   .child-document-body>.notion-content>.notion-block { content-visibility: auto; contain-intrinsic-block-size: auto 96px; }
 }
-.child-page-status, .child-page-error { margin: 20px 0; padding: 13px 15px; color: var(--muted); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 9px; font: 12px/1.5 ui-sans-serif, sans-serif; }
+.child-page-error { margin: 20px 0; padding: 13px 15px; color: var(--muted); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 9px; font: 12px/1.5 ui-sans-serif, sans-serif; }
 .child-page-error { color: #b94a48; border-color: color-mix(in srgb, #b94a48 24%, var(--line)); }
 .content-limit-notice { margin: 24px 0; padding: 14px 16px; color: #8a5a14; background: color-mix(in srgb, #f2b84b 12%, var(--surface-soft)); border: 1px solid color-mix(in srgb, #c48a2c 35%, var(--line)); border-radius: 9px; font: 13px/1.6 ui-sans-serif, sans-serif; }
 .notion-toc, .notion-breadcrumb { margin: 18px 0; color: var(--muted); font: 13px ui-sans-serif, sans-serif; }

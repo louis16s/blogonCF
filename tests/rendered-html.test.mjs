@@ -1196,7 +1196,7 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     assert.equal(correct.status, 200);
     assert.equal(correct.headers.get("cache-control"), "no-store");
     const correctPayload = await correct.json();
-    assert.deepEqual({ ...correctPayload.child, accessSignature: undefined }, { id: childId, title: "第一章", icon: "📖", blocks: [{ id: "child-paragraph", type: "paragraph", richText: [{ text: "站内子页面正文" }] }], hasMore: false, truncated: false, accessSignature: undefined });
+    assert.deepEqual({ ...correctPayload.child, accessSignature: undefined }, { id: childId, title: "第一章", icon: "📖", blocks: [{ id: "child-paragraph", type: "paragraph", richText: [{ text: "站内子页面正文" }] }], truncated: false, accessSignature: undefined });
     assert.match(correctPayload.child.accessSignature, /^[A-Za-z0-9_-]{40,}$/);
     assert.equal(childBlockRequests, 1);
 
@@ -1230,7 +1230,7 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("large child pages stream through authenticated cursor chunks", async () => {
+test("large child pages resolve every Notion cursor in one authenticated response", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
   const parentId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
@@ -1261,23 +1261,11 @@ test("large child pages stream through authenticated cursor chunks", async () =>
     const unlock = await worker.fetch(new Request("http://localhost/api/content/post/long-index", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "correct" }) }), env, context);
     const cookie = unlock.headers.get("set-cookie").split(";", 1)[0];
     const childHeaders = { "content-type": "application/json", cookie };
-    const first = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "long-index", pageId: childId }) }), env, context);
-    assert.equal(first.status, 200);
-    const firstPayload = await first.json();
-    assert.deepEqual(firstPayload.child.blocks.map((block) => block.id), ["chunk-1"]);
-    assert.equal(firstPayload.child.hasMore, true);
-    assert.equal(firstPayload.child.nextCursor, "cursor_2");
-
-    const second = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "long-index", pageId: childId, cursor: firstPayload.child.nextCursor }) }), env, context);
-    assert.equal(second.status, 200);
-    const secondPayload = await second.json();
-    assert.deepEqual(secondPayload.child.blocks.map((block) => block.id), ["chunk-2"]);
-    assert.equal(secondPayload.child.hasMore, false);
-    assert.equal(secondPayload.child.nextCursor, undefined);
-
-    const invalid = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "long-index", pageId: childId, cursor: "$invalid" }) }), env, context);
-    assert.equal(invalid.status, 400);
-    assert.equal(blockRequests.length, 2, "invalid cursors must be rejected before reading Notion blocks");
+    const response = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "long-index", pageId: childId }) }), env, context);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.child.blocks.map((block) => block.id), ["chunk-1", "chunk-2"]);
+    assert.equal(blockRequests.length, 2, "the Worker should resolve all upstream cursors before replying");
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -1353,8 +1341,7 @@ test("article renderer opens child pages internally instead of linking to Notion
   assert.match(article, /const isChildView = childOpening \|\| Boolean\(activeChild\)/);
   assert.match(article, /\{!isChildView \? <header className="article-head">/);
   assert.match(article, /返回上一级/);
-  assert.match(article, /new IntersectionObserver/);
-  assert.match(article, /rootMargin: "1200px 0px"/);
+  assert.doesNotMatch(article, /ChildPageLoadSentinel|nextCursor|loadMoreChild/);
   assert.doesNotMatch(article, /继续读取/);
   assert.doesNotMatch(css, /\.child-document::before/);
   assert.match(css, /\.child-document-head \{[^}]*border-bottom:/);
