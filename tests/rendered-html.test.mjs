@@ -1457,9 +1457,12 @@ test("TOC clicks survive in-flight prefetches and keep loading until the target 
 test("reading typography stays crisp after entrance animations finish", async () => {
   const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   assert.match(css, /-webkit-font-smoothing: auto/);
-  assert.match(css, /text-rendering: optimizeLegibility/);
+  assert.match(css, /text-rendering: auto/);
   assert.match(css, /\.sidebar-toc-list a \{[^}]*font-size: 13px;[^}]*font-weight: 500;/);
-  assert.match(css, /\.notion-content \{[^}]*color: var\(--ink\);[^}]*font-family: var\(--font-reading\)/);
+  assert.match(css, /\.notion-content \{[^}]*color: var\(--ink\);[^}]*font-family: var\(--font-ui\);[^}]*font-size: 18px;[^}]*font-synthesis: none;[^}]*font-weight: 400;[^}]*line-height: 1\.82;/);
+  assert.match(css, /\.article-shell article \{ max-width: 760px;/);
+  assert.match(css, /\.notion-content h2,[^}]*font-family: var\(--font-reading\);[^}]*font-synthesis: none;/);
+  assert.match(css, /\.notion-content blockquote \{[^}]*font-family: var\(--font-reading\);/);
   assert.match(css, /animation: sidebar-arrive [^;]* backwards/);
   assert.match(css, /animation: page-arrive [^;]* backwards/);
   assert.doesNotMatch(css, /animation: sidebar-arrive [^;]* both/);
