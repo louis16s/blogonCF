@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import {
   CaretDown,
   Cloud,
@@ -22,6 +23,7 @@ import { useSiteConfig } from "./useSiteConfig";
 import { useSiteNavigation } from "./useSiteNavigation";
 
 export type ContentSyncState = "loading" | "live" | "unavailable";
+export type SidebarHeading = { id: string; label: string; level: number };
 
 type SidebarProps = {
   siteLinks?: SiteLink[];
@@ -31,13 +33,15 @@ type SidebarProps = {
   activeCategory?: string;
   onCategoryChange?: (category: string) => void;
   siteConfig?: SiteConfig;
+  headings?: SidebarHeading[];
 };
 
-export function SiteSidebar({ siteLinks = [], postCount, syncState, categories = [], activeCategory, onCategoryChange, siteConfig }: SidebarProps) {
+export function SiteSidebar({ siteLinks = [], postCount, syncState, categories = [], activeCategory, onCategoryChange, siteConfig, headings = [] }: SidebarProps) {
   const resolvedLinks = useSiteNavigation(siteLinks);
   const config = useSiteConfig(siteConfig);
   const toolsDisclosure = usePersistedDisclosure({ key: "blog.sidebar.tools.v1" });
   const categoriesDisclosure = usePersistedDisclosure({ key: "blog.sidebar.categories.v2", defaultOpen: false });
+  const tocDisclosure = usePersistedDisclosure({ key: "blog.sidebar.toc.v1", defaultOpen: headings.length > 0 && headings.length <= 8 });
   const [articlePageSync, setArticlePageSync] = useState<{ count?: number; state: ContentSyncState }>({ state: "loading" });
   const toolLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "tool"), [resolvedLinks]);
   const navLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "nav"), [resolvedLinks]);
@@ -120,6 +124,15 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           </details>
         )}
 
+        {headings.length > 0 && (
+          <details className="sidebar-section sidebar-toc" open={tocDisclosure.open} onToggle={tocDisclosure.onToggle}>
+            <summary><span><List aria-hidden size={16} />目录 <small>{headings.length > 8 ? "较长" : ""}</small></span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
+            <nav className="sidebar-toc-list" aria-label="文章目录">
+              {headings.map((heading) => <a href={`#${heading.id}`} style={{ "--toc-level": heading.level } as CSSProperties} key={heading.id}>{heading.label}</a>)}
+            </nav>
+          </details>
+        )}
+
         {categories.length > 0 && onCategoryChange && (
           <details
             className="sidebar-section sidebar-categories"
@@ -167,6 +180,14 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
                   {toolLinks.map((link) => (
                     <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id}>{link.title}{link.external && <small>外部</small>}</a>
                   ))}
+                </div>
+              </details>
+            )}
+            {headings.length > 0 && (
+              <details className="mobile-menu-group mobile-menu-disclosure">
+                <summary><span>目录</span><small>{headings.length}</small><CaretDown className="section-caret" aria-hidden size={13} /></summary>
+                <div className="mobile-menu-disclosure-content mobile-toc-list">
+                  {headings.map((heading) => <a href={`#${heading.id}`} key={heading.id}>{heading.label}</a>)}
                 </div>
               </details>
             )}

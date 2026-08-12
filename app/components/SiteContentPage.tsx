@@ -6,7 +6,7 @@ import { SiteSidebar } from "./SiteSidebar";
 export function SiteContentPage({ slug, payload, fetched = true }: { slug: string; payload?: ArticlePayload; fetched?: boolean }) {
   return (
     <div className="blog-frame article-frame site-content-frame">
-      <SiteSidebar />
+      <SiteSidebar headings={payload?.headings || []} />
       <main className="article-shell">
         <article>
           <ArticleClient

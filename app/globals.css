@@ -127,6 +127,11 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .sidebar-tools { padding: 14px 0 4px; }
 .sidebar-cloud-link { margin-top: 6px; }
 .sidebar-tool-list, .sidebar-category-list { display: grid; gap: 2px; margin-top: 8px; }
+.sidebar-toc { padding: 10px 0 4px; border-top: 1px solid var(--line); }
+.sidebar-section[open] .sidebar-toc-list { animation: section-content-arrive .24s var(--ease-out) both; }
+.sidebar-toc-list { display: grid; gap: 2px; max-height: min(38vh, 360px); overflow-y: auto; margin-top: 8px; scrollbar-width: thin; }
+.sidebar-toc-list a { display: block; overflow: hidden; padding: 5px 7px 5px calc(7px + (var(--toc-level, 1) - 1) * 10px); color: var(--muted); border-radius: 6px; font-size: 11px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-toc-list a:hover, .sidebar-toc-list a:focus-visible { color: var(--ink); background: var(--surface-soft); outline: none; }
 .sidebar-tool-list a { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 9px; color: var(--muted); border-radius: 6px; font-size: 12px; }
 .sidebar-tool-list a span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-tool-list .tool-link-label { min-width: 0; display: flex; align-items: center; gap: 7px; }
@@ -414,7 +419,7 @@ html[data-intro="playing"] .site-intro { display: grid; }
   .sidebar-identity img { width: 36px; height: 36px; border-radius: 8px; }
   .sidebar-identity strong { font-size: 17px; }
   .sidebar-nav, .sidebar-cloud-link { display: none; }
-  .sidebar-tools, .sidebar-categories, .sidebar-footer { display: none; }
+  .sidebar-tools, .sidebar-toc, .sidebar-categories, .sidebar-footer { display: none; }
   .mobile-menu { position: relative; display: block; }
   .mobile-menu>summary { min-height: 44px; display: flex; align-items: center; gap: 7px; padding: 0 12px; color: var(--ink); background: var(--surface-soft); border-radius: 8px; cursor: pointer; list-style: none; font-size: 13px; font-weight: 650; }
   .mobile-menu>summary::-webkit-details-marker { display: none; }
