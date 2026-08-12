@@ -1,7 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
+import type { CSSProperties } from "react";
 import { THEME_BOOTSTRAP_SCRIPT } from "./components/introState";
 import { DEFAULT_SITE_CONFIG, type SiteConfig } from "./data/types";
+import { siteThemeVariables } from "../shared/site-config";
 import "./globals.css";
 import "katex/dist/katex.min.css";
 
@@ -42,7 +44,14 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   const requestHeaders = await headers();
   const config = siteConfig(requestHeaders.get("x-blog-site-config"));
   return (
-    <html lang={config.siteLanguage} suppressHydrationWarning>
+    <html
+      lang={config.siteLanguage}
+      data-theme-default={config.themeMode}
+      data-theme-toggle={config.themeToggleEnabled ? "enabled" : "disabled"}
+      data-palette={config.themePreset}
+      style={siteThemeVariables(config) as CSSProperties}
+      suppressHydrationWarning
+    >
       <head><script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} /></head>
       <body>{children}</body>
     </html>

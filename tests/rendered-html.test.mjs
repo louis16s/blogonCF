@@ -172,7 +172,7 @@ test("overview renders every article immediately while retaining search and cate
     readFile(new URL("../app/components/SiteSidebar.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/useSiteNavigation.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(sidebar, /config\.toolsLabel/);
+  assert.match(sidebar, /SITE_LABELS\.tools/);
   assert.match(sidebar, /link\.kind === "tool"/);
   assert.doesNotMatch(sidebar, /快速访问|blog-sidebar-quick-open|quick-links/);
   assert.match(navigationHook, /loadSiteBootstrap/);
@@ -182,11 +182,11 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(sidebar, /mobile-menu-disclosure mobile-category-list/);
   assert.doesNotMatch(sidebar, /mobile-category-list" open/);
   assert.doesNotMatch(sidebar, /文章归档|历史归档/);
-  assert.match(sidebar, /config\.rssLabel/);
-  assert.match(sidebar, /config\.categoriesLabel/);
+  assert.match(sidebar, /SITE_LABELS\.rss/);
+  assert.match(sidebar, /SITE_LABELS\.categories/);
   assert.match(sidebar, /className="sidebar-section sidebar-categories"/);
   assert.doesNotMatch(sidebar, /sidebar-browse-title|sidebar-browse-panel|>浏览</);
-  assert.match(sidebar, /key: "blog\.sidebar\.categories\.v2", defaultOpen: false/);
+  assert.match(sidebar, /key: "blog\.sidebar\.categories\.v2", defaultOpen: config\.categoriesDefaultOpen/);
   assert.match(sidebar, /categories\.map\(\(item\)/);
   assert.match(blog, /categories=\{siteConfig\.categoriesEnabled \? categories : \[\]\}/);
   assert.match(blog, /onCategoryChange=\{selectCategory\}/);
@@ -221,7 +221,7 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(blog, /<ContentFooter id="about" siteConfig=\{siteConfig\} postCount=\{posts\.length\}/);
   assert.doesNotMatch(blog, /最近常出现|buildWordCloud\(posts\)/);
   assert.match(blog, /<WordCloudDialog open=\{wordCloudOpen\}/);
-  assert.match(sidebar, /config\.wordCloudEnabled[\s\S]*href="\/#word-cloud"[\s\S]*config\.wordCloudLabel/);
+  assert.match(sidebar, /config\.wordCloudEnabled[\s\S]*href="\/#word-cloud"[\s\S]*SITE_LABELS\.wordCloud/);
   assert.match(blog, /post\.icon \? <span className="post-emoji"/, "article cards should render the Notion page emoji when present");
   assert.doesNotMatch(blog, /post\.icon \|\|/, "article cards without a Notion emoji must not invent one");
   assert.doesNotMatch(blog, /categoryIcons|post-icon|Heart|MapTrifold/, "category guesses must not replace Notion icons");
@@ -233,9 +233,11 @@ test("daylight theme uses a clear reference-led palette and word cloud offers si
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/components/WordCloudDialog.tsx", import.meta.url), "utf8"),
   ]);
-  assert.match(css, /--bg: #fafaf9/);
-  assert.match(css, /--surface: #ffffff/);
-  assert.match(css, /--accent: #b96745/);
+  assert.match(css, /--site-light-bg: #fafaf9/);
+  assert.match(css, /--site-light-surface: #ffffff/);
+  assert.match(css, /--site-light-accent: #b96745/);
+  assert.match(css, /:root\[data-palette="forest"\]/);
+  assert.match(css, /:root\[data-palette="ocean"\]/);
   assert.match(css, /\.post-emoji \{/);
   for (const mode of ["pile", "drift", "rows", "cascade", "constellation", "rank"]) {
     assert.match(cloud, new RegExp(`id: "${mode}"`));
@@ -327,8 +329,8 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   assert.match(sidebar, /<span>菜单<\/span>/);
   assert.doesNotMatch(sidebar, /文章归档|历史归档|快速访问/);
   assert.match(sidebar, /config\.rssEnabled && rssLink/);
-  assert.match(sidebar, /<summary><span>\{config\.toolsLabel\}<\/span><small>\{toolLinks\.length\}<\/small><CaretDown/);
-  assert.match(sidebar, /\{config\.toolsLabel\} <small>\{toolLinks\.length\}<\/small>/);
+  assert.match(sidebar, /<summary><span>\{SITE_LABELS\.tools\}<\/span><small>\{toolLinks\.length\}<\/small><CaretDown/);
+  assert.match(sidebar, /\{SITE_LABELS\.tools\} <small>\{toolLinks\.length\}<\/small>/);
   assert.match(sidebar, /<small>外部<\/small>/);
   assert.match(sidebar, /aboutLink && \(\s*<a href=\{aboutLink\.href\}/, "unconfigured About links must not be invented on mobile");
   assert.doesNotMatch(sidebar, /href="\/#about"/);
@@ -1008,6 +1010,10 @@ test("public config endpoint exposes only the public footer, author, and year al
     return Response.json({ results: [
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "louis16s" }] } } },
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "SINCE" }] }, "配置值": { rich_text: [{ plain_text: "2020" }] } } },
+      { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "THEME_MODE" }] }, "配置值": { rich_text: [{ plain_text: "dark" }] } } },
+      { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "THEME_PRESET" }] }, "配置值": { rich_text: [{ plain_text: "forest" }] } } },
+      { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "LIGHT_ACCENT" }] }, "配置值": { rich_text: [{ plain_text: "#4f745d" }] } } },
+      { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "DARK_TEXT" }] }, "配置值": { rich_text: [{ plain_text: "red; background:url(x)" }] } } },
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "SECRET" }] }, "配置值": { rich_text: [{ plain_text: "never-leak" }] } } },
       { properties: { "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "缺少启用字段" }] } } },
     ] });
@@ -1020,6 +1026,10 @@ test("public config endpoint exposes only the public footer, author, and year al
     assert.equal(payload.source, "notion");
     assert.equal(payload.config.author, "louis16s");
     assert.equal(payload.config.since, "2020");
+    assert.equal(payload.config.themeMode, "dark");
+    assert.equal(payload.config.themePreset, "forest");
+    assert.equal(payload.config.lightAccent, "#4f745d");
+    assert.equal(payload.config.darkText, "");
     assert.ok(payload.config.footerQuotes.length >= 6);
     assert.doesNotMatch(JSON.stringify(payload), /never-leak|缺少启用字段/);
   } finally { globalThis.fetch = originalFetch; }

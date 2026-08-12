@@ -1,3 +1,6 @@
+export { DEFAULT_FOOTER_QUOTES, DEFAULT_SITE_CONFIG, SITE_LABELS } from "../../shared/site-config";
+export type { FooterQuote, SiteConfig, ThemeMode, ThemePreset, TocDefaultState } from "../../shared/site-config";
+
 export type Post = {
   id: string;
   title: string;
@@ -18,78 +21,6 @@ export type SiteLink = {
   icon?: string;
   external: boolean;
   kind: "rss" | "tool" | "nav";
-};
-
-export type SiteConfig = {
-  siteTitle: string;
-  siteDescription: string;
-  siteLanguage: string;
-  favicon: string;
-  avatarUrl: string;
-  ogImageUrl: string;
-  author: string;
-  since: string;
-  homeNotice: string;
-  homeNoticeSubtitle: string;
-  postCountText: string;
-  footerCredit: string;
-  repositoryUrl: string;
-  footerQuotes: FooterQuote[];
-  wordCloudEnabled: boolean;
-  categoriesEnabled: boolean;
-  rssEnabled: boolean;
-  searchEnabled: boolean;
-  introEnabled: boolean;
-  introTitle: string;
-  introSubtitle: string;
-  wordCloudLabel: string;
-  toolsLabel: string;
-  categoriesLabel: string;
-  rssLabel: string;
-};
-
-export type FooterQuote = {
-  lead: string;
-  sub: string;
-};
-
-export const DEFAULT_FOOTER_QUOTES: FooterQuote[] = [
-  { lead: "页面看到底了。喝口水，再随便逛逛。", sub: "偶尔拍照，或是写代码，剩下的时间用来对焦生活。" },
-  { lead: "这一页先停在这里。窗外或许正好有光。", sub: "把日子调到合适的曝光，也给自己留一点余量。" },
-  { lead: "读到这里，算是一起走了一小段路。", sub: "照片留住瞬间，文字替它慢慢显影。" },
-  { lead: "页面有尽头，想法暂时没有。", sub: "生活不必一直清晰，偶尔失焦也很好。" },
-  { lead: "先看到这里吧。下一次打开，也许又是另一种天气。", sub: "相机负责取景，代码负责运转，日子负责发生。" },
-  { lead: "翻页之前，先听一会儿周围的声音。", sub: "认真记录，也认真错过，这些都算生活。" },
-  { lead: "这一卷写完了，下一卷还在路上。", sub: "慢一点按下快门，也慢一点得出答案。" },
-  { lead: "感谢看到最后。这里没有结论，只有一些留下来的光。", sub: "愿每一次记录，都比上一次更接近真实。" },
-];
-
-export const DEFAULT_SITE_CONFIG: SiteConfig = {
-  siteTitle: "louis16s' blog",
-  siteDescription: "偶尔拍照，或是写代码，剩下的时间用来对焦生活。",
-  siteLanguage: "zh-CN",
-  favicon: "/favicon.svg",
-  avatarUrl: "",
-  ogImageUrl: "/og.jpg",
-  author: "louis16s",
-  since: "2020",
-  homeNotice: "blog 复活啦",
-  homeNoticeSubtitle: "愿这里继续保留一些缓慢、真实而具体的记录。",
-  postCountText: "这里收录着 {count} 个文章。不赶时间，慢慢翻。",
-  footerCredit: "在 [Notion](https://www.notion.so/) 创造，Cloudflare 带它兜风。",
-  repositoryUrl: "",
-  footerQuotes: DEFAULT_FOOTER_QUOTES,
-  wordCloudEnabled: true,
-  categoriesEnabled: true,
-  rssEnabled: true,
-  searchEnabled: true,
-  introEnabled: true,
-  introTitle: "louis16s",
-  introSubtitle: "正在对焦生活",
-  wordCloudLabel: "词云",
-  toolsLabel: "小工具",
-  categoriesLabel: "文章分类",
-  rssLabel: "RSS 订阅",
 };
 
 export type RichText = {

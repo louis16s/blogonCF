@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @next/next/no-img-element -- Notion-configured avatars may come from arbitrary HTTPS hosts. */
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -16,7 +17,7 @@ import {
   Rss,
   Wrench,
 } from "@phosphor-icons/react";
-import type { SiteConfig, SiteLink } from "../data/types";
+import { SITE_LABELS, type SiteConfig, type SiteLink } from "../data/types";
 import { usePersistedDisclosure } from "./usePersistedDisclosure";
 import { loadSiteBootstrap } from "./siteBootstrap";
 import { useSiteConfig } from "./useSiteConfig";
@@ -43,9 +44,11 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
   const pendingHeadingId = articleToc?.pendingHeadingId || "";
   const resolvedLinks = useSiteNavigation(siteLinks);
   const config = useSiteConfig(siteConfig);
-  const toolsDisclosure = usePersistedDisclosure({ key: "blog.sidebar.tools.v1" });
-  const categoriesDisclosure = usePersistedDisclosure({ key: "blog.sidebar.categories.v2", defaultOpen: false });
-  const tocDisclosure = usePersistedDisclosure({ key: "blog.sidebar.toc.v1", defaultOpen: resolvedHeadings.length > 1 && resolvedHeadings.length <= 8 });
+  const tocDefaultOpen = config.tocDefaultState === "open"
+    || (config.tocDefaultState === "auto" && resolvedHeadings.length > 1 && resolvedHeadings.length <= 8);
+  const toolsDisclosure = usePersistedDisclosure({ key: "blog.sidebar.tools.v1", defaultOpen: config.toolsDefaultOpen });
+  const categoriesDisclosure = usePersistedDisclosure({ key: "blog.sidebar.categories.v2", defaultOpen: config.categoriesDefaultOpen });
+  const tocDisclosure = usePersistedDisclosure({ key: "blog.sidebar.toc.v1", defaultOpen: tocDefaultOpen });
   const [articlePageSync, setArticlePageSync] = useState<{ count?: number; state: ContentSyncState }>({ state: "loading" });
   const toolLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "tool"), [resolvedLinks]);
   const navLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "nav"), [resolvedLinks]);
@@ -111,7 +114,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           ))}
         </nav>
 
-        {config.wordCloudEnabled ? <Link className="sidebar-cloud-link" href="/#word-cloud"><Cloud aria-hidden size={17} weight="regular" />{config.wordCloudLabel}</Link> : null}
+        {config.wordCloudEnabled ? <Link className="sidebar-cloud-link" href="/#word-cloud"><Cloud aria-hidden size={17} weight="regular" />{SITE_LABELS.wordCloud}</Link> : null}
 
         {toolLinks.length > 0 && (
           <details
@@ -119,7 +122,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
             open={toolsDisclosure.open}
             onToggle={toolsDisclosure.onToggle}
           >
-            <summary><span><Wrench aria-hidden size={16} />{config.toolsLabel} <small>{toolLinks.length}</small></span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
+            <summary><span><Wrench aria-hidden size={16} />{SITE_LABELS.tools} <small>{toolLinks.length}</small></span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
             <div className="sidebar-tool-list">
               {toolLinks.map((link) => (
                 <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id} title={link.summary || link.title}>
@@ -145,7 +148,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
             open={categoriesDisclosure.open}
             onToggle={categoriesDisclosure.onToggle}
           >
-            <summary><span><FolderOpen aria-hidden size={16} />{config.categoriesLabel}</span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
+            <summary><span><FolderOpen aria-hidden size={16} />{SITE_LABELS.categories}</span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
             <div className="sidebar-category-list" role="group" aria-label="按分类筛选">
               {categories.map((item) => (
                 <button type="button" className={item === activeCategory ? "active" : ""} aria-pressed={item === activeCategory} onClick={() => onCategoryChange(item)} key={item}>{item}</button>
@@ -178,10 +181,10 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
             ) : (
               <Link href={link.href} key={link.id}>{link.title}</Link>
             ))}
-            {config.wordCloudEnabled ? <Link href="/#word-cloud">{config.wordCloudLabel}</Link> : null}
+            {config.wordCloudEnabled ? <Link href="/#word-cloud">{SITE_LABELS.wordCloud}</Link> : null}
             {toolLinks.length > 0 && (
               <details className="mobile-menu-group mobile-menu-disclosure">
-                <summary><span>{config.toolsLabel}</span><small>{toolLinks.length}</small><CaretDown className="section-caret" aria-hidden size={13} /></summary>
+                <summary><span>{SITE_LABELS.tools}</span><small>{toolLinks.length}</small><CaretDown className="section-caret" aria-hidden size={13} /></summary>
                 <div className="mobile-menu-disclosure-content">
                   {toolLinks.map((link) => (
                     <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id}>{link.title}{link.external && <small>外部</small>}</a>
@@ -199,7 +202,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
             )}
             {config.categoriesEnabled && categories.length > 0 && onCategoryChange && (
               <details className="mobile-menu-group mobile-menu-disclosure mobile-category-list">
-                <summary><span>{config.categoriesLabel}</span><CaretDown className="section-caret" aria-hidden size={13} /></summary>
+                <summary><span>{SITE_LABELS.categories}</span><CaretDown className="section-caret" aria-hidden size={13} /></summary>
                 <div className="mobile-menu-disclosure-content">
                   {categories.map((item) => (
                     <button type="button" className={item === activeCategory ? "active" : ""} aria-pressed={item === activeCategory} onClick={() => onCategoryChange(item)} key={item}>{item}</button>
@@ -223,7 +226,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           <span className={`source ${resolvedSyncState === "live" ? "live" : ""}`}>{syncLabel}</span>
         </div>
         {config.repositoryUrl ? <a className="sidebar-repo-link" href={config.repositoryUrl} target="_blank" rel="noreferrer"><GithubLogo aria-hidden size={14} />{repositoryLabel(config.repositoryUrl)}</a> : null}
-        {config.rssEnabled && rssLink ? <Link className="sidebar-repo-link" href={rssLink.href}><Rss aria-hidden size={14} />{config.rssLabel}</Link> : null}
+        {config.rssEnabled && rssLink ? <Link className="sidebar-repo-link" href={rssLink.href}><Rss aria-hidden size={14} />{SITE_LABELS.rss}</Link> : null}
       </div>
     </aside>
   );

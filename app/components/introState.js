@@ -1,16 +1,22 @@
 export const INTRO_DURATION_MS = 5600;
 
 export const THEME_BOOTSTRAP_SCRIPT = `(() => {
+  const root = document.documentElement;
   let theme = "light";
   try {
     const savedTheme = window.localStorage.getItem("blog-theme");
-    theme = savedTheme === "dark" || savedTheme === "light"
+    const configuredTheme = root.dataset.themeDefault || "system";
+    const savedThemeAllowed = root.dataset.themeToggle !== "disabled";
+    theme = savedThemeAllowed && (savedTheme === "dark" || savedTheme === "light")
       ? savedTheme
-      : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      : configuredTheme === "dark" || configuredTheme === "light"
+        ? configuredTheme
+        : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   } catch {
-    try { theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; } catch {}
+    const configuredTheme = root.dataset.themeDefault || "system";
+    try { theme = configuredTheme === "dark" || configuredTheme === "light" ? configuredTheme : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; } catch {}
   }
-  document.documentElement.dataset.theme = theme;
+  root.dataset.theme = theme;
 })();`;
 
 export const INTRO_BOOTSTRAP_SCRIPT = `(() => {

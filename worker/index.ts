@@ -7,6 +7,7 @@ import { deleteHeadingJob, readHeadingCache, readHeadingJob, writeHeadingCache, 
 import { clearArticlePayload, storeArticlePayload, type ArticlePayload } from "../server/article-context";
 import { clearHomePayload, storeHomePayload, type HomePayload } from "../server/home-context";
 import { buildWordCloud, normalizeSearchText } from "../shared/wordCloud.js";
+import { createDefaultSiteConfig, type SiteConfig, type ThemeMode, type ThemePreset, type TocDefaultState } from "../shared/site-config";
 import { decodeRouteSegment } from "../shared/url";
 import { externalLinkPreview, extractExternalUrls, fetchExternalFeed, isSafeExternalUrl, signPreviewUrl, type ExternalFeed } from "./external-content";
 import { createChildAccessSignature, createUnlockCookie, hasUnlockSession, verifyChildAccessSignature } from "./unlock-session";
@@ -53,7 +54,7 @@ type SearchDocument = ReturnType<typeof toPost> & { body: string; searchBody: st
 type PublicCorpus = { documents: SearchDocument[]; partial: boolean };
 type WorkerCacheStorage = CacheStorage & { default?: Cache };
 type HeadingSummary = { id: string; label: string; level: number };
-type SiteConfigPayload = ReturnType<typeof defaultSiteConfig>;
+type SiteConfigPayload = SiteConfig;
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -69,8 +70,8 @@ const worker = {
     if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url, request, env.NOTION_TOKEN);
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") return notionWordCloud(env);
     if (url.pathname === "/api/content/unlock-session" && request.method === "GET") return notionUnlockSession(env, request, url);
-    if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request, ctx);
-    if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request, ctx);
+    if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
+    if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request);
     if (url.pathname === "/api/content/database" && request.method === "POST") return notionChildDatabase(env, request);
     if (url.pathname === "/_notion/image" && (request.method === "GET" || request.method === "HEAD")) return notionImage(request, env);
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
@@ -288,7 +289,7 @@ async function cachedPublicDocument(request: Request, env: Env, ctx: ExecutionCo
   keyUrl.protocol = canonical.protocol;
   keyUrl.host = canonical.host;
   keyUrl.search = "";
-  keyUrl.searchParams.set("schema", "2");
+  keyUrl.searchParams.set("schema", "3");
   keyUrl.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
   const key = new Request(keyUrl.toString(), { method: "GET" });
   const cached = await cache?.match(key);
@@ -310,7 +311,7 @@ function siteBootstrapEdgeKey(env: Env, request: Request): Request {
   url.host = canonical.host;
   url.pathname = "/__blog-cache/site-bootstrap";
   url.search = "";
-  url.searchParams.set("schema", "2");
+  url.searchParams.set("schema", "3");
   url.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
   url.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
   return new Request(url.toString(), { method: "GET" });
@@ -553,7 +554,7 @@ async function notionSitePage(env: Env, slug: string, request: Request): Promise
   } catch (reason) { return notionError(reason); }
 }
 
-async function notionChildPage(env: Env, request: Request, ctx: ExecutionContext): Promise<Response> {
+async function notionChildPage(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown; accessSignature?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
@@ -577,7 +578,7 @@ async function notionChildPage(env: Env, request: Request, ctx: ExecutionContext
   } catch (reason) { return notionError(reason); }
 }
 
-async function notionSitePageChild(env: Env, request: Request, ctx: ExecutionContext): Promise<Response> {
+async function notionSitePageChild(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown; accessSignature?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
@@ -634,7 +635,7 @@ async function advanceHeadingIndex(env: Env, pageId: string, version: string): P
     return { complete: true, headings: persisted };
   }
 
-  let job = (env.DB ? await readHeadingJob(env.DB, pageId, version) : headingJobCache.get(cacheKey))
+  const job = (env.DB ? await readHeadingJob(env.DB, pageId, version) : headingJobCache.get(cacheKey))
     || { queue: [{ kind: "page", parentId: pageId, cursor: "", depth: 0 }], headings: [] };
   let notionRequests = 0;
   // Keep each HTTP request comfortably below reverse-proxy timeouts. Large
@@ -907,7 +908,12 @@ async function queryConfigRows(env: Env) {
     if (Array.isArray(payload.results)) pages.push(...payload.results);
     cursor = payload.has_more && typeof payload.next_cursor === "string" ? payload.next_cursor : undefined;
   } while (cursor);
-  return pages;
+  return pages.sort((left, right) => configPageOrder(left) - configPageOrder(right));
+}
+
+function configPageOrder(page: any): number {
+  const order = page.properties?.["排序"]?.number;
+  return typeof order === "number" && Number.isFinite(order) ? order : Number.MAX_SAFE_INTEGER;
 }
 
 async function queryPublicSiteConfig(env: Env) {
@@ -1281,44 +1287,7 @@ function notionPageTitle(page: any): string {
   return title(property);
 }
 
-const DEFAULT_FOOTER_QUOTES = [
-  { lead: "页面看到底了。喝口水，再随便逛逛。", sub: "偶尔拍照，或是写代码，剩下的时间用来对焦生活。" },
-  { lead: "这一页先停在这里。窗外或许正好有光。", sub: "把日子调到合适的曝光，也给自己留一点余量。" },
-  { lead: "读到这里，算是一起走了一小段路。", sub: "照片留住瞬间，文字替它慢慢显影。" },
-  { lead: "页面有尽头，想法暂时没有。", sub: "生活不必一直清晰，偶尔失焦也很好。" },
-  { lead: "先看到这里吧。下一次打开，也许又是另一种天气。", sub: "相机负责取景，代码负责运转，日子负责发生。" },
-  { lead: "翻页之前，先听一会儿周围的声音。", sub: "认真记录，也认真错过，这些都算生活。" },
-  { lead: "这一卷写完了，下一卷还在路上。", sub: "慢一点按下快门，也慢一点得出答案。" },
-  { lead: "感谢看到最后。这里没有结论，只有一些留下来的光。", sub: "愿每一次记录，都比上一次更接近真实。" },
-];
-
-function defaultSiteConfig() { return {
-  siteTitle: "louis16s' blog",
-  siteDescription: "偶尔拍照，或是写代码，剩下的时间用来对焦生活。",
-  siteLanguage: "zh-CN",
-  favicon: "/favicon.svg",
-  avatarUrl: "",
-  ogImageUrl: "/og.jpg",
-  author: "louis16s",
-  since: "2020",
-  homeNotice: "blog 复活啦",
-  homeNoticeSubtitle: "愿这里继续保留一些缓慢、真实而具体的记录。",
-  postCountText: "这里收录着 {count} 个文章。不赶时间，慢慢翻。",
-  footerCredit: "在 [Notion](https://www.notion.so/) 创造，Cloudflare 带它兜风。",
-  repositoryUrl: "",
-  footerQuotes: DEFAULT_FOOTER_QUOTES,
-  wordCloudEnabled: true,
-  categoriesEnabled: true,
-  rssEnabled: true,
-  searchEnabled: true,
-  introEnabled: true,
-  introTitle: "louis16s",
-  introSubtitle: "正在对焦生活",
-  wordCloudLabel: "词云",
-  toolsLabel: "小工具",
-  categoriesLabel: "文章分类",
-  rssLabel: "RSS 订阅",
-}; }
+function defaultSiteConfig(): SiteConfig { return createDefaultSiteConfig(); }
 
 function toPublicSiteConfig(pages: any[]) {
   const config = defaultSiteConfig();
@@ -1348,10 +1317,20 @@ function toPublicSiteConfig(pages: any[]) {
     if (key === "INTRO_ENABLED") config.introEnabled = configBoolean(value, config.introEnabled);
     if (key === "INTRO_TITLE" && value) config.introTitle = cleanConfigText(value, 60) || config.introTitle;
     if (key === "INTRO_SUBTITLE" && value) config.introSubtitle = cleanConfigText(value, 100) || config.introSubtitle;
-    if (key === "WORD_CLOUD_LABEL" && value) config.wordCloudLabel = cleanConfigText(value, 30) || config.wordCloudLabel;
-    if (key === "TOOLS_LABEL" && value) config.toolsLabel = cleanConfigText(value, 30) || config.toolsLabel;
-    if (key === "CATEGORIES_LABEL" && value) config.categoriesLabel = cleanConfigText(value, 30) || config.categoriesLabel;
-    if (key === "RSS_LABEL" && value) config.rssLabel = cleanConfigText(value, 30) || config.rssLabel;
+    if (key === "THEME_MODE") config.themeMode = configEnum(value, ["system", "light", "dark"], config.themeMode) as ThemeMode;
+    if (key === "THEME_PRESET") config.themePreset = configEnum(value, ["warm", "neutral", "forest", "ocean"], config.themePreset) as ThemePreset;
+    if (key === "THEME_TOGGLE_ENABLED") config.themeToggleEnabled = configBoolean(value, config.themeToggleEnabled);
+    if (key === "LIGHT_BACKGROUND") config.lightBackground = configColor(value);
+    if (key === "LIGHT_SURFACE") config.lightSurface = configColor(value);
+    if (key === "LIGHT_TEXT") config.lightText = configColor(value);
+    if (key === "LIGHT_ACCENT") config.lightAccent = configColor(value);
+    if (key === "DARK_BACKGROUND") config.darkBackground = configColor(value);
+    if (key === "DARK_SURFACE") config.darkSurface = configColor(value);
+    if (key === "DARK_TEXT") config.darkText = configColor(value);
+    if (key === "DARK_ACCENT") config.darkAccent = configColor(value);
+    if (key === "TOOLS_DEFAULT_OPEN") config.toolsDefaultOpen = configBoolean(value, config.toolsDefaultOpen);
+    if (key === "CATEGORIES_DEFAULT_OPEN") config.categoriesDefaultOpen = configBoolean(value, config.categoriesDefaultOpen);
+    if (key === "TOC_DEFAULT_STATE") config.tocDefaultState = configEnum(value, ["auto", "open", "closed"], config.tocDefaultState) as TocDefaultState;
     if (key === "FOOTER_QUOTES" && value) {
       const quotes = value.split(/\r?\n/)
         .map((line) => line.split(/\s*[｜|]\s*/, 2).map((part) => part.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").trim()))
@@ -1378,6 +1357,16 @@ function configBoolean(value: string, fallback: boolean): boolean {
   if (/^(?:1|true|yes|on|开启|启用|是)$/i.test(value)) return true;
   if (/^(?:0|false|no|off|关闭|禁用|否)$/i.test(value)) return false;
   return fallback;
+}
+
+function configEnum<T extends string>(value: string, allowed: readonly T[], fallback: T): T {
+  const normalized = value.trim().toLocaleLowerCase() as T;
+  return allowed.includes(normalized) ? normalized : fallback;
+}
+
+function configColor(value: string): string {
+  const normalized = value.trim().toLocaleLowerCase();
+  return /^#[0-9a-f]{6}$/.test(normalized) ? normalized : "";
 }
 
 function safePublicAsset(value: string): string {

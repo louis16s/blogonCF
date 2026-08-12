@@ -17,6 +17,7 @@ import { SiteSidebar } from "./SiteSidebar";
 import { createSharedRequest } from "./clientState";
 import { CONTENT_REFRESH_INTERVAL_MS } from "./siteBootstrap";
 import { normalizeSearchText } from "../../shared/wordCloud.js";
+import { siteThemeVariables } from "../../shared/site-config";
 
 const ALL = "全部";
 const WordCloudDialog = dynamic(() => import("./WordCloudDialog").then((module) => module.WordCloudDialog), {
@@ -31,7 +32,7 @@ const warmSearchIndex = createSharedRequest(async () => {
 export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConfig = DEFAULT_SITE_CONFIG }: { initialPosts?: Post[]; initialLinks?: SiteLink[]; initialConfig?: SiteConfig }) {
   const [posts, setPosts] = useState<Post[]>(initialPosts);
   const [siteLinks, setSiteLinks] = useState<SiteLink[]>(initialLinks);
-  const [siteConfig, setSiteConfig] = useState<SiteConfig>(initialConfig);
+  const [siteConfig, setSiteConfig] = useState<SiteConfig>(() => ({ ...DEFAULT_SITE_CONFIG, ...initialConfig }));
   const [syncState, setSyncState] = useState<"loading" | "live" | "unavailable">(initialPosts.length ? "live" : "loading");
   const [category, setCategory] = useState(ALL);
   const [query, setQuery] = useState("");
@@ -76,23 +77,44 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
   }, []);
 
   useEffect(() => {
+    const root = document.documentElement;
+    const previousPalette = root.dataset.palette;
+    const variables = siteThemeVariables(siteConfig);
+    const previousVariables = new Map(Object.keys(variables).map((name) => [name, root.style.getPropertyValue(name)]));
+    root.dataset.palette = siteConfig.themePreset;
+    for (const [name, value] of Object.entries(variables)) root.style.setProperty(name, value);
+    return () => {
+      if (previousPalette) root.dataset.palette = previousPalette;
+      else delete root.dataset.palette;
+      for (const [name, value] of previousVariables) {
+        if (value) root.style.setProperty(name, value);
+        else root.style.removeProperty(name);
+      }
+    };
+  }, [siteConfig]);
+
+  useEffect(() => {
     let saved: string | null = null;
     try { saved = window.localStorage.getItem("blog-theme"); }
     catch { /* Use the system theme when storage is unavailable. */ }
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const configuredDark = siteConfig.themeMode === "dark" || (siteConfig.themeMode === "system" && prefersDark);
+    const resolvedDark = siteConfig.themeToggleEnabled && (saved === "dark" || saved === "light")
+      ? saved === "dark"
+      : configuredDark;
     const frame = window.requestAnimationFrame(() => {
-      setDark(saved ? saved === "dark" : prefersDark);
+      setDark(resolvedDark);
       setThemeReady(true);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, []);
+  }, [siteConfig.themeMode, siteConfig.themeToggleEnabled]);
 
   useEffect(() => {
     if (!themeReady) return;
     document.documentElement.dataset.theme = dark ? "dark" : "light";
-    try { window.localStorage.setItem("blog-theme", dark ? "dark" : "light"); }
+    try { if (siteConfig.themeToggleEnabled) window.localStorage.setItem("blog-theme", dark ? "dark" : "light"); }
     catch { /* Theme switching still works without persistence. */ }
-  }, [dark, themeReady]);
+  }, [dark, themeReady, siteConfig.themeToggleEnabled]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -107,7 +129,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
         if (Array.isArray(data.posts)) {
           setPosts(data.posts);
           setSiteLinks(Array.isArray(data.links) ? data.links : []);
-          if (data.config?.author && data.config?.since) setSiteConfig(data.config);
+          if (data.config?.author && data.config?.since) setSiteConfig({ ...DEFAULT_SITE_CONFIG, ...data.config });
           setSyncState("live");
         }
       } catch {
@@ -206,10 +228,10 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
               />
               <MagnifyingGlass aria-hidden size={20} />
             </label> : null}
-            <button className="icon-button" type="button" onClick={() => setDark((value) => !value)} aria-label={dark ? "切换为浅色模式" : "切换为深色模式"}>
+            {siteConfig.themeToggleEnabled ? <button className="icon-button" type="button" onClick={() => setDark((value) => !value)} aria-label={dark ? "切换为浅色模式" : "切换为深色模式"}>
               {dark ? <Sun aria-hidden size={21} /> : <Moon aria-hidden size={21} />}
               <span className="theme-label">{dark ? "浅色" : "深色"}</span>
-            </button>
+            </button> : null}
           </div>
         </header>
 

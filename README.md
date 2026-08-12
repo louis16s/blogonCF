@@ -164,32 +164,29 @@ Notion 自动转换出的 `———[hide]———` 也会被识别。标记和
 
 ## 配置中心
 
-公共接口只读取以下白名单项，避免把配置数据库中的私密字段暴露给访客。配置数据库建议包含 `配置名`（Title）、`配置值`（Rich text）、`备注`（Rich text）、`启用`（Checkbox）、`类型`（Select：`Config`/`Link`）和 `链接`（URL）：
+公共接口只读取白名单项，避免把配置数据库中的其他字段暴露给访客。配置数据库建议包含 `配置名`（Title）、`配置值`（Rich text）、`备注`（Rich text）、`启用`（Checkbox）、`类型`（Select：`Config`/`Link`）、`链接`（URL）、`分组`（Select）和 `排序`（Number）。推荐按 `排序` 升序显示。
 
-- `SITE_TITLE`：站点、浏览器标签、Open Graph 与 RSS 标题
-- `SITE_DESCRIPTION`：站点、分享卡片与 RSS 描述
-- `SITE_LANGUAGE`：语言代码，例如 `zh-CN`
-- `FAVICON_URL`：标签页图标，支持站内绝对路径或 HTTPS 图片
-- `AVATAR_URL`：侧栏头像；留空则不显示
-- `OG_IMAGE_URL`：社交分享图片
-- `AUTHOR`：页脚作者
-- `SINCE`：创始年份
-- `HOME_NOTICE`：首页公告主句
-- `HOME_NOTICE_SUBTITLE`：首页公告副句
-- `POST_COUNT_TEXT`：首页文章数量文案，使用 `{count}` 作为数量占位符
-- `FOOTER_CREDIT`：页脚来源说明；其中的 `Notion` 会保留官网链接
-- `REPOSITORY_URL`：侧栏项目仓库地址，仅接受 GitHub HTTPS 仓库链接
-- `FOOTER_QUOTES`：页脚随机短句；每行一组，主句与副句用 `｜` 分隔
-- `WORD_CLOUD_ENABLED`：是否启用词云（`true`/`false`）
-- `CATEGORIES_ENABLED`：是否展示文章分类
-- `RSS_ENABLED`：是否生成 RSS、展示入口并聚合外部订阅
-- `SEARCH_ENABLED`：是否展示全文搜索
-- `INTRO_ENABLED`：是否播放首页开屏动画
-- `INTRO_TITLE`、`INTRO_SUBTITLE`：开屏动画文字
-- `WORD_CLOUD_LABEL`、`TOOLS_LABEL`、`CATEGORIES_LABEL`、`RSS_LABEL`：对应栏目显示名称
-- `NOTION_DATA_SOURCE_ID`：文章/Page/Link 数据源 ID；启用后优先于 Worker 的同名普通变量
+| 分组 | 配置项 | 作用 |
+| --- | --- | --- |
+| 01 · 站点身份 | `SITE_TITLE`、`SITE_DESCRIPTION`、`SITE_LANGUAGE` | 站点标题、搜索/分享描述与语言代码 |
+| 01 · 站点身份 | `AUTHOR`、`SINCE` | 作者和创始年份 |
+| 02 · 品牌资源 | `FAVICON_URL`、`AVATAR_URL`、`OG_IMAGE_URL` | 标签页图标、侧栏头像和分享卡片图片；支持站内路径或 HTTPS |
+| 03 · 内容功能 | `WORD_CLOUD_ENABLED`、`CATEGORIES_ENABLED`、`RSS_ENABLED`、`SEARCH_ENABLED` | 词云、分类、RSS 与全文搜索开关 |
+| 03 · 内容功能 | `TOOLS_DEFAULT_OPEN`、`CATEGORIES_DEFAULT_OPEN` | 访客没有保存过偏好时，侧栏分组是否默认展开 |
+| 03 · 内容功能 | `TOC_DEFAULT_STATE` | 目录默认状态：`auto`、`open` 或 `closed`；长目录在 `auto` 下默认折叠 |
+| 04 · 主题配色 | `THEME_MODE` | 默认主题：`system`、`light` 或 `dark` |
+| 04 · 主题配色 | `THEME_PRESET` | 配色预设：`warm`、`neutral`、`forest` 或 `ocean` |
+| 04 · 主题配色 | `THEME_TOGGLE_ENABLED` | 是否允许访客切换明暗主题 |
+| 04 · 主题配色 | `LIGHT_BACKGROUND`、`LIGHT_SURFACE`、`LIGHT_TEXT`、`LIGHT_ACCENT` | 可选的浅色主题覆盖色，只接受完整的 `#RRGGBB` |
+| 04 · 主题配色 | `DARK_BACKGROUND`、`DARK_SURFACE`、`DARK_TEXT`、`DARK_ACCENT` | 可选的深色主题覆盖色，只接受完整的 `#RRGGBB` |
+| 05 · 首页 | `HOME_NOTICE`、`HOME_NOTICE_SUBTITLE` | 首页公告主句和副句 |
+| 05 · 首页 | `POST_COUNT_TEXT` | 文章数量文案，使用 `{count}` 作为数量占位符 |
+| 05 · 首页 | `INTRO_ENABLED`、`INTRO_TITLE`、`INTRO_SUBTITLE` | 首页开屏动画开关与文字 |
+| 06 · 页脚与链接 | `FOOTER_CREDIT`、`FOOTER_QUOTES` | 页脚来源说明和随机短句；每行短句以 `主句｜副句` 保存 |
+| 06 · 页脚与链接 | `REPOSITORY_URL` | 侧栏项目仓库地址，仅接受 GitHub HTTPS 仓库链接 |
+| 99 · 高级设置 | `NOTION_DATA_SOURCE_ID` | 文章/Page/Link 数据源 ID；启用后优先于 Worker 的同名普通变量 |
 
-配置项需要启用；年份会从文本中提取四位数。未配置时使用项目默认值。
+配置项需要启用；年份会从文本中提取四位数。未配置、未启用或格式不合法时使用安全默认值。自定义颜色优先于配色预设，因此通常只需修改 `THEME_PRESET`；需要精调时再启用单项颜色覆盖。
 
 Config 数据源也能存导航链接：把 `类型` 设为 `Link`，`配置名` 填显示名称，`链接` 填 HTTPS 或站内路径，`备注` 填副标题并勾选 `启用`。这些链接会与内容数据库中的 `Link + Published` 合并并按目标去重。
 
