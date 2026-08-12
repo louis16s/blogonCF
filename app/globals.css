@@ -97,11 +97,12 @@ html[data-intro="playing"] .site-intro { display: grid; }
 @keyframes intro-curtain { 0%, 82% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
 @keyframes intro-skip-exit { 0%, 88% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes page-arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes page-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes sidebar-arrive { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
 @keyframes card-arrive { from { opacity: 0; transform: translateY(9px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes section-content-arrive { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 
-.blog-frame { min-height: 100vh; animation: page-arrive .65s var(--ease-out) both; }
+.blog-frame { min-height: 100vh; animation: page-fade .65s var(--ease-out) both; }
 .site-sidebar { position: fixed; inset: 22px auto 22px 22px; z-index: 20; width: 210px; display: flex; flex-direction: column; justify-content: space-between; padding: 25px 27px 22px; background: color-mix(in srgb, var(--surface) 94%, var(--accent-soft)); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); animation: sidebar-arrive .62s .08s var(--ease-out) both; transition: background-color .35s var(--ease-soft), border-color .35s var(--ease-soft), box-shadow .25s var(--ease-soft); }
 .sidebar-main { min-height: 0; overflow-y: auto; scrollbar-width: none; }
 .sidebar-main::-webkit-scrollbar { display: none; }
