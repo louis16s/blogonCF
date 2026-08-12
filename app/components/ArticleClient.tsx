@@ -98,6 +98,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const childTrailRef = useRef<ChildPage[]>([]);
   const childRequestRef = useRef<AbortController | null>(null);
   const childHeadingRequestRef = useRef<AbortController | null>(null);
+  const pendingHeadingIdRef = useRef("");
   const nextCursorRef = useRef(initialNextCursor);
   const skipInitialRefresh = useRef(initialFetched);
   const lastRefreshAt = useRef(0);
@@ -105,6 +106,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const contentEndpoint = contentKind === "page" ? "/api/content/page" : "/api/content/post";
   const childEndpoint = contentKind === "page" ? "/api/content/page-child" : "/api/content/child";
   const setTocHeadings = articleToc?.setHeadings;
+  const setPendingHeadingId = articleToc?.setPendingHeadingId;
   const setRootCursor = useCallback((cursor?: string) => {
     nextCursorRef.current = cursor;
     setNextCursor(cursor);
@@ -116,6 +118,13 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   }, [childTrail, headings, setTocHeadings]);
 
   const navigateToHeading = useCallback(async (id: string) => {
+    pendingHeadingIdRef.current = id;
+    setPendingHeadingId?.(id);
+    const finishNavigation = () => {
+      if (pendingHeadingIdRef.current !== id) return;
+      pendingHeadingIdRef.current = "";
+      setPendingHeadingId?.("");
+    };
     const findAndScroll = () => {
       const target = document.getElementById(id);
       if (!target) return false;
@@ -123,9 +132,17 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       url.hash = id;
       window.history.replaceState(window.history.state, "", url);
       target.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+      finishNavigation();
       return true;
     };
-    if (findAndScroll() || childRequestRef.current) return;
+    const findAfterRender = async () => {
+      for (let frame = 0; frame < 4; frame++) {
+        if (findAndScroll()) return true;
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      }
+      return findAndScroll();
+    };
+    if (findAndScroll() || childRequestRef.current || continuationLoading) return;
     const activeChild = childTrailRef.current.at(-1);
     if (activeChild) {
       const controller = new AbortController();
@@ -142,11 +159,17 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
           next[index] = current;
           childTrailRef.current = next;
           setChildTrail(next);
-          await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+          if (await findAfterRender()) break;
         }
-        findAndScroll();
+        if (!await findAfterRender() && !current.nextCursor) {
+          finishNavigation();
+          setChildError("目录标题已从 Notion 更新，请重新打开这篇文章");
+        }
       } catch (reason) {
-        if (reason instanceof Error && reason.name !== "AbortError") setChildError(reason.message || "章节暂时无法定位");
+        if (reason instanceof Error && reason.name !== "AbortError") {
+          finishNavigation();
+          setChildError(reason.message || "章节暂时无法定位");
+        }
       } finally {
         if (childRequestRef.current === controller) childRequestRef.current = null;
         setChildContinuationLoading(false);
@@ -165,15 +188,31 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
         setBlocks((currentBlocks) => [...currentBlocks, ...(data.blocks || [])]);
         setRootCursor(data.nextCursor);
         setTruncated((currentTruncated) => Boolean(currentTruncated || data.truncated));
-        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+        if (await findAfterRender()) break;
       }
-      findAndScroll();
+      if (!await findAfterRender() && !nextCursorRef.current) {
+        finishNavigation();
+        setError("目录标题已从 Notion 更新，请刷新后重试");
+      }
     } catch (reason) {
-      if (reason instanceof Error) setError(reason.message || "章节暂时无法定位");
+      if (reason instanceof Error && reason.name !== "AbortError") {
+        finishNavigation();
+        setError(reason.message || "章节暂时无法定位");
+      }
     } finally {
       setContinuationLoading(false);
     }
-  }, [childEndpoint, contentEndpoint, setRootCursor, slug]);
+  }, [childEndpoint, contentEndpoint, continuationLoading, setPendingHeadingId, setRootCursor, slug]);
+
+  // Auto-prefetch and TOC navigation share the same continuation channel. If
+  // a click arrives while a chunk is in flight, keep it queued and resume as
+  // soon as that request commits instead of silently discarding the click.
+  useEffect(() => {
+    const id = pendingHeadingIdRef.current;
+    if (!id || childRequestRef.current || childOpening || childContinuationLoading || continuationLoading) return;
+    const frame = window.requestAnimationFrame(() => { void navigateToHeading(id); });
+    return () => window.cancelAnimationFrame(frame);
+  }, [childContinuationLoading, childOpening, childTrail, continuationLoading, navigateToHeading, nextCursor]);
 
   useEffect(() => {
     const onNavigate = (event: Event) => {
@@ -185,6 +224,8 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   }, [navigateToHeading]);
 
   const loadChild = useCallback((pageId: string, accessSignature?: string, updateHistory = true) => {
+    pendingHeadingIdRef.current = "";
+    setPendingHeadingId?.("");
     childRequestRef.current?.abort();
     childHeadingRequestRef.current?.abort();
     const controller = new AbortController();
@@ -230,7 +271,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
           setChildOpening(false);
         }
       });
-  }, [childEndpoint, slug]);
+  }, [childEndpoint, setPendingHeadingId, slug]);
 
   const loadMoreChild = useCallback(() => {
     const currentChild = childTrailRef.current.at(-1);
@@ -374,6 +415,8 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   }, [isNewsPage, siteConfig?.rssEnabled, slug]);
 
   const closeChild = () => {
+    pendingHeadingIdRef.current = "";
+    setPendingHeadingId?.("");
     childRequestRef.current?.abort();
     childHeadingRequestRef.current?.abort();
     childRequestRef.current = null;

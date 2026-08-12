@@ -40,6 +40,7 @@ type SidebarProps = {
 export function SiteSidebar({ siteLinks = [], postCount, syncState, categories = [], activeCategory, onCategoryChange, siteConfig, headings = [] }: SidebarProps) {
   const articleToc = useArticleToc();
   const resolvedHeadings = articleToc?.headings ?? headings;
+  const pendingHeadingId = articleToc?.pendingHeadingId || "";
   const resolvedLinks = useSiteNavigation(siteLinks);
   const config = useSiteConfig(siteConfig);
   const toolsDisclosure = usePersistedDisclosure({ key: "blog.sidebar.tools.v1" });
@@ -133,7 +134,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           <details className="sidebar-section sidebar-toc" open={tocDisclosure.open} onToggle={tocDisclosure.onToggle}>
             <summary><span><List aria-hidden size={16} />目录 <small>{resolvedHeadings.length > 8 ? "较长" : ""}</small></span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
             <nav className="sidebar-toc-list" aria-label="文章目录">
-              {resolvedHeadings.map((heading) => <a href={`#${heading.id}`} onClick={(event) => navigateToHeading(event, heading.id)} style={{ "--toc-level": heading.level } as CSSProperties} key={heading.id}>{heading.label}</a>)}
+              {resolvedHeadings.map((heading) => <a href={`#${heading.id}`} className={pendingHeadingId === heading.id ? "is-loading" : undefined} aria-busy={pendingHeadingId === heading.id || undefined} onClick={(event) => navigateToHeading(event, heading.id)} style={{ "--toc-level": heading.level } as CSSProperties} key={heading.id}>{heading.label}</a>)}
             </nav>
           </details>
         )}
@@ -192,7 +193,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
               <details className="mobile-menu-group mobile-menu-disclosure">
                 <summary><span>目录</span><small>{resolvedHeadings.length}</small><CaretDown className="section-caret" aria-hidden size={13} /></summary>
                 <div className="mobile-menu-disclosure-content mobile-toc-list">
-                  {resolvedHeadings.map((heading) => <a href={`#${heading.id}`} onClick={(event) => navigateToHeading(event, heading.id)} key={heading.id}>{heading.label}</a>)}
+                  {resolvedHeadings.map((heading) => <a href={`#${heading.id}`} className={pendingHeadingId === heading.id ? "is-loading" : undefined} aria-busy={pendingHeadingId === heading.id || undefined} onClick={(event) => navigateToHeading(event, heading.id)} key={heading.id}>{heading.label}</a>)}
                 </div>
               </details>
             )}

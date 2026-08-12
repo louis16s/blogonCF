@@ -1437,6 +1437,23 @@ test("article client verifies the unlock cookie and sends it with child-page req
   assert.match(source, /response\.status === 404[\s\S]*trail: \[\]/);
 });
 
+test("TOC clicks survive in-flight prefetches and keep loading until the target mounts", async () => {
+  const [article, context, sidebar, css] = await Promise.all([
+    readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/ArticleTocContext.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/SiteSidebar.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(article, /pendingHeadingIdRef/);
+  assert.match(article, /Auto-prefetch and TOC navigation share the same continuation channel/);
+  assert.match(article, /while \(!findAndScroll\(\) && current\.nextCursor\)/);
+  assert.match(article, /findAfterRender/);
+  assert.doesNotMatch(article, /if \(findAndScroll\(\) \|\| childRequestRef\.current\) return/);
+  assert.match(context, /pendingHeadingId/);
+  assert.match(sidebar, /aria-busy=\{pendingHeadingId === heading\.id \|\| undefined\}/);
+  assert.match(css, /\.sidebar-toc-list a\.is-loading/);
+});
+
 test("password endpoint rate-limits repeated failures before calling Notion again", async () => {
   const workerA = await loadWorker();
   const workerB = await loadWorker();
