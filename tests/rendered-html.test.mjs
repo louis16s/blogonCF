@@ -1270,7 +1270,7 @@ test("large child pages resolve every Notion cursor in one authenticated respons
       blockRequests.push(url);
       const second = url.includes("start_cursor=cursor_2");
       return Response.json({
-        results: [{ id: second ? "chunk-2" : "chunk-1", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: second ? "第二段" : "第一段", annotations: {} }] } }],
+        results: [{ id: second ? "chunk-2" : "chunk-1", type: "heading_2", has_children: false, heading_2: { rich_text: [{ plain_text: second ? "第二章" : "第一章", annotations: {} }] } }],
         has_more: !second,
         next_cursor: second ? null : "cursor_2",
       });
@@ -1288,7 +1288,12 @@ test("large child pages resolve every Notion cursor in one authenticated respons
     assert.equal(response.status, 200);
     const payload = await response.json();
     assert.deepEqual(payload.child.blocks.map((block) => block.id), ["chunk-1", "chunk-2"]);
-    assert.equal(blockRequests.length, 2, "the Worker should return complete content without repeating the same pagination for headings");
+    assert.deepEqual(payload.child.headings, [], "a body response must never expose a partial table of contents");
+    const headingsResponse = await worker.fetch(new Request("http://localhost/api/content/child?headings=1", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "long-index", pageId: childId }) }), env, context);
+    assert.equal(headingsResponse.status, 200);
+    const headingsPayload = await headingsResponse.json();
+    assert.deepEqual(headingsPayload.child.headings.map(({ label }) => label), ["第一章", "第二章"]);
+    assert.equal(blockRequests.length, 4, "the independent TOC request must follow every Notion cursor before replying");
   } finally { globalThis.fetch = originalFetch; }
 });
 

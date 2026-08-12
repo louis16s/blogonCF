@@ -3,6 +3,7 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import { clearPasswordAttempts, getPasswordAttemptStatus, recordPasswordFailure, type PasswordRateLimitDatabase } from "../db/rate-limit";
+import { deleteHeadingJob, readHeadingCache, readHeadingJob, writeHeadingCache, writeHeadingJob, type HeadingIndexJob, type HeadingIndexTask } from "../db/heading-cache";
 import { clearArticlePayload, storeArticlePayload, type ArticlePayload } from "../server/article-context";
 import { clearHomePayload, storeHomePayload, type HomePayload } from "../server/home-context";
 import { buildWordCloud, normalizeSearchText } from "../shared/wordCloud.js";
@@ -44,6 +45,7 @@ const wordCloudCache = new Map<string, { expiresAt: number; payload: WordCloudPa
 const publicCorpusCache = new Map<string, { expiresAt: number; corpus: PublicCorpus }>();
 const siteBootstrapCache = new Map<string, { freshUntil: number; staleUntil: number; payload?: HomePayload; pending?: Promise<HomePayload> }>();
 const headingIndexCache = new Map<string, { expiresAt: number; headings?: HeadingSummary[]; pending?: Promise<HeadingSummary[]> }>();
+const headingJobCache = new Map<string, HeadingIndexJob>();
 const contentSourceCache = new Map<string, { expiresAt: number; id: string }>();
 
 type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "notion" };
@@ -571,7 +573,7 @@ async function notionChildPage(env: Env, request: Request, ctx: ExecutionContext
 
     const childPage = await resolveChildPage(env, parent, trail, pageId, accessSignature);
     if (!childPage) return error(404, "没有找到这个子页面，或它已从当前文章移除");
-    return childPageResponse(env, childPage, parent.id, cursor, urlBoolean(new URL(request.url), "headings"), ctx);
+    return childPageResponse(env, childPage, parent.id, cursor, urlBoolean(new URL(request.url), "headings"));
   } catch (reason) { return notionError(reason); }
 }
 
@@ -589,22 +591,24 @@ async function notionSitePageChild(env: Env, request: Request, ctx: ExecutionCon
     if (!parent) return error(404, "Page not found");
     const childPage = await resolveChildPage(env, parent, trail, pageId, accessSignature);
     if (!childPage) return error(404, "没有找到这个子页面，或它已从当前页面移除");
-    return childPageResponse(env, childPage, parent.id, cursor, urlBoolean(new URL(request.url), "headings"), ctx);
+    return childPageResponse(env, childPage, parent.id, cursor, urlBoolean(new URL(request.url), "headings"));
   } catch (reason) { return notionError(reason); }
 }
 
-async function childPageResponse(env: Env, childPage: any, rootPageId: string, cursor = "", headingsOnly = false, ctx?: ExecutionContext): Promise<Response> {
+async function childPageResponse(env: Env, childPage: any, rootPageId: string, cursor = "", headingsOnly = false): Promise<Response> {
   if (headingsOnly) {
-    const cached = headingIndexCache.get(childPage.id);
-    if (cached?.headings && cached.expiresAt > Date.now()) return Response.json({ child: { id: childPage.id, headings: cached.headings } }, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
-    const pending = warmHeadingIndex(env, childPage.id);
-    ctx?.waitUntil(pending);
-    return Response.json({ pending: true }, { status: 202, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": "1" } });
+    // A table of contents is a page-level index, not a projection of whichever
+    // body chunk happened to load first. Wait for every Notion cursor here so
+    // the client can only ever replace its TOC with a complete result.
+    const index = await advanceHeadingIndex(env, childPage.id, childPage.last_edited_time || "");
+    if (!index.complete) return Response.json({ pending: true }, { status: 202, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": "0" } });
+    return Response.json({ child: { id: childPage.id, headings: index.headings } }, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
   }
   const blockState = newBlockReadState();
   const chunk = await getBlockChildrenChunk(env, childPage.id, blockState, 0, cursor);
-  const headings = cursor ? undefined : collectNormalizedHeadings(chunk.blocks);
-  if (!cursor && chunk.nextCursor) ctx?.waitUntil(warmHeadingIndex(env, childPage.id));
+  // Never expose a partial TOC derived from a body chunk. The dedicated
+  // headings request below traverses the full Notion page independently.
+  const headings = cursor ? undefined : [];
   await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
   await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, rootPageId);
   const accessSignature = await createChildAccessSignature(env.NOTION_TOKEN!, normalizeNotionId(rootPageId)!, normalizeNotionId(childPage.id)!);
@@ -620,37 +624,62 @@ async function childPageResponse(env: Env, childPage: any, rootPageId: string, c
   } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
 }
 
-function warmHeadingIndex(env: Env, pageId: string): Promise<HeadingSummary[]> {
-  const cached = headingIndexCache.get(pageId);
-  if (cached?.headings && cached.expiresAt > Date.now()) return Promise.resolve(cached.headings);
-  if (cached?.pending) return cached.pending;
-  const pending = getBlockHeadings(env, pageId).then((headings) => {
-    headingIndexCache.set(pageId, { headings, expiresAt: Date.now() + 10 * 60 * 1000 });
-    return headings;
-  }).catch((reason) => {
-    headingIndexCache.delete(pageId);
-    throw reason;
-  });
-  headingIndexCache.set(pageId, { pending, expiresAt: Date.now() + 60_000 });
-  return pending;
+async function advanceHeadingIndex(env: Env, pageId: string, version: string): Promise<{ complete: boolean; headings: HeadingSummary[] }> {
+  const cacheKey = `${pageId}:${version}`;
+  const cached = headingIndexCache.get(cacheKey);
+  if (cached?.headings && cached.expiresAt > Date.now()) return { complete: true, headings: cached.headings };
+  const persisted = env.DB ? await readHeadingCache(env.DB, pageId, version) : null;
+  if (persisted) {
+    headingIndexCache.set(cacheKey, { headings: persisted, expiresAt: Date.now() + 10 * 60 * 1000 });
+    return { complete: true, headings: persisted };
+  }
+
+  let job = (env.DB ? await readHeadingJob(env.DB, pageId, version) : headingJobCache.get(cacheKey))
+    || { queue: [{ kind: "page", parentId: pageId, cursor: "", depth: 0 }], headings: [] };
+  let notionRequests = 0;
+  // Keep each HTTP request comfortably below reverse-proxy timeouts. Large
+  // Notion pages resume from D1 on the next request and reveal no partial TOC.
+  while (job.queue.length && notionRequests < 4) {
+    const task = job.queue.shift()!;
+    if (task.kind === "heading") {
+      job.headings.push(task.heading);
+      continue;
+    }
+    if (task.depth > MAX_BLOCK_DEPTH) continue;
+    const query = new URLSearchParams({ page_size: "100" });
+    if (task.cursor) query.set("start_cursor", task.cursor);
+    const payload = await notionFetch(env, `/blocks/${task.parentId}/children?${query}`);
+    notionRequests += 1;
+    const nextTasks: HeadingIndexTask[] = [];
+    for (const raw of payload.results || []) {
+      if (/^heading_[123]$/.test(raw.type)) {
+        const label = richText(raw[raw.type]?.rich_text || []).trim();
+        if (label) nextTasks.push({ kind: "heading", heading: { id: raw.id, label, level: Number(raw.type.at(-1)) } });
+      }
+      if (raw.has_children && raw.type !== "child_page" && raw.type !== "child_database") {
+        nextTasks.push({ kind: "page", parentId: raw.id, cursor: "", depth: task.depth + 1 });
+      }
+    }
+    if (payload.has_more && typeof payload.next_cursor === "string") {
+      nextTasks.push({ kind: "page", parentId: task.parentId, cursor: payload.next_cursor, depth: task.depth });
+    }
+    job.queue.unshift(...nextTasks);
+  }
+
+  if (job.queue.length) {
+    if (env.DB) await writeHeadingJob(env.DB, pageId, version, job);
+    else headingJobCache.set(cacheKey, job);
+    return { complete: false, headings: [] };
+  }
+  if (env.DB) {
+    await writeHeadingCache(env.DB, pageId, version, job.headings);
+    await deleteHeadingJob(env.DB, pageId);
+  } else headingJobCache.delete(cacheKey);
+  headingIndexCache.set(cacheKey, { headings: job.headings, expiresAt: Date.now() + 10 * 60 * 1000 });
+  return { complete: true, headings: job.headings };
 }
 
 function urlBoolean(url: URL, key: string): boolean { return /^(?:1|true|yes)$/i.test(url.searchParams.get(key) || ""); }
-
-function collectNormalizedHeadings(blocks: any[]): HeadingSummary[] {
-  const output: HeadingSummary[] = [];
-  const visit = (items: any[]) => {
-    for (const block of items || []) {
-      if (/^heading_[123]$/.test(block.type)) {
-        const label = (block.richText || []).map((item: any) => item.text || "").join("").trim();
-        if (label) output.push({ id: block.id, label, level: Number(block.type.at(-1)) });
-      }
-      if (Array.isArray(block.children)) visit(block.children);
-    }
-  };
-  visit(blocks);
-  return output;
-}
 
 async function notionChildDatabase(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");

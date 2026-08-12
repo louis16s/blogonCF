@@ -57,20 +57,14 @@ async function requestChildPage(endpoint: string, payload: Record<string, unknow
 }
 
 async function requestChildHeadings(endpoint: string, payload: Record<string, unknown>, signal: AbortSignal): Promise<TocItem[]> {
-  for (let attempt = 0; attempt < 45; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     const response = await fetch(`${endpoint}?headings=1`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal });
-    if (response.status === 202) {
-      await new Promise<void>((resolve, reject) => {
-        const timer = window.setTimeout(resolve, 1_000);
-        signal.addEventListener("abort", () => { window.clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
-      });
-      continue;
-    }
     const data = await response.json();
+    if (response.status === 202) continue;
     if (!response.ok) throw new Error(data.error || "目录暂时无法读取");
     return Array.isArray(data.child?.headings) ? data.child.headings : [];
   }
-  return [];
+  throw new Error("目录建立时间过长，请稍后重试");
 }
 
 function scrollToArticleStart() {
@@ -103,6 +97,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const childIdRef = useRef("");
   const childTrailRef = useRef<ChildPage[]>([]);
   const childRequestRef = useRef<AbortController | null>(null);
+  const childHeadingRequestRef = useRef<AbortController | null>(null);
   const nextCursorRef = useRef(initialNextCursor);
   const skipInitialRefresh = useRef(initialFetched);
   const lastRefreshAt = useRef(0);
@@ -117,7 +112,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
 
   useEffect(() => {
     const activeChild = childTrail.at(-1);
-    setTocHeadings?.(activeChild?.headings?.length ? activeChild.headings : headings);
+    setTocHeadings?.(activeChild ? activeChild.headings || [] : headings);
   }, [childTrail, headings, setTocHeadings]);
 
   const navigateToHeading = useCallback(async (id: string) => {
@@ -191,6 +186,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
 
   const loadChild = useCallback((pageId: string, accessSignature?: string, updateHistory = true) => {
     childRequestRef.current?.abort();
+    childHeadingRequestRef.current?.abort();
     const controller = new AbortController();
     childRequestRef.current = controller;
     setChildOpening(true); setChildContinuationLoading(false); setChildError("");
@@ -209,21 +205,23 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
           url.searchParams.set("child", child.id);
           window.history.pushState({ child: child.id }, "", url);
         }
-        if (child.nextCursor) {
-          void requestChildHeadings(childEndpoint, { slug, pageId: child.id, accessSignature: child.accessSignature, trail: childTrailRef.current.map((item) => item.id) }, controller.signal)
-            .then((fullHeadings) => {
-              if (!fullHeadings.length) return;
-              setChildTrail((current) => {
-                const index = current.findIndex((item) => item.id === child.id);
-                if (index < 0) return current;
-                const next = [...current];
-                next[index] = { ...next[index], headings: fullHeadings };
-                childTrailRef.current = next;
-                return next;
-              });
-            })
-            .catch(() => undefined);
-        }
+        // The TOC is always fetched independently. A page can be truncated by
+        // deeply nested blocks even when its top-level nextCursor is empty.
+        const headingController = new AbortController();
+        childHeadingRequestRef.current = headingController;
+        void requestChildHeadings(childEndpoint, { slug, pageId: child.id, accessSignature: child.accessSignature, trail: childTrailRef.current.map((item) => item.id) }, headingController.signal)
+          .then((fullHeadings) => {
+            setChildTrail((current) => {
+              const index = current.findIndex((item) => item.id === child.id);
+              if (index < 0) return current;
+              const next = [...current];
+              next[index] = { ...next[index], headings: fullHeadings };
+              childTrailRef.current = next;
+              return next;
+            });
+          })
+          .catch((reason) => { if (reason.name !== "AbortError") setChildError(reason.message || "目录暂时无法读取"); })
+          .finally(() => { if (childHeadingRequestRef.current === headingController) childHeadingRequestRef.current = null; });
       })
       .catch((reason) => { if (reason.name !== "AbortError") setChildError(reason.message || "子页面暂时无法读取"); })
       .finally(() => {
@@ -356,7 +354,10 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     return () => window.removeEventListener("popstate", syncChildFromUrl);
   }, [locked, post, loadChild]);
 
-  useEffect(() => () => childRequestRef.current?.abort(), []);
+  useEffect(() => () => {
+    childRequestRef.current?.abort();
+    childHeadingRequestRef.current?.abort();
+  }, []);
 
   const isNewsPage = contentKind === "page" && /资讯|news|links/i.test(`${slug} ${post?.title || ""}`);
   const visibleBlocks = useMemo(() => isNewsPage ? withoutHiddenNotionBlocks(blocks) : blocks, [blocks, isNewsPage]);
@@ -374,7 +375,9 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
 
   const closeChild = () => {
     childRequestRef.current?.abort();
+    childHeadingRequestRef.current?.abort();
     childRequestRef.current = null;
+    childHeadingRequestRef.current = null;
     setChildOpening(false);
     setChildTrail((current) => {
       const next = current.slice(0, -1);
