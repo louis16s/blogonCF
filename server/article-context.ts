@@ -1,9 +1,11 @@
 import type { ContentBlock, Post } from "../app/data/types";
+type HeadingSummary = { id: string; label: string; level: number };
 import { createRequestContext } from "./request-context";
 
 export type ArticlePayload = {
   post?: Post;
   blocks?: ContentBlock[];
+  headings?: HeadingSummary[];
   nextCursor?: string;
   truncated?: boolean;
   locked?: boolean;

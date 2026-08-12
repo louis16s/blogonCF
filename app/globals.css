@@ -406,7 +406,7 @@ html[data-intro="playing"] .site-intro { display: grid; }
 @media (max-width: 900px) {
   :root { --sidebar-width: 0px; }
   .blog-frame { isolation: isolate; }
-  .site-sidebar { position: sticky; top: 14px; z-index: 200; width: auto; margin: 14px 14px 0; padding: 13px 17px; flex-direction: row; align-items: center; overflow: visible; border-radius: 12px; }
+  .site-sidebar { position: fixed; inset: 14px 14px auto; z-index: 200; width: auto; margin: 0; padding: 13px 17px; flex-direction: row; align-items: center; overflow: visible; border-radius: 12px; }
   .sidebar-main { width: 100%; display: flex; align-items: center; gap: 14px; overflow: visible; }
   .sidebar-brand { display: flex; align-items: center; gap: 8px; margin: 0 auto 0 0; }
   .sidebar-identity { flex-direction: row; align-items: center; gap: 9px; }
@@ -436,14 +436,14 @@ html[data-intro="playing"] .site-intro { display: grid; }
   .mobile-menu-disclosure-content { display: grid; gap: 2px; padding-top: 2px; }
   .mobile-category-list button { min-height: 38px; padding: 7px 10px; color: var(--ink); background: transparent; border: 0; border-radius: 7px; text-align: left; font-size: 13px; }
   .mobile-category-list button:hover, .mobile-category-list button:focus-visible, .mobile-category-list button.active { background: var(--surface-soft); outline: none; }
-  .blog-main, .article-shell { position: relative; z-index: 1; margin-left: 0; padding: 27px 24px 34px; }
+  .blog-main, .article-shell { position: relative; z-index: 1; margin-left: 0; padding: 94px 24px 34px; }
   .post-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 640px) {
-  .site-sidebar { top: 9px; margin: 9px 9px 0; padding: 10px 12px; }
+  .site-sidebar { inset: 9px 9px auto; padding: 10px 12px; }
   .sidebar-nav a { width: 34px; }
-  .blog-main, .article-shell { padding: 21px 15px 30px; }
+  .blog-main, .article-shell { padding: 82px 15px 30px; }
   .blog-toolbar { display: grid; gap: 20px; min-height: 0; margin-bottom: 23px; }
   .welcome { align-items: flex-start; font-size: 15px; line-height: 1.5; }
   .welcome-tagline { display: none; }

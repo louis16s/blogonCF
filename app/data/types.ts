@@ -107,6 +107,7 @@ export type ChildPage = {
   icon?: string;
   accessSignature?: string;
   blocks: ContentBlock[];
+  headings?: Array<{ id: string; label: string; level: number }>;
   nextCursor?: string;
   truncated?: boolean;
 };

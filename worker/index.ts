@@ -48,6 +48,7 @@ type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount:
 type SearchDocument = ReturnType<typeof toPost> & { body: string; searchBody: string };
 type PublicCorpus = { documents: SearchDocument[]; partial: boolean };
 type WorkerCacheStorage = CacheStorage & { default?: Cache };
+type HeadingSummary = { id: string; label: string; level: number };
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -458,18 +459,18 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
       }
       if (env.DB) await clearPasswordAttempts(env.DB, attemptKey);
       const blockState = newBlockReadState();
-      const chunk = await getBlockChildrenChunk(env, page.id, blockState, 0, cursor);
+      const [chunk, headings] = await Promise.all([getBlockChildrenChunk(env, page.id, blockState, 0, cursor), getBlockHeadings(env, page.id)]);
       await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
       await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id);
       const headers = new Headers({ ...jsonHeaders, "cache-control": "no-store" });
       if (!sessionUnlocked) headers.append("set-cookie", await createUnlockCookie(env.NOTION_TOKEN, slug, request.url));
-      return Response.json({ post: { ...post, locked: true }, locked: false, blocks: chunk.blocks, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers });
+      return Response.json({ post: { ...post, locked: true }, locked: false, blocks: chunk.blocks, headings, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers });
     }
     const blockState = newBlockReadState();
-    const chunk = await getBlockChildrenChunk(env, page.id, blockState, 0, cursor);
+    const [chunk, headings] = await Promise.all([getBlockChildrenChunk(env, page.id, blockState, 0, cursor), getBlockHeadings(env, page.id)]);
     await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
     await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id);
-    return Response.json({ post: { ...post, locked: Boolean(expectedPassword) }, locked: false, blocks: chunk.blocks, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    return Response.json({ post: { ...post, locked: Boolean(expectedPassword) }, locked: false, blocks: chunk.blocks, headings, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -494,13 +495,14 @@ async function notionSitePage(env: Env, slug: string, request: Request): Promise
     const page = await findSitePage(env, slug);
     if (!page) return error(404, "Page not found");
     const blockState = newBlockReadState();
-    const chunk = await getBlockChildrenChunk(env, page.id, blockState, 0, cursor);
+    const [chunk, headings] = await Promise.all([getBlockChildrenChunk(env, page.id, blockState, 0, cursor), getBlockHeadings(env, page.id)]);
     await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
     await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id);
     return Response.json({
       post: toSitePagePost(page),
       locked: false,
       blocks: chunk.blocks,
+      headings,
       nextCursor: chunk.nextCursor,
       truncated: blockState.truncated,
     }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
@@ -551,7 +553,7 @@ async function notionSitePageChild(env: Env, request: Request): Promise<Response
 
 async function childPageResponse(env: Env, childPage: any, rootPageId: string, cursor = ""): Promise<Response> {
   const blockState = newBlockReadState();
-  const chunk = await getBlockChildrenChunk(env, childPage.id, blockState, 0, cursor);
+  const [chunk, headings] = await Promise.all([getBlockChildrenChunk(env, childPage.id, blockState, 0, cursor), getBlockHeadings(env, childPage.id)]);
   await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
   await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, rootPageId);
   const accessSignature = await createChildAccessSignature(env.NOTION_TOKEN!, normalizeNotionId(rootPageId)!, normalizeNotionId(childPage.id)!);
@@ -561,6 +563,7 @@ async function childPageResponse(env: Env, childPage: any, rootPageId: string, c
     icon: childPage.icon?.type === "emoji" ? childPage.icon.emoji : undefined,
     accessSignature,
     blocks: chunk.blocks,
+    headings,
     nextCursor: chunk.nextCursor,
     truncated: blockState.truncated,
   } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
@@ -823,6 +826,30 @@ async function getBlockChildren(env: Env, id: string, budget: BlockReadState, de
     cursor = payload.has_more && budget.remaining > 0 ? payload.next_cursor : undefined;
   } while (cursor);
   return output;
+}
+
+async function getBlockHeadings(env: Env, id: string): Promise<HeadingSummary[]> {
+  const result: HeadingSummary[] = [];
+  const visit = async (parentId: string, depth: number): Promise<void> => {
+    if (depth > MAX_BLOCK_DEPTH) return;
+    let cursor: string | undefined;
+    do {
+      const query = new URLSearchParams({ page_size: "100" });
+      if (cursor) query.set("start_cursor", cursor);
+      const payload = await notionFetch(env, `/blocks/${parentId}/children?${query}`);
+      for (const raw of payload.results || []) {
+        if (/^heading_[123]$/.test(raw.type)) {
+          const level = Number(raw.type.at(-1));
+          const label = richText(raw[raw.type]?.rich_text || []).trim();
+          if (label) result.push({ id: raw.id, label, level });
+        }
+        if (raw.has_children && raw.type !== "child_page" && raw.type !== "child_database") await visit(raw.id, depth + 1);
+      }
+      cursor = payload.has_more && typeof payload.next_cursor === "string" ? payload.next_cursor : undefined;
+    } while (cursor);
+  };
+  await visit(id, 0);
+  return result;
 }
 
 async function mapWithConcurrency<T, U>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<U>): Promise<U[]> {

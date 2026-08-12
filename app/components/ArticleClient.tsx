@@ -25,6 +25,7 @@ type ArticleClientProps = {
   contentKind?: "post" | "page";
   initialPost?: Post;
   initialBlocks?: ContentBlock[];
+  initialHeadings?: TocItem[];
   initialNextCursor?: string;
   initialLocked?: boolean;
   initialFetched?: boolean;
@@ -63,9 +64,10 @@ function scrollToArticleStart() {
   });
 }
 
-export function ArticleClient({ slug, contentKind = "post", initialPost, initialBlocks = [], initialNextCursor, initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false }: ArticleClientProps) {
+export function ArticleClient({ slug, contentKind = "post", initialPost, initialBlocks = [], initialHeadings = [], initialNextCursor, initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false }: ArticleClientProps) {
   const [post, setPost] = useState<Post | undefined>(initialPost);
   const [blocks, setBlocks] = useState<ContentBlock[]>(initialBlocks);
+  const [headings, setHeadings] = useState<TocItem[]>(initialHeadings);
   const [locked, setLocked] = useState(initialLocked);
   const [loading, setLoading] = useState(!initialFetched);
   const [error, setError] = useState(initialError);
@@ -169,10 +171,10 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
           const verification = await fetch(`/api/content/unlock-session?slug=${encodeURIComponent(slug)}`, { credentials: "same-origin", cache: "no-store" });
           const verified = await verification.json();
           if (!verification.ok || !verified.unlocked) throw new Error("安全会话未能建立，请允许本站 Cookie 后重试");
-          setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setNextCursor(data.nextCursor); setTruncated(Boolean(data.truncated));
+          setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setHeadings(data.headings || []); setNextCursor(data.nextCursor); setTruncated(Boolean(data.truncated));
           return;
         }
-        setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setNextCursor(data.nextCursor); setTruncated(Boolean(data.truncated));
+        setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setHeadings(data.headings || []); setNextCursor(data.nextCursor); setTruncated(Boolean(data.truncated));
       })
       .catch((reason) => setError(reason.message || "文章暂时无法读取"))
       .finally(() => setLoading(false));
@@ -192,6 +194,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
         setLocked(Boolean(data.locked));
         if (!continuationLoadedRef.current) {
           setBlocks(data.blocks || []);
+          setHeadings(data.headings || []);
           setNextCursor(data.nextCursor);
         }
         setTruncated((current) => continuationLoadedRef.current ? Boolean(current || data.truncated) : Boolean(data.truncated));
@@ -288,7 +291,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       </div>
       {post.tags.length ? <div className="tags">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
     </header> : null}
-    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} continuationLoading={childContinuationLoading} error={childError} databaseContext={{ slug, contentKind, trail: childTrail.map((item) => item.id) }} breadcrumb={[post.title, ...childTrail.map((item) => item.title)]} /> : blocks.length ? <div className="notion-content"><Blocks blocks={visibleBlocks} onOpenChild={loadChild} databaseContext={{ slug, contentKind, trail: [] }} breadcrumb={[post.title]} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}<ContentPrefetchSentinel pending={Boolean(nextCursor)} loading={continuationLoading} onLoad={loadMoreContent} /></div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
+    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} continuationLoading={childContinuationLoading} error={childError} databaseContext={{ slug, contentKind, trail: childTrail.map((item) => item.id) }} breadcrumb={[post.title, ...childTrail.map((item) => item.title)]} /> : blocks.length ? <div className="notion-content"><Blocks blocks={visibleBlocks} toc={headings.length ? headings : undefined} onOpenChild={loadChild} databaseContext={{ slug, contentKind, trail: [] }} breadcrumb={[post.title]} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}<ContentPrefetchSentinel pending={Boolean(nextCursor)} loading={continuationLoading} onLoad={loadMoreContent} /></div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
   </>;
 }
 
@@ -330,7 +333,7 @@ function ChildDocument({ child, parentTitle, onBack, onOpenChild, onLoadMore, co
       <h2 id={`child-${child.id}`}>{child.title}</h2>
     </header>
     <div className="child-document-body">
-      <div className="notion-content"><Blocks blocks={child.blocks} onOpenChild={onOpenChild} databaseContext={databaseContext} breadcrumb={breadcrumb} /></div>
+      <div className="notion-content"><Blocks blocks={child.blocks} toc={child.headings?.length ? child.headings : undefined} onOpenChild={onOpenChild} databaseContext={databaseContext} breadcrumb={breadcrumb} /></div>
     </div>
     {child.truncated ? <ContentLimitNotice /> : null}
     <ContentPrefetchSentinel pending={Boolean(child.nextCursor)} loading={continuationLoading} onLoad={onLoadMore} />
@@ -380,7 +383,7 @@ function PasswordForm({ onSubmit, error, loading }: { onSubmit: (value: string) 
   </form>;
 }
 
-type TocItem = { id: string; label: string; level: number };
+export type TocItem = { id: string; label: string; level: number };
 
 function jumpToHeading(event: MouseEvent<HTMLAnchorElement>, id: string) {
   event.preventDefault();
