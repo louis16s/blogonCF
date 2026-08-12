@@ -459,7 +459,9 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
       }
       if (env.DB) await clearPasswordAttempts(env.DB, attemptKey);
       const blockState = newBlockReadState();
-      const [chunk, headings] = await Promise.all([getBlockChildrenChunk(env, page.id, blockState, 0, cursor), getBlockHeadings(env, page.id)]);
+      const [chunk, headings] = cursor
+        ? [await getBlockChildrenChunk(env, page.id, blockState, 0, cursor), undefined]
+        : await Promise.all([getBlockChildrenChunk(env, page.id, blockState, 0, cursor), getBlockHeadings(env, page.id)]);
       await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
       await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id);
       const headers = new Headers({ ...jsonHeaders, "cache-control": "no-store" });
@@ -467,7 +469,9 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
       return Response.json({ post: { ...post, locked: true }, locked: false, blocks: chunk.blocks, headings, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers });
     }
     const blockState = newBlockReadState();
-    const [chunk, headings] = await Promise.all([getBlockChildrenChunk(env, page.id, blockState, 0, cursor), getBlockHeadings(env, page.id)]);
+    const [chunk, headings] = cursor
+      ? [await getBlockChildrenChunk(env, page.id, blockState, 0, cursor), undefined]
+      : await Promise.all([getBlockChildrenChunk(env, page.id, blockState, 0, cursor), getBlockHeadings(env, page.id)]);
     await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
     await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id);
     return Response.json({ post: { ...post, locked: Boolean(expectedPassword) }, locked: false, blocks: chunk.blocks, headings, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
@@ -495,7 +499,9 @@ async function notionSitePage(env: Env, slug: string, request: Request): Promise
     const page = await findSitePage(env, slug);
     if (!page) return error(404, "Page not found");
     const blockState = newBlockReadState();
-    const [chunk, headings] = await Promise.all([getBlockChildrenChunk(env, page.id, blockState, 0, cursor), getBlockHeadings(env, page.id)]);
+    const [chunk, headings] = cursor
+      ? [await getBlockChildrenChunk(env, page.id, blockState, 0, cursor), undefined]
+      : await Promise.all([getBlockChildrenChunk(env, page.id, blockState, 0, cursor), getBlockHeadings(env, page.id)]);
     await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
     await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id);
     return Response.json({
@@ -553,7 +559,9 @@ async function notionSitePageChild(env: Env, request: Request): Promise<Response
 
 async function childPageResponse(env: Env, childPage: any, rootPageId: string, cursor = ""): Promise<Response> {
   const blockState = newBlockReadState();
-  const [chunk, headings] = await Promise.all([getBlockChildrenChunk(env, childPage.id, blockState, 0, cursor), getBlockHeadings(env, childPage.id)]);
+  const [chunk, headings] = cursor
+    ? [await getBlockChildrenChunk(env, childPage.id, blockState, 0, cursor), undefined]
+    : await Promise.all([getBlockChildrenChunk(env, childPage.id, blockState, 0, cursor), getBlockHeadings(env, childPage.id)]);
   await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
   await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, rootPageId);
   const accessSignature = await createChildAccessSignature(env.NOTION_TOKEN!, normalizeNotionId(rootPageId)!, normalizeNotionId(childPage.id)!);
@@ -631,7 +639,24 @@ async function attachChildAccessSignatures(blocks: any[], secret: string | undef
     }
   };
   visit(blocks);
-  await Promise.all(targets.map(async ({ target, pageId }) => { target.accessSignature = await createChildAccessSignature(secret, normalizeNotionId(rootPageId), pageId); }));
+  const pageMetadata = new Map<string, Promise<any>>();
+  const readPage = (pageId: string) => {
+    let pending = pageMetadata.get(pageId);
+    if (!pending) {
+      pending = fetch(`https://api.notion.com/v1/pages/${pageId}`, { headers: { authorization: `Bearer ${secret}`, "notion-version": NOTION_VERSION, "content-type": "application/json" } })
+        .then(async (response) => response.ok ? response.json() : null)
+        .catch(() => null);
+      pageMetadata.set(pageId, pending);
+    }
+    return pending;
+  };
+  await Promise.all(targets.map(async ({ target, pageId }) => {
+    target.accessSignature = await createChildAccessSignature(secret, normalizeNotionId(rootPageId), pageId);
+    if (target.type === "child_page") {
+      const page = await readPage(pageId);
+      target.icon = page?.icon?.type === "emoji" ? page.icon.emoji : "📖";
+    }
+  }));
 }
 
 async function notionSitemap(env: Env, requestUrl: URL): Promise<Response> {
@@ -1078,15 +1103,26 @@ function notionPageIdFromUrl(value: unknown): string {
 }
 
 async function descendantPage(env: Env, childId: string, ancestorId: string): Promise<any | null> {
-  let currentId = childId;
-  let targetPage: any | null = null;
-  for (let depth = 0; depth < 8; depth++) {
-    const page = await notionFetch(env, `/pages/${currentId}`);
-    if (!targetPage) targetPage = page;
-    const parentId = normalizeNotionId(page.parent?.page_id);
-    if (!parentId) return null;
-    if (parentId === ancestorId) return targetPage;
-    currentId = parentId;
+  const targetPage = await notionFetch(env, `/pages/${childId}`);
+  if (targetPage?.archived || targetPage?.in_trash) return null;
+  let parent = targetPage.parent;
+  for (let depth = 0; depth < 20; depth++) {
+    const pageParentId = normalizeNotionId(parent?.page_id);
+    if (pageParentId) {
+      if (pageParentId === ancestorId) return targetPage;
+      const page = await notionFetch(env, `/pages/${pageParentId}`);
+      if (page?.archived || page?.in_trash) return null;
+      parent = page.parent;
+      continue;
+    }
+    const blockParentId = normalizeNotionId(parent?.block_id);
+    if (blockParentId) {
+      const block = await notionFetch(env, `/blocks/${blockParentId}`);
+      if (block?.archived || block?.in_trash) return null;
+      parent = block.parent;
+      continue;
+    }
+    return null;
   }
   return null;
 }

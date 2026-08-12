@@ -2,11 +2,12 @@ import type { ArticlePayload } from "../../server/article-context";
 import { ArticleClient } from "./ArticleClient";
 import { ContentFooter } from "./ContentFooter";
 import { SiteSidebar } from "./SiteSidebar";
+import { ArticleTocProvider } from "./ArticleTocContext";
 
 export function SiteContentPage({ slug, payload, fetched = true }: { slug: string; payload?: ArticlePayload; fetched?: boolean }) {
   return (
-    <div className="blog-frame article-frame site-content-frame">
-      <SiteSidebar headings={payload?.headings || []} />
+    <ArticleTocProvider initialHeadings={payload?.headings || []}><div className="blog-frame article-frame site-content-frame">
+      <SiteSidebar />
       <main className="article-shell">
         <article>
           <ArticleClient
@@ -24,6 +25,6 @@ export function SiteContentPage({ slug, payload, fetched = true }: { slug: strin
         </article>
         <ContentFooter />
       </main>
-    </div>
+    </div></ArticleTocProvider>
   );
 }

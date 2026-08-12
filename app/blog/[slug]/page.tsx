@@ -7,6 +7,7 @@ import { SiteSidebar } from "../../components/SiteSidebar";
 import { ContentFooter } from "../../components/ContentFooter";
 import { readArticlePayload, type ArticlePayload } from "../../../server/article-context";
 import { decodeRouteSegment } from "../../../shared/url";
+import { ArticleTocProvider } from "../../components/ArticleTocContext";
 
 const getArticle = cache(async (slug: string): Promise<{ payload?: ArticlePayload; fetched: boolean }> => {
   void slug;
@@ -35,5 +36,5 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
   const decoded = decodeRouteSegment(slug);
   const { payload, fetched } = await getArticle(decoded);
   if (payload?.status === 404) notFound();
-  return <div className="blog-frame article-frame"><SiteSidebar headings={payload?.headings || []} /><main className="article-shell"><article><ArticleClient slug={decoded} initialPost={payload?.post} initialBlocks={payload?.locked ? [] : payload?.blocks || []} initialHeadings={payload?.headings || []} initialNextCursor={payload?.locked ? undefined : payload?.nextCursor} initialLocked={Boolean(payload?.locked)} initialFetched={fetched} initialError={payload?.error || ""} initialTruncated={Boolean(payload?.truncated)} /></article><ContentFooter /></main></div>;
+  return <ArticleTocProvider initialHeadings={payload?.headings || []}><div className="blog-frame article-frame"><SiteSidebar /><main className="article-shell"><article><ArticleClient slug={decoded} initialPost={payload?.post} initialBlocks={payload?.locked ? [] : payload?.blocks || []} initialHeadings={payload?.headings || []} initialNextCursor={payload?.locked ? undefined : payload?.nextCursor} initialLocked={Boolean(payload?.locked)} initialFetched={fetched} initialError={payload?.error || ""} initialTruncated={Boolean(payload?.truncated)} /></article><ContentFooter /></main></div></ArticleTocProvider>;
 }

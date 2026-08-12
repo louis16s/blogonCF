@@ -340,7 +340,7 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   assert.match(css, /\.icon-button \{ width: 42px; height: 42px;/);
   assert.match(css, /\.sidebar-sync-meta \{[^}]*padding-top: 12px;[^}]*border-top: 1px solid var\(--line\);/);
   assert.match(css, /\.sidebar-main \{[^}]*overflow: visible;/);
-  assert.match(css, /\.site-sidebar \{ position: sticky; top: 14px; z-index: 200;/);
+  assert.match(css, /\.site-sidebar \{ position: fixed; inset: 14px 14px auto; z-index: 200;/);
   assert.match(css, /\.blog-main, \.article-shell \{ position: relative; z-index: 1;/);
   assert.match(css, /\.mobile-menu>summary \{ min-height: 44px;/);
   assert.match(css, /\.mobile-menu-list a \{ min-height: 38px;/);
@@ -1144,6 +1144,8 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
   const richReferenceId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
   const unpublishedReferenceId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
   const outsideId = "33333333-3333-4333-8333-333333333333";
+  const blockParentChildId = "77777777-7777-4777-8777-777777777777";
+  const toggleBlockId = "88888888-8888-4888-8888-888888888888";
   let childBlockRequests = 0;
   globalThis.fetch = async (input, init = {}) => {
     const url = String(input);
@@ -1155,12 +1157,15 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     if (url.includes(`/pages/${richReferenceId}`)) return Response.json({ id: richReferenceId, parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "富文本引用页" }] } } });
     if (url.includes(`/pages/${unpublishedReferenceId}`)) return Response.json({ id: unpublishedReferenceId, parent: { type: "workspace", workspace: true }, properties: { title: { type: "title", title: [{ plain_text: "未发布引用页" }] } } });
     if (url.includes(`/pages/${outsideId}`)) return Response.json({ id: outsideId, parent: { type: "page_id", page_id: "44444444-4444-4444-8444-444444444444" }, properties: { title: { type: "title", title: [{ plain_text: "不属于本文" }] } } });
+    if (url.includes(`/pages/${blockParentChildId}`)) return Response.json({ id: blockParentChildId, parent: { type: "block_id", block_id: toggleBlockId }, icon: { type: "emoji", emoji: "📚" }, properties: { title: { type: "title", title: [{ plain_text: "折叠块里的章节" }] } } });
+    if (url.includes(`/blocks/${toggleBlockId}`) && !url.includes("/children")) return Response.json({ id: toggleBlockId, type: "toggle", parent: { type: "page_id", page_id: parentId }, archived: false, in_trash: false });
     if (url.includes(`/pages/44444444-4444-4444-8444-444444444444`)) return Response.json({ id: "44444444-4444-4444-8444-444444444444", parent: { type: "workspace", workspace: true }, properties: {} });
     if (url.includes(`/blocks/${childId}/children`)) {
       childBlockRequests++;
       return Response.json({ results: [{ id: "child-paragraph", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: "站内子页面正文", annotations: {} }] } }], has_more: false });
     }
     if (url.includes(`/blocks/${nestedId}/children`)) { childBlockRequests++; return Response.json({ results: [], has_more: false }); }
+    if (url.includes(`/blocks/${blockParentChildId}/children`)) { childBlockRequests++; return Response.json({ results: [], has_more: false }); }
     if (url.includes(`/blocks/${parentId}/children`)) return Response.json({ results: [
       { id: referencedId, type: "child_page", has_children: true, child_page: { title: "同步块引用页" } },
       { id: unpublishedReferenceId, type: "child_page", has_children: true, child_page: { title: "未发布引用页" } },
@@ -1206,14 +1211,18 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     assert.equal(correct.status, 200);
     assert.equal(correct.headers.get("cache-control"), "no-store");
     const correctPayload = await correct.json();
-    assert.deepEqual({ ...correctPayload.child, accessSignature: undefined }, { id: childId, title: "第一章", icon: "📖", blocks: [{ id: "child-paragraph", type: "paragraph", richText: [{ text: "站内子页面正文" }] }], truncated: false, accessSignature: undefined });
+    assert.deepEqual({ ...correctPayload.child, accessSignature: undefined }, { id: childId, title: "第一章", icon: "📖", blocks: [{ id: "child-paragraph", type: "paragraph", richText: [{ text: "站内子页面正文" }] }], headings: [], truncated: false, accessSignature: undefined });
     assert.match(correctPayload.child.accessSignature, /^[A-Za-z0-9_-]{40,}$/);
-    assert.equal(childBlockRequests, 1);
+    assert.equal(childBlockRequests, 2, "content and its heading index are fetched independently");
 
     const nested = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: nestedId }) }), env, context);
     assert.equal(nested.status, 200);
     assert.equal((await nested.json()).child.id, nestedId, "nested ancestry must return the requested page rather than its intermediate parent");
-    assert.equal(childBlockRequests, 2);
+    assert.equal(childBlockRequests, 4);
+
+    const blockParentChild = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: blockParentChildId }) }), env, context);
+    assert.equal(blockParentChild.status, 200, "child pages nested beneath a toggle block must inherit the root article authorization");
+    assert.equal((await blockParentChild.json()).child.icon, "📚");
 
     const staleTrail = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: nestedId, trail: [childId] }) }), env, context);
     assert.equal(staleTrail.status, 200, "a stale visual trail must fall back to the target's real Notion ancestry");
@@ -1236,7 +1245,7 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
 
     const outside = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: outsideId }) }), env, context);
     assert.equal(outside.status, 404);
-    assert.equal(childBlockRequests, 7, "only authorized pages may expose blocks, including the stale-trail retry");
+    assert.equal(childBlockRequests, 15, "only authorized pages may expose content and heading metadata, including the stale-trail retry");
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -1275,7 +1284,7 @@ test("large child pages resolve every Notion cursor in one authenticated respons
     assert.equal(response.status, 200);
     const payload = await response.json();
     assert.deepEqual(payload.child.blocks.map((block) => block.id), ["chunk-1", "chunk-2"]);
-    assert.equal(blockRequests.length, 2, "the Worker should resolve all upstream cursors before replying");
+    assert.equal(blockRequests.length, 4, "the Worker should resolve content and complete heading metadata before replying");
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -1315,14 +1324,14 @@ test("long articles return bounded chunks and expose a continuation cursor", asy
     const firstPayload = await first.json();
     assert.equal(firstPayload.blocks.length, 300);
     assert.equal(firstPayload.nextCursor, "page_4");
-    assert.equal(blockRequests.length, 3);
+    assert.equal(blockRequests.length, 7, "the initial response also scans the full heading index");
 
     const second = await worker.fetch(new Request("http://localhost/api/content/post/long-post?cursor=page_4"), env, context);
     assert.equal(second.status, 200);
     const secondPayload = await second.json();
     assert.equal(secondPayload.blocks.length, 1);
     assert.equal(secondPayload.nextCursor, undefined);
-    assert.equal(blockRequests.length, 4);
+    assert.equal(blockRequests.length, 8, "continuation responses reuse the heading index from the initial response");
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -1401,6 +1410,8 @@ test("article renderer opens child pages internally instead of linking to Notion
   assert.doesNotMatch(article, /继续读取/);
   assert.match(article, /ContentPrefetchSentinel/);
   assert.match(article, /rootMargin: "2400px 0px"/);
+  assert.match(article, /case "table_of_contents": return null/, "Notion TOC blocks must not be duplicated inside the article body");
+  assert.match(article, /article-toc:navigate/, "sidebar headings must be able to request unloaded article chunks before scrolling");
   assert.doesNotMatch(css, /\.child-document::before/);
   assert.match(css, /\.child-document-head \{[^}]*border-bottom:/);
   assert.match(css, /\.child-document-body>\.notion-content \{ padding-top:/);

@@ -1,10 +1,11 @@
 "use client";
 
 import { ArrowLeft, ArrowRight, ArrowSquareOut, CaretRight, Eye, EyeSlash, FileText, LockKey, Rss } from "@phosphor-icons/react";
-import { FormEvent, type CSSProperties, type MouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChildDatabase, ChildPage, ContentBlock, Post } from "../data/types";
 import { withoutHiddenNotionBlocks } from "../../shared/contentVisibility.js";
 import { CONTENT_REFRESH_INTERVAL_MS } from "./siteBootstrap";
+import { useArticleToc } from "./ArticleTocContext";
 
 const HEIC_DECODE_CONCURRENCY = 3;
 let activeHeicDecodes = 0;
@@ -65,6 +66,7 @@ function scrollToArticleStart() {
 }
 
 export function ArticleClient({ slug, contentKind = "post", initialPost, initialBlocks = [], initialHeadings = [], initialNextCursor, initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false }: ArticleClientProps) {
+  const articleToc = useArticleToc();
   const [post, setPost] = useState<Post | undefined>(initialPost);
   const [blocks, setBlocks] = useState<ContentBlock[]>(initialBlocks);
   const [headings, setHeadings] = useState<TocItem[]>(initialHeadings);
@@ -83,11 +85,91 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const childIdRef = useRef("");
   const childTrailRef = useRef<ChildPage[]>([]);
   const childRequestRef = useRef<AbortController | null>(null);
+  const nextCursorRef = useRef(initialNextCursor);
   const skipInitialRefresh = useRef(initialFetched);
   const lastRefreshAt = useRef(0);
   const continuationLoadedRef = useRef(false);
   const contentEndpoint = contentKind === "page" ? "/api/content/page" : "/api/content/post";
   const childEndpoint = contentKind === "page" ? "/api/content/page-child" : "/api/content/child";
+  const setTocHeadings = articleToc?.setHeadings;
+  const setRootCursor = useCallback((cursor?: string) => {
+    nextCursorRef.current = cursor;
+    setNextCursor(cursor);
+  }, []);
+
+  useEffect(() => {
+    const activeChild = childTrail.at(-1);
+    setTocHeadings?.(activeChild?.headings?.length ? activeChild.headings : headings);
+  }, [childTrail, headings, setTocHeadings]);
+
+  const navigateToHeading = useCallback(async (id: string) => {
+    const findAndScroll = () => {
+      const target = document.getElementById(id);
+      if (!target) return false;
+      const url = new URL(window.location.href);
+      url.hash = id;
+      window.history.replaceState(window.history.state, "", url);
+      target.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+      return true;
+    };
+    if (findAndScroll() || childRequestRef.current) return;
+    const activeChild = childTrailRef.current.at(-1);
+    if (activeChild) {
+      const controller = new AbortController();
+      childRequestRef.current = controller;
+      setChildContinuationLoading(true);
+      let current = activeChild;
+      try {
+        while (!findAndScroll() && current.nextCursor) {
+          const page = await requestChildPage(childEndpoint, { slug, pageId: current.id, accessSignature: current.accessSignature, trail: childTrailRef.current.map((item) => item.id), cursor: current.nextCursor }, controller.signal);
+          current = { ...current, blocks: [...current.blocks, ...page.blocks], nextCursor: page.nextCursor, truncated: Boolean(current.truncated || page.truncated) };
+          const index = childTrailRef.current.findIndex((item) => item.id === current.id);
+          if (index < 0) break;
+          const next = [...childTrailRef.current];
+          next[index] = current;
+          childTrailRef.current = next;
+          setChildTrail(next);
+          await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+        }
+        findAndScroll();
+      } catch (reason) {
+        if (reason instanceof Error && reason.name !== "AbortError") setChildError(reason.message || "章节暂时无法定位");
+      } finally {
+        if (childRequestRef.current === controller) childRequestRef.current = null;
+        setChildContinuationLoading(false);
+      }
+      return;
+    }
+    setContinuationLoading(true);
+    try {
+      while (!findAndScroll() && nextCursorRef.current) {
+        const cursor = nextCursorRef.current;
+        const endpoint = `${contentEndpoint}/${encodeURIComponent(slug)}?cursor=${encodeURIComponent(cursor)}`;
+        const response = await fetch(endpoint, { credentials: "same-origin", cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok || data.locked) throw new Error(data.error || "后续内容暂时无法读取");
+        continuationLoadedRef.current = true;
+        setBlocks((currentBlocks) => [...currentBlocks, ...(data.blocks || [])]);
+        setRootCursor(data.nextCursor);
+        setTruncated((currentTruncated) => Boolean(currentTruncated || data.truncated));
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      }
+      findAndScroll();
+    } catch (reason) {
+      if (reason instanceof Error) setError(reason.message || "章节暂时无法定位");
+    } finally {
+      setContinuationLoading(false);
+    }
+  }, [childEndpoint, contentEndpoint, setRootCursor, slug]);
+
+  useEffect(() => {
+    const onNavigate = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+      if (id) void navigateToHeading(id);
+    };
+    window.addEventListener("article-toc:navigate", onNavigate);
+    return () => window.removeEventListener("article-toc:navigate", onNavigate);
+  }, [navigateToHeading]);
 
   const loadChild = useCallback((pageId: string, accessSignature?: string, updateHistory = true) => {
     childRequestRef.current?.abort();
@@ -153,12 +235,12 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
         if (!response.ok || data.locked) throw new Error(data.error || "后续内容暂时无法读取");
         continuationLoadedRef.current = true;
         setBlocks((current) => [...current, ...(data.blocks || [])]);
-        setNextCursor(data.nextCursor);
+        setRootCursor(data.nextCursor);
         setTruncated((current) => Boolean(current || data.truncated));
       })
       .catch((reason) => setError(reason.message || "后续内容暂时无法读取"))
       .finally(() => setContinuationLoading(false));
-  }, [contentEndpoint, continuationLoading, nextCursor, slug]);
+  }, [contentEndpoint, continuationLoading, nextCursor, setRootCursor, slug]);
 
   const load = (password?: string) => {
     setLoading(true); setError("");
@@ -171,10 +253,10 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
           const verification = await fetch(`/api/content/unlock-session?slug=${encodeURIComponent(slug)}`, { credentials: "same-origin", cache: "no-store" });
           const verified = await verification.json();
           if (!verification.ok || !verified.unlocked) throw new Error("安全会话未能建立，请允许本站 Cookie 后重试");
-          setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setHeadings(data.headings || []); setNextCursor(data.nextCursor); setTruncated(Boolean(data.truncated));
+          setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setHeadings(data.headings || []); setRootCursor(data.nextCursor); setTruncated(Boolean(data.truncated));
           return;
         }
-        setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setHeadings(data.headings || []); setNextCursor(data.nextCursor); setTruncated(Boolean(data.truncated));
+        setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setHeadings(data.headings || []); setRootCursor(data.nextCursor); setTruncated(Boolean(data.truncated));
       })
       .catch((reason) => setError(reason.message || "文章暂时无法读取"))
       .finally(() => setLoading(false));
@@ -195,7 +277,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
         if (!continuationLoadedRef.current) {
           setBlocks(data.blocks || []);
           setHeadings(data.headings || []);
-          setNextCursor(data.nextCursor);
+          setRootCursor(data.nextCursor);
         }
         setTruncated((current) => continuationLoadedRef.current ? Boolean(current || data.truncated) : Boolean(data.truncated));
         setError("");
@@ -220,7 +302,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
-  }, [contentEndpoint, slug]);
+  }, [contentEndpoint, setRootCursor, slug]);
 
   useEffect(() => {
     const syncChildFromUrl = () => {
@@ -384,17 +466,6 @@ function PasswordForm({ onSubmit, error, loading }: { onSubmit: (value: string) 
 }
 
 export type TocItem = { id: string; label: string; level: number };
-
-function jumpToHeading(event: MouseEvent<HTMLAnchorElement>, id: string) {
-  event.preventDefault();
-  const target = document.getElementById(id);
-  if (!target) return;
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const url = new URL(window.location.href);
-  url.hash = id;
-  window.history.replaceState(window.history.state, "", url);
-  target.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start", inline: "nearest" });
-}
 
 function collectHeadings(blocks: ContentBlock[]): TocItem[] {
   return blocks.flatMap((block) => {
@@ -618,7 +689,7 @@ function Block({ block, onOpenChild, toc, databaseContext, breadcrumb }: { block
     case "audio": return block.url ? <figure className={`${className} notion-media notion-audio`}><audio src={block.url} controls preload="metadata">浏览器无法播放这段音频。</audio>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
     case "pdf": return block.url ? <figure className={`${className} notion-pdf`}><iframe src={block.url} title={block.caption || "PDF 文档"} loading="lazy" /><a href={block.url} target="_blank" rel="noreferrer">在新窗口打开 PDF<ArrowSquareOut aria-hidden size={15} /></a>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
     case "file": return block.url ? <a className="bookmark" href={block.url} target="_blank" rel="noreferrer"><span><strong>{block.caption || "下载附件"}</strong><small>{bookmarkSource(block.url)}</small></span><ArrowSquareOut aria-hidden size={16} /></a> : null;
-    case "child_page": return block.pageId ? <a className={`${className} notion-child-page`} href={`?child=${encodeURIComponent(block.pageId)}`} onClick={(event) => { event.preventDefault(); onOpenChild(block.pageId!, block.accessSignature); }}><FileText aria-hidden size={18} /><strong>{block.caption || "子页面"}</strong><CaretRight aria-hidden size={16} /></a> : null;
+    case "child_page": return block.pageId ? <a className={`${className} notion-child-page`} href={`?child=${encodeURIComponent(block.pageId)}`} onClick={(event) => { event.preventDefault(); onOpenChild(block.pageId!, block.accessSignature); }}>{block.icon ? <span className="notion-child-page-icon" aria-hidden>{block.icon}</span> : <FileText aria-hidden size={18} />}<strong>{block.caption || "子页面"}</strong><CaretRight aria-hidden size={16} /></a> : null;
     case "child_database": return block.databaseId && databaseContext ? <ChildDatabaseBlock block={block} context={databaseContext} /> : null;
     case "equation": return <EquationBlock expression={block.caption || ""} />;
     case "table": return <div className="notion-table" role="table">{children}</div>;
@@ -626,7 +697,7 @@ function Block({ block, onOpenChild, toc, databaseContext, breadcrumb }: { block
     case "column_list": return <div className={`${className} columns`}>{children}</div>;
     case "column": return <div className="column">{children}</div>;
     case "synced_block": case "template": return <div className={className}>{children}</div>;
-    case "table_of_contents": return toc.length ? <nav className={`${className} notion-toc`} aria-label="文章目录"><strong>目录</strong>{toc.map((item) => <a href={`#${item.id}`} onClick={(event) => jumpToHeading(event, item.id)} style={{ "--toc-level": item.level } as CSSProperties} key={item.id}>{item.label}</a>)}</nav> : null;
+    case "table_of_contents": return null;
     case "breadcrumb": return <nav className={`${className} notion-breadcrumb`} aria-label="页面层级">{breadcrumb.map((item, index) => <span key={`${item}-${index}`}>{index ? " / " : ""}{item}</span>)}</nav>;
     case "unsupported": return <aside className="unsupported">此内容块暂不支持显示。</aside>;
     default: return children ? <div>{children}</div> : <aside className="unsupported">未识别的内容块：{block.type}</aside>;
