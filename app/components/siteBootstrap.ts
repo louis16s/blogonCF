@@ -1,6 +1,6 @@
 "use client";
 
-import type { Post, SiteConfig, SiteLink } from "../data/types";
+import type { Post, SiteConfig, SiteLink, SiteNotice } from "../data/types";
 import { createSharedRequest } from "./clientState";
 
 export const CONTENT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
@@ -8,6 +8,7 @@ export const CONTENT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 export type SiteBootstrap = {
   posts: Post[];
   links: SiteLink[];
+  notice?: SiteNotice;
   config?: SiteConfig;
 };
 
@@ -23,6 +24,7 @@ export const loadSiteBootstrap = createSharedRequest(async (): Promise<SiteBoots
   return {
     posts: Array.isArray(payload.posts) ? payload.posts : [],
     links: Array.isArray(payload.links) ? payload.links : [],
+    notice: payload.notice?.id && payload.notice?.title ? payload.notice : undefined,
     config: payload.config,
   };
 });

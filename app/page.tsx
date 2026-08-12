@@ -11,7 +11,7 @@ export default async function Home() {
     <>
       <script dangerouslySetInnerHTML={{ __html: INTRO_BOOTSTRAP_SCRIPT }} />
       <IntroSequence enabled={payload?.config.introEnabled} title={payload?.config.introTitle} subtitle={payload?.config.introSubtitle} />
-      <BlogExplorer initialPosts={payload?.posts} initialLinks={payload?.links} initialConfig={payload?.config} />
+      <BlogExplorer initialPosts={payload?.posts} initialLinks={payload?.links} initialNotice={payload?.notice} initialConfig={payload?.config} />
     </>
   );
 }

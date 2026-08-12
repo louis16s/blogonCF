@@ -11,7 +11,7 @@ import {
   Sparkle,
   Sun,
 } from "@phosphor-icons/react";
-import { DEFAULT_SITE_CONFIG, type Post, type SiteConfig, type SiteLink } from "../data/types";
+import { DEFAULT_SITE_CONFIG, type Post, type SiteConfig, type SiteLink, type SiteNotice } from "../data/types";
 import { ContentFooter } from "./ContentFooter";
 import { SiteSidebar } from "./SiteSidebar";
 import { createSharedRequest } from "./clientState";
@@ -29,9 +29,10 @@ const warmSearchIndex = createSharedRequest(async () => {
   if (!response.ok) throw new Error("Search index warm-up failed");
 });
 
-export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConfig = DEFAULT_SITE_CONFIG }: { initialPosts?: Post[]; initialLinks?: SiteLink[]; initialConfig?: SiteConfig }) {
+export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNotice, initialConfig = DEFAULT_SITE_CONFIG }: { initialPosts?: Post[]; initialLinks?: SiteLink[]; initialNotice?: SiteNotice; initialConfig?: SiteConfig }) {
   const [posts, setPosts] = useState<Post[]>(initialPosts);
   const [siteLinks, setSiteLinks] = useState<SiteLink[]>(initialLinks);
+  const [notice, setNotice] = useState<SiteNotice | undefined>(initialNotice);
   const [siteConfig, setSiteConfig] = useState<SiteConfig>(() => ({ ...DEFAULT_SITE_CONFIG, ...initialConfig }));
   const [syncState, setSyncState] = useState<"loading" | "live" | "unavailable">(initialPosts.length ? "live" : "loading");
   const [category, setCategory] = useState(ALL);
@@ -129,6 +130,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
         if (Array.isArray(data.posts)) {
           setPosts(data.posts);
           setSiteLinks(Array.isArray(data.links) ? data.links : []);
+          setNotice(data.notice?.id && data.notice?.title ? data.notice : undefined);
           if (data.config?.author && data.config?.since) setSiteConfig({ ...DEFAULT_SITE_CONFIG, ...data.config });
           setSyncState("live");
         }
@@ -212,7 +214,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
       <main className="blog-main">
         <header className="blog-toolbar">
           <div className="welcome-block">
-            <p className="welcome"><Sparkle aria-hidden size={19} weight="fill" /><span>{siteConfig.homeNotice}<span className="welcome-tagline">{siteConfig.homeNoticeSubtitle}</span></span></p>
+            {notice ? <p className="welcome"><span className="notice-icon" aria-hidden>{notice.icon || <Sparkle size={19} weight="fill" />}</span><span>{notice.title}{notice.summary ? <span className="welcome-tagline">{notice.summary}</span> : null}</span></p> : null}
             {syncState === "unavailable" && posts.length > 0 && <button className="sync-warning" type="button" onClick={retrySync}>显示最近内容 · 重试同步</button>}
           </div>
 

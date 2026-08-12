@@ -179,7 +179,6 @@ Notion 自动转换出的 `———[hide]———` 也会被识别。标记和
 | 04 · 主题配色 | `THEME_TOGGLE_ENABLED` | 是否允许访客切换明暗主题 |
 | 04 · 主题配色 | `LIGHT_BACKGROUND`、`LIGHT_SURFACE`、`LIGHT_TEXT`、`LIGHT_ACCENT` | 可选的浅色主题覆盖色，只接受完整的 `#RRGGBB` |
 | 04 · 主题配色 | `DARK_BACKGROUND`、`DARK_SURFACE`、`DARK_TEXT`、`DARK_ACCENT` | 可选的深色主题覆盖色，只接受完整的 `#RRGGBB` |
-| 05 · 首页 | `HOME_NOTICE`、`HOME_NOTICE_SUBTITLE` | 首页公告主句和副句 |
 | 05 · 首页 | `POST_COUNT_TEXT` | 文章数量文案，使用 `{count}` 作为数量占位符 |
 | 05 · 首页 | `INTRO_ENABLED`、`INTRO_TITLE`、`INTRO_SUBTITLE` | 首页开屏动画开关与文字 |
 | 06 · 页脚与链接 | `FOOTER_CREDIT`、`FOOTER_QUOTES` | 页脚来源说明和随机短句；每行短句以 `主句｜副句` 保存 |
@@ -187,6 +186,8 @@ Notion 自动转换出的 `———[hide]———` 也会被识别。标记和
 | 99 · 高级设置 | `NOTION_DATA_SOURCE_ID` | 文章/Page/Link 数据源 ID；启用后优先于 Worker 的同名普通变量 |
 
 配置项需要启用；年份会从文本中提取四位数。未配置、未启用或格式不合法时使用安全默认值。自定义颜色优先于配色预设，因此通常只需修改 `THEME_PRESET`；需要精调时再启用单项颜色覆盖。
+
+首页公告不属于 Config。请在内容数据库创建一条 `type = Notice`、`status = Published` 的记录：`title` 是公告主句，`summary` 是副句，页面 Emoji 会显示为公告图标。存在多条公告时只展示 `date` 最新的一条；没有已发布 Notice 时首页不显示公告区域。
 
 Config 数据源也能存导航链接：把 `类型` 设为 `Link`，`配置名` 填显示名称，`链接` 填 HTTPS 或站内路径，`备注` 填副标题并勾选 `启用`。这些链接会与内容数据库中的 `Link + Published` 合并并按目标去重。
 

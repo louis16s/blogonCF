@@ -49,7 +49,7 @@ test("server-renders a safe loading state without stale Notion content", async (
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /<title>louis16s&#x27; blog<\/title>/);
-  assert.match(html, /blog 复活啦/);
+  assert.doesNotMatch(html, /blog 复活啦/, "a missing Notice must not invent an announcement");
   assert.match(html, /正在从 Notion 读取文章/);
   assert.match(html, /prefers-reduced-motion/);
   assert.ok(html.indexOf("prefers-reduced-motion") < html.indexOf("site-intro"), "pre-paint decision must run before the intro markup");
@@ -81,9 +81,12 @@ test("homepage raw HTML contains the live Notion article index, tools, and foote
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "测试作者" }] } } },
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "SINCE" }] }, "配置值": { rich_text: [{ plain_text: "2021" }] } } },
     ] });
-    if (body.includes('"Published"') && !body.includes('"Post"')) return Response.json({ results: [{ id: "link", icon: { type: "emoji", emoji: "🧰" }, properties: {
-      type: { select: { name: "Link" } }, title: { title: [{ plain_text: "测试工具" }] }, slug: { rich_text: [{ plain_text: "https://tool.example" }] }, summary: { rich_text: [{ plain_text: "外部工具" }] },
-    } }] });
+    if (body.includes('"Published"') && !body.includes('"Post"')) return Response.json({ results: [
+      { id: "notice", icon: { type: "emoji", emoji: "📣" }, properties: { type: { select: { name: "Notice" } }, title: { title: [{ plain_text: "测试公告" }] }, summary: { rich_text: [{ plain_text: "公告副句" }] }, date: { date: { start: "2026-08-13" } } } },
+      { id: "link", icon: { type: "emoji", emoji: "🧰" }, properties: {
+        type: { select: { name: "Link" } }, title: { title: [{ plain_text: "测试工具" }] }, slug: { rich_text: [{ plain_text: "https://tool.example" }] }, summary: { rich_text: [{ plain_text: "外部工具" }] },
+      } },
+    ] });
     return Response.json({ results: [
       { id: "penang", icon: { type: "emoji", emoji: "🌴" }, properties: { title: { title: [{ plain_text: "2026槟城" }] }, slug: { rich_text: [{ plain_text: "Penang" }] }, summary: { rich_text: [] }, category: { select: { name: "旅行游记" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] } } },
       { id: "locked", properties: { title: { title: [{ plain_text: "Y-1" }] }, slug: { rich_text: [{ plain_text: "Y-1" }] }, summary: { rich_text: [{ plain_text: "hidden" }] }, category: { select: { name: "输入密码" } }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "hidden" }] } } },
@@ -99,6 +102,9 @@ test("homepage raw HTML contains the live Notion article index, tools, and foote
     assert.doesNotMatch(html, />hidden</, "locked article metadata must not reveal a password-like summary");
     assert.match(html, /nikon F3p/);
     assert.match(html, /测试工具/);
+    assert.match(html, /测试公告/);
+    assert.match(html, /公告副句/);
+    assert.match(html, /📣/);
     assert.match(html, /测试作者/);
     assert.match(html, /2021/);
   } finally { globalThis.fetch = originalFetch; }
@@ -881,8 +887,6 @@ test("content endpoint maps only filtered metadata while keeping browser respons
       { id: "author", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "Notion 作者" }] }, "其他私密项": { rich_text: [{ plain_text: "不得输出" }] } } },
       { id: "since", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "`SINCE`" }] }, "配置值": { rich_text: [{ plain_text: "始于 2019 年" }] } } },
       { id: "quotes", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "FOOTER_QUOTES" }] }, "配置值": { rich_text: [{ plain_text: "第一句｜第二句\n第三句 | 第四句" }] } } },
-      { id: "notice", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "HOME_NOTICE" }] }, "配置值": { rich_text: [{ plain_text: "新的公告" }] } } },
-      { id: "notice-subtitle", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "HOME_NOTICE_SUBTITLE" }] }, "配置值": { rich_text: [{ plain_text: "新的副句" }] } } },
       { id: "count-text", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "POST_COUNT_TEXT" }] }, "配置值": { rich_text: [{ plain_text: "共 {count} 篇" }] } } },
       { id: "credit", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "FOOTER_CREDIT" }] }, "配置值": { rich_text: [{ plain_text: "由 Notion 与 Cloudflare 驱动" }] } } },
       { id: "repository", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "REPOSITORY_URL" }] }, "配置值": { rich_text: [{ plain_text: "https://github.com/example/blog" }] } } },
@@ -897,6 +901,7 @@ test("content endpoint maps only filtered metadata while keeping browser respons
       { id: "archive", properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "历史归档" }] }, slug: { rich_text: [{ plain_text: "/archive" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
       { id: "118ad771-48f4-8006-8e05-f46d51bd244c", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "关于我_" }] }, slug: { rich_text: [{ plain_text: "me" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
       { id: "fffad771-48f4-816c-b993-d78a936a4c78", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "资讯_" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
+      { id: "notice", created_time: "2026-08-13T00:00:00Z", icon: { type: "emoji", emoji: "📣" }, properties: { type: { select: { name: "Notice" } }, title: { title: [{ plain_text: "新的公告" }] }, summary: { rich_text: [{ plain_text: "新的副句" }] }, date: { date: { start: "2026-08-13" } } } },
       { id: "broken", properties: { title: { title: [{ plain_text: "资讯" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
     ] });
     requestBody = body;
@@ -916,8 +921,8 @@ test("content endpoint maps only filtered metadata while keeping browser respons
     assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://hd.530555.xyz", "tool"], ["带跳转的工具", "https://annotated.example", "tool"], ["关于我", "/about", "nav"], ["资讯", "/page/links", "nav"]]);
     assert.equal(payload.config.author, "Notion 作者");
     assert.equal(payload.config.since, "2019");
-    assert.equal(payload.config.homeNotice, "新的公告");
-    assert.equal(payload.config.homeNoticeSubtitle, "新的副句");
+    assert.deepEqual(payload.notice, { id: "notice", title: "新的公告", summary: "新的副句", icon: "📣", date: "2026-08-13" });
+    assert.equal("homeNotice" in payload.config, false);
     assert.equal(payload.config.postCountText, "共 {count} 篇");
     assert.equal(payload.config.footerCredit, "由 Notion 与 Cloudflare 驱动");
     assert.equal(payload.config.repositoryUrl, "https://github.com/example/blog");

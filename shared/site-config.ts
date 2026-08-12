@@ -16,8 +16,6 @@ export type SiteConfig = {
   ogImageUrl: string;
   author: string;
   since: string;
-  homeNotice: string;
-  homeNoticeSubtitle: string;
   postCountText: string;
   footerCredit: string;
   repositoryUrl: string;
@@ -65,8 +63,6 @@ export const DEFAULT_SITE_CONFIG: SiteConfig = {
   ogImageUrl: "/og.jpg",
   author: "louis16s",
   since: "2020",
-  homeNotice: "blog 复活啦",
-  homeNoticeSubtitle: "愿这里继续保留一些缓慢、真实而具体的记录。",
   postCountText: "这里收录着 {count} 个文章。不赶时间，慢慢翻。",
   footerCredit: "在 [Notion](https://www.notion.so/) 创造，Cloudflare 带它兜风。",
   repositoryUrl: "",

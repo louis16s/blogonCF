@@ -222,15 +222,17 @@ function siteBootstrapCacheKey(env: Env): string {
 async function querySiteBootstrap(env: Env): Promise<HomePayload> {
   const configRows = await queryConfigRows(env).catch(() => []);
   const sourceId = configuredContentDataSourceId(env, configRows);
-  const [pages, contentLinkPages] = await Promise.all([
+  const [pages, contentPages] = await Promise.all([
     queryPosts(env, undefined, 100, sourceId),
     querySiteLinks(env, sourceId),
   ]);
+  const noticePage = contentPages.find((page) => page.properties?.type?.select?.name === "Notice");
   const config = toPublicSiteConfig(configRows);
   const configLinkPages = configRows.filter(isConfigLinkPage);
   return {
     posts: pages.map(toPost).filter((post) => post.slug),
-    links: toSiteLinks([...contentLinkPages, ...configLinkPages]).filter((link) => config.rssEnabled || link.kind !== "rss"),
+    links: toSiteLinks([...contentPages, ...configLinkPages]).filter((link) => config.rssEnabled || link.kind !== "rss"),
+    notice: noticePage ? toSiteNotice(noticePage) : undefined,
     config,
   };
 }
@@ -289,7 +291,7 @@ async function cachedPublicDocument(request: Request, env: Env, ctx: ExecutionCo
   keyUrl.protocol = canonical.protocol;
   keyUrl.host = canonical.host;
   keyUrl.search = "";
-  keyUrl.searchParams.set("schema", "3");
+  keyUrl.searchParams.set("schema", "4");
   keyUrl.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
   const key = new Request(keyUrl.toString(), { method: "GET" });
   const cached = await cache?.match(key);
@@ -311,7 +313,7 @@ function siteBootstrapEdgeKey(env: Env, request: Request): Request {
   url.host = canonical.host;
   url.pathname = "/__blog-cache/site-bootstrap";
   url.search = "";
-  url.searchParams.set("schema", "3");
+  url.searchParams.set("schema", "4");
   url.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
   url.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
   return new Request(url.toString(), { method: "GET" });
@@ -326,6 +328,7 @@ async function homePayloadForRender(env: Env, request: Request, ctx: ExecutionCo
   return {
     posts: Array.isArray(payload.posts) ? payload.posts : [],
     links: Array.isArray(payload.links) ? payload.links : [],
+    notice: payload.notice?.id && payload.notice?.title ? payload.notice : undefined,
     config: payload.config?.author && payload.config?.since ? payload.config : defaultSiteConfig(),
   };
 }
@@ -881,6 +884,7 @@ async function querySiteLinks(env: Env, sourceId?: string): Promise<any[]> {
           { or: [
             { property: "type", select: { equals: "Page" } },
             { property: "type", select: { equals: "Link" } },
+            { property: "type", select: { equals: "Notice" } },
           ] },
           { property: "status", select: { equals: "Published" } },
         ] },
@@ -1089,6 +1093,17 @@ function toSitePagePost(page: any) {
     date: "",
     icon: notionDisplayEmoji(page),
     locked: false,
+  };
+}
+
+function toSiteNotice(page: any) {
+  const properties = page.properties || {};
+  return {
+    id: page.id,
+    title: (title(properties.title) || "公告").replace(/_+$/, ""),
+    summary: plain(properties.summary),
+    icon: notionDisplayEmoji(page),
+    date: properties.date?.date?.start || page.created_time?.slice(0, 10) || "",
   };
 }
 
@@ -1305,8 +1320,6 @@ function toPublicSiteConfig(pages: any[]) {
     if (key === "OG_IMAGE_URL") config.ogImageUrl = safePublicAsset(value) || config.ogImageUrl;
     if (key === "AUTHOR" && value) config.author = value.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 80) || config.author;
     if (key === "SINCE") config.since = value.match(/(?:19|20)\d{2}/)?.[0] || config.since;
-    if (key === "HOME_NOTICE" && value) config.homeNotice = cleanConfigText(value, 80) || config.homeNotice;
-    if (key === "HOME_NOTICE_SUBTITLE" && value) config.homeNoticeSubtitle = cleanConfigText(value, 140) || config.homeNoticeSubtitle;
     if (key === "POST_COUNT_TEXT" && value) config.postCountText = cleanConfigText(value, 160) || config.postCountText;
     if (key === "FOOTER_CREDIT" && value) config.footerCredit = cleanConfigText(value, 160) || config.footerCredit;
     if (key === "REPOSITORY_URL" && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/i.test(value)) config.repositoryUrl = value.slice(0, 240);

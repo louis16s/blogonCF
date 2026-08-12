@@ -23,6 +23,14 @@ export type SiteLink = {
   kind: "rss" | "tool" | "nav";
 };
 
+export type SiteNotice = {
+  id: string;
+  title: string;
+  summary: string;
+  icon?: string;
+  date: string;
+};
+
 export type RichText = {
   text: string;
   href?: string;
