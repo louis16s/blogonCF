@@ -654,7 +654,8 @@ async function attachChildAccessSignatures(blocks: any[], secret: string | undef
     target.accessSignature = await createChildAccessSignature(secret, normalizeNotionId(rootPageId), pageId);
     if (target.type === "child_page") {
       const page = await readPage(pageId);
-      target.icon = page?.icon?.type === "emoji" ? page.icon.emoji : "📖";
+      if (page?.icon?.type === "emoji" && typeof page.icon.emoji === "string") target.icon = page.icon.emoji;
+      else delete target.icon;
     }
   }));
 }

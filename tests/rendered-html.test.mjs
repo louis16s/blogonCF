@@ -222,7 +222,8 @@ test("overview renders every article immediately while retaining search and cate
   assert.doesNotMatch(blog, /最近常出现|buildWordCloud\(posts\)/);
   assert.match(blog, /<WordCloudDialog open=\{wordCloudOpen\}/);
   assert.match(sidebar, /href="\/#word-cloud"[\s\S]*>词云<\/Link>/);
-  assert.match(blog, /post\.icon \|\| "📝"/, "article cards should render the Notion page emoji");
+  assert.match(blog, /post\.icon \? <span className="post-emoji"/, "article cards should render the Notion page emoji when present");
+  assert.doesNotMatch(blog, /post\.icon \|\|/, "article cards without a Notion emoji must not invent one");
   assert.doesNotMatch(blog, /categoryIcons|post-icon|Heart|MapTrifold/, "category guesses must not replace Notion icons");
   assert.doesNotMatch(sidebar, />站点地图</, "the XML sitemap should not be presented as visitor navigation");
 });
@@ -1203,6 +1204,9 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     const unlock = await worker.fetch(new Request("http://localhost/api/content/post/index", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "correct" }) }), env, context);
     const cookie = unlock.headers.get("set-cookie").split(";", 1)[0];
     assert.match(unlock.headers.get("set-cookie"), /HttpOnly; SameSite=Lax/);
+    const unlockPayload = await unlock.json();
+    const referencedBlock = unlockPayload.blocks.find((block) => block.type === "child_page" && block.pageId === referencedId);
+    assert.equal(referencedBlock?.icon, undefined, "a child page without a Notion emoji must not receive a fallback icon");
     const childHeaders = { "content-type": "application/json", cookie };
     const session = await worker.fetch(new Request("http://localhost/api/content/unlock-session?slug=index", { headers: { cookie } }), env, context);
     assert.equal(session.status, 200);
@@ -1400,6 +1404,7 @@ test("published posts without a slug remain reachable through their Notion page 
 
 test("article renderer opens child pages internally instead of linking to Notion", async () => {
   const article = await readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8");
+  const explorer = await readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8");
   const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   assert.match(article, /contentKind === "page" \? "\/api\/content\/page-child" : "\/api\/content\/child"/);
   assert.match(article, /history\.pushState/);
@@ -1412,6 +1417,8 @@ test("article renderer opens child pages internally instead of linking to Notion
   assert.match(article, /rootMargin: "2400px 0px"/);
   assert.match(article, /case "table_of_contents": return null/, "Notion TOC blocks must not be duplicated inside the article body");
   assert.match(article, /article-toc:navigate/, "sidebar headings must be able to request unloaded article chunks before scrolling");
+  assert.doesNotMatch(article, /block\.icon \?[^\n]+: <FileText/, "child pages without a Notion emoji must not receive a made-up icon");
+  assert.doesNotMatch(explorer, /post\.icon \|\| "📝"/, "article cards must only show icons supplied by Notion");
   assert.doesNotMatch(css, /\.child-document::before/);
   assert.match(css, /\.child-document-head \{[^}]*border-bottom:/);
   assert.match(css, /\.child-document-body>\.notion-content \{ padding-top:/);

@@ -249,7 +249,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
 function PostCard({ post, index }: { post: Post; index: number }) {
   return (
     <article className="post-card" title={post.summary || undefined} style={{ "--card-order": Math.min(index, 8) } as CSSProperties}>
-      <span className="post-emoji" aria-label={post.icon ? `Notion 图标 ${post.icon}` : "默认文章图标"}>{post.icon || "📝"}</span>
+      {post.icon ? <span className="post-emoji" aria-label={`Notion 图标 ${post.icon}`}>{post.icon}</span> : null}
       <div className="post-card-body">
         <div className="post-card-title">
           <h3><Link href={`/blog/${encodeURIComponent(post.slug)}`}>{post.title}</Link></h3>
