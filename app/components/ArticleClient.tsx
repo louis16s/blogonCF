@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, ArrowRight, ArrowSquareOut, CaretRight, Eye, EyeSlash, FileText, LockKey, Rss } from "@phosphor-icons/react";
-import { FormEvent, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type CSSProperties, type MouseEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChildDatabase, ChildPage, ContentBlock, Post } from "../data/types";
 import { withoutHiddenNotionBlocks } from "../../shared/contentVisibility.js";
 import { CONTENT_REFRESH_INTERVAL_MS } from "./siteBootstrap";
@@ -382,6 +382,17 @@ function PasswordForm({ onSubmit, error, loading }: { onSubmit: (value: string) 
 
 type TocItem = { id: string; label: string; level: number };
 
+function jumpToHeading(event: MouseEvent<HTMLAnchorElement>, id: string) {
+  event.preventDefault();
+  const target = document.getElementById(id);
+  if (!target) return;
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const url = new URL(window.location.href);
+  url.hash = id;
+  window.history.replaceState(window.history.state, "", url);
+  target.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start", inline: "nearest" });
+}
+
 function collectHeadings(blocks: ContentBlock[]): TocItem[] {
   return blocks.flatMap((block) => {
     const own = /^heading_[123]$/.test(block.type)
@@ -612,7 +623,7 @@ function Block({ block, onOpenChild, toc, databaseContext, breadcrumb }: { block
     case "column_list": return <div className={`${className} columns`}>{children}</div>;
     case "column": return <div className="column">{children}</div>;
     case "synced_block": case "template": return <div className={className}>{children}</div>;
-    case "table_of_contents": return toc.length ? <nav className={`${className} notion-toc`} aria-label="文章目录"><strong>目录</strong>{toc.map((item) => <a href={`#${item.id}`} style={{ "--toc-level": item.level } as CSSProperties} key={item.id}>{item.label}</a>)}</nav> : null;
+    case "table_of_contents": return toc.length ? <nav className={`${className} notion-toc`} aria-label="文章目录"><strong>目录</strong>{toc.map((item) => <a href={`#${item.id}`} onClick={(event) => jumpToHeading(event, item.id)} style={{ "--toc-level": item.level } as CSSProperties} key={item.id}>{item.label}</a>)}</nav> : null;
     case "breadcrumb": return <nav className={`${className} notion-breadcrumb`} aria-label="页面层级">{breadcrumb.map((item, index) => <span key={`${item}-${index}`}>{index ? " / " : ""}{item}</span>)}</nav>;
     case "unsupported": return <aside className="unsupported">此内容块暂不支持显示。</aside>;
     default: return children ? <div>{children}</div> : <aside className="unsupported">未识别的内容块：{block.type}</aside>;
