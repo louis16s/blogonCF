@@ -8,8 +8,8 @@ import "./globals.css";
 import "katex/dist/katex.min.css";
 
 function metadataBase(value: string | null): URL {
-  try { return new URL(value || "https://1.530555.xyz"); }
-  catch { return new URL("https://1.530555.xyz"); }
+  try { return new URL(value || "https://530555.xyz"); }
+  catch { return new URL("https://530555.xyz"); }
 }
 
 function siteConfig(value: string | null): SiteConfig {

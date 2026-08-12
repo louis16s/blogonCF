@@ -1019,6 +1019,7 @@ test("public config endpoint exposes only the public footer, author, and year al
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "THEME_PRESET" }] }, "配置值": { rich_text: [{ plain_text: "forest" }] } } },
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "LIGHT_ACCENT" }] }, "配置值": { rich_text: [{ plain_text: "#4f745d" }] } } },
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "DARK_TEXT" }] }, "配置值": { rich_text: [{ plain_text: "red; background:url(x)" }] } } },
+      { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AVATAR_URL" }] }, "配置值": { rich_text: [{ plain_text: "https://legacy.example/avatar.jpg" }] }, "图片": { files: [{ type: "file", file: { url: "https://prod-files-secure.s3.us-west-2.amazonaws.com/config/avatar.jpg?signature=temporary" } }] } } },
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "SECRET" }] }, "配置值": { rich_text: [{ plain_text: "never-leak" }] } } },
       { properties: { "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "缺少启用字段" }] } } },
     ] });
@@ -1035,8 +1036,33 @@ test("public config endpoint exposes only the public footer, author, and year al
     assert.equal(payload.config.themePreset, "forest");
     assert.equal(payload.config.lightAccent, "#4f745d");
     assert.equal(payload.config.darkText, "");
+    assert.equal(payload.config.avatarUrl, "/_notion/config-image/AVATAR_URL");
     assert.ok(payload.config.footerQuotes.length >= 6);
     assert.doesNotMatch(JSON.stringify(payload), /never-leak|缺少启用字段/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Config file images use stable same-origin paths and refresh Notion signatures", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  let fileFetches = 0;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("/data_sources/config-source/query")) return Response.json({ results: [
+      { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "OG_IMAGE_URL" }] }, "图片": { files: [{ type: "file", file: { url: "https://prod-files-secure.s3.us-west-2.amazonaws.com/config/og.jpg?signature=fresh" } }] } } },
+    ] });
+    fileFetches += 1;
+    assert.equal(new URL(url).hostname, "prod-files-secure.s3.us-west-2.amazonaws.com");
+    assert.equal(init.redirect, "manual");
+    return new Response("jpeg-binary", { headers: { "content-type": "image/jpeg", "content-length": "11" } });
+  };
+  try {
+    const response = await worker.fetch(new Request("http://localhost/_notion/config-image/OG_IMAGE_URL"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_CONFIG_DATA_SOURCE_ID: "config-source" }, context);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "image/jpeg");
+    assert.match(response.headers.get("cache-control"), /stale-while-revalidate/);
+    assert.equal(await response.text(), "jpeg-binary");
+    assert.equal(fileFetches, 1);
   } finally { globalThis.fetch = originalFetch; }
 });
 

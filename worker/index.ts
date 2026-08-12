@@ -30,6 +30,8 @@ const DEFAULT_DATA_SOURCE_ID = "";
 const DEFAULT_CONFIG_DATA_SOURCE_ID = "";
 const NOTION_VERSION = "2026-03-11";
 const NOTION_IMAGE_HOSTS = new Set(["prod-files-secure.s3.us-west-2.amazonaws.com"]);
+const CONFIG_IMAGE_KEYS = new Set(["FAVICON_URL", "AVATAR_URL", "OG_IMAGE_URL"]);
+const MAX_CONFIG_IMAGE_BYTES = 12 * 1024 * 1024;
 const MAX_BLOCKS = 10_000;
 const CONTENT_CHUNK_BLOCKS = 300;
 const MAX_BLOCK_DEPTH = 12;
@@ -62,6 +64,7 @@ const worker = {
     if (url.pathname === "/sitemap.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedPublicDocument(request, env, ctx, () => notionSitemap(env, url)));
     if (url.pathname === "/rss.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedPublicDocument(request, env, ctx, () => notionRss(env, url)));
     if (url.pathname === "/favicon.ico" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionSiteIcon(env, request));
+    if (url.pathname.startsWith("/_notion/config-image/") && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionConfigImage(env, url));
     if (url.pathname === "/api/content/posts" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionPosts(env, request, ctx));
     if (url.pathname === "/api/content/navigation" && request.method === "GET") return notionNavigation(env);
     if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
@@ -160,12 +163,45 @@ async function refreshExternalFeeds(env: Env): Promise<void> {
 async function notionSiteIcon(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return env.ASSETS.fetch(new Request(new URL("/favicon.svg", request.url)));
   try {
-    const config = await queryPublicSiteConfig(env);
+    const rows = await queryConfigRows(env);
+    const fileResponse = await notionConfigImageByKey(env, "FAVICON_URL", rows);
+    if (fileResponse) return fileResponse;
+    const config = toPublicSiteConfig(rows);
     if (!config.favicon || config.favicon === "/favicon.svg") return env.ASSETS.fetch(new Request(new URL("/favicon.svg", request.url)));
     const target = new URL(config.favicon, request.url);
     if (target.origin === new URL(request.url).origin) return env.ASSETS.fetch(new Request(target));
     return new Response(null, { status: 302, headers: { location: target.href, "cache-control": "public, max-age=300", "x-content-type-options": "nosniff" } });
   } catch { return env.ASSETS.fetch(new Request(new URL("/favicon.svg", request.url))); }
+}
+
+async function notionConfigImage(env: Env, requestUrl: URL): Promise<Response> {
+  if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  const key = decodeURIComponent(requestUrl.pathname.slice("/_notion/config-image/".length)).toLocaleUpperCase();
+  if (!CONFIG_IMAGE_KEYS.has(key)) return error(404, "Config image not found");
+  try {
+    return await notionConfigImageByKey(env, key) || error(404, "Config image not found");
+  } catch (reason) { return notionError(reason); }
+}
+
+async function notionConfigImageByKey(env: Env, key: string, rows?: any[]): Promise<Response | null> {
+  const page = (rows || await queryConfigRows(env)).find((row) => row.properties?.["启用"]?.checkbox === true && configPageKey(row) === key);
+  const rawUrl = configPageFileUrl(page);
+  if (!rawUrl) return null;
+  let source: URL;
+  try { source = new URL(rawUrl); }
+  catch { return null; }
+  if (source.protocol !== "https:" || !NOTION_IMAGE_HOSTS.has(source.hostname)) return null;
+  const response = await fetch(source, { redirect: "manual" });
+  if (!response.ok || !response.body) return error(response.status || 502, "Config image is temporarily unavailable");
+  const contentType = response.headers.get("content-type")?.split(";", 1)[0].toLocaleLowerCase() || "";
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (!contentType.startsWith("image/")) return error(415, "Unsupported config image response");
+  if (contentLength > MAX_CONFIG_IMAGE_BYTES) return error(413, "Config image is too large");
+  return new Response(response.body, { headers: {
+    "content-type": contentType,
+    "cache-control": "public, max-age=300, stale-while-revalidate=86400",
+    "x-content-type-options": "nosniff",
+  } });
 }
 
 async function notionImage(request: Request, env: Env): Promise<Response> {
@@ -291,7 +327,7 @@ async function cachedPublicDocument(request: Request, env: Env, ctx: ExecutionCo
   keyUrl.protocol = canonical.protocol;
   keyUrl.host = canonical.host;
   keyUrl.search = "";
-  keyUrl.searchParams.set("schema", "4");
+  keyUrl.searchParams.set("schema", "5");
   keyUrl.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
   const key = new Request(keyUrl.toString(), { method: "GET" });
   const cached = await cache?.match(key);
@@ -313,7 +349,7 @@ function siteBootstrapEdgeKey(env: Env, request: Request): Request {
   url.host = canonical.host;
   url.pathname = "/__blog-cache/site-bootstrap";
   url.search = "";
-  url.searchParams.set("schema", "4");
+  url.searchParams.set("schema", "5");
   url.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
   url.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
   return new Request(url.toString(), { method: "GET" });
@@ -1315,9 +1351,10 @@ function toPublicSiteConfig(pages: any[]) {
     if (key === "SITE_TITLE" && value) config.siteTitle = cleanConfigText(value, 100) || config.siteTitle;
     if (key === "SITE_DESCRIPTION" && value) config.siteDescription = cleanConfigText(value, 240) || config.siteDescription;
     if (key === "SITE_LANGUAGE" && /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(value)) config.siteLanguage = value;
-    if (key === "FAVICON" || key === "FAVICON_URL") config.favicon = safePublicAsset(value) || config.favicon;
-    if (key === "AVATAR_URL") config.avatarUrl = safePublicAsset(value);
-    if (key === "OG_IMAGE_URL") config.ogImageUrl = safePublicAsset(value) || config.ogImageUrl;
+    const hasConfigImage = Boolean(configPageFileUrl(page));
+    if (key === "FAVICON" || key === "FAVICON_URL") config.favicon = hasConfigImage ? "/favicon.ico" : safePublicAsset(value) || config.favicon;
+    if (key === "AVATAR_URL") config.avatarUrl = hasConfigImage ? "/_notion/config-image/AVATAR_URL" : safePublicAsset(value);
+    if (key === "OG_IMAGE_URL") config.ogImageUrl = hasConfigImage ? "/_notion/config-image/OG_IMAGE_URL" : safePublicAsset(value) || config.ogImageUrl;
     if (key === "AUTHOR" && value) config.author = value.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 80) || config.author;
     if (key === "SINCE") config.since = value.match(/(?:19|20)\d{2}/)?.[0] || config.since;
     if (key === "POST_COUNT_TEXT" && value) config.postCountText = cleanConfigText(value, 160) || config.postCountText;
@@ -1364,6 +1401,18 @@ function configPageKey(page: any): string {
 function configPageValue(page: any): string {
   const properties = page.properties || {};
   return (typeof properties["链接"]?.url === "string" ? properties["链接"].url : plain(properties["配置值"] || properties.value || properties.slug)).trim();
+}
+
+function configPageFileUrl(page: any): string {
+  const properties = page?.properties || {};
+  const files = properties["图片"]?.files || properties.image?.files || properties.Image?.files;
+  if (!Array.isArray(files) || !files.length) return "";
+  const file = files[0];
+  const rawUrl = typeof file?.file?.url === "string" ? file.file.url : typeof file?.external?.url === "string" ? file.external.url : "";
+  try {
+    const url = new URL(rawUrl);
+    return url.protocol === "https:" && NOTION_IMAGE_HOSTS.has(url.hostname) ? url.href : "";
+  } catch { return ""; }
 }
 
 function configBoolean(value: string, fallback: boolean): boolean {

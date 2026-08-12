@@ -4,7 +4,7 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https%3A%2F%2Fgithub.com%2Flouis16s%2FblogonCF.git)
 
-线上示例：[1.530555.xyz](https://1.530555.xyz)
+线上示例：[530555.xyz](https://530555.xyz)
 
 等价入口：[blog.530555.xyz](https://blog.530555.xyz) · [www.530555.xyz](https://www.530555.xyz)
 
@@ -170,7 +170,7 @@ Notion 自动转换出的 `———[hide]———` 也会被识别。标记和
 | --- | --- | --- |
 | 01 · 站点身份 | `SITE_TITLE`、`SITE_DESCRIPTION`、`SITE_LANGUAGE` | 站点标题、搜索/分享描述与语言代码 |
 | 01 · 站点身份 | `AUTHOR`、`SINCE` | 作者和创始年份 |
-| 02 · 品牌资源 | `FAVICON_URL`、`AVATAR_URL`、`OG_IMAGE_URL` | 标签页图标、侧栏头像和分享卡片图片；支持站内路径或 HTTPS |
+| 02 · 品牌资源 | `FAVICON_URL`、`AVATAR_URL`、`OG_IMAGE_URL` | 标签页图标、侧栏头像和分享卡片图片；优先读取同一行“图片”列，文本地址仅用于兼容旧配置 |
 | 03 · 内容功能 | `WORD_CLOUD_ENABLED`、`CATEGORIES_ENABLED`、`RSS_ENABLED`、`SEARCH_ENABLED` | 词云、分类、RSS 与全文搜索开关 |
 | 03 · 内容功能 | `TOOLS_DEFAULT_OPEN`、`CATEGORIES_DEFAULT_OPEN` | 访客没有保存过偏好时，侧栏分组是否默认展开 |
 | 03 · 内容功能 | `TOC_DEFAULT_STATE` | 目录默认状态：`auto`、`open` 或 `closed`；长目录在 `auto` 下默认折叠 |
@@ -186,6 +186,8 @@ Notion 自动转换出的 `———[hide]———` 也会被识别。标记和
 | 99 · 高级设置 | `NOTION_DATA_SOURCE_ID` | 文章/Page/Link 数据源 ID；启用后优先于 Worker 的同名普通变量 |
 
 配置项需要启用；年份会从文本中提取四位数。未配置、未启用或格式不合法时使用安全默认值。自定义颜色优先于配色预设，因此通常只需修改 `THEME_PRESET`；需要精调时再启用单项颜色覆盖。
+
+Config 数据源可增加一个 `图片`（Files & media）属性。为 `FAVICON_URL`、`AVATAR_URL` 或 `OG_IMAGE_URL` 直接上传一张图片后，Worker 会提供稳定的站内图片地址，并在每次缓存更新时重新解析 Notion 的临时文件链接。更换图片只需替换该行文件，无需复制 URL。图片属性优先于 `配置值` 和 `链接`；移除图片后自动回退到原有地址配置。
 
 首页公告不属于 Config。请在内容数据库创建一条 `type = Notice`、`status = Published` 的记录：`title` 是公告主句，`summary` 是副句，页面 Emoji 会显示为公告图标。存在多条公告时只展示 `date` 最新的一条；没有已发布 Notice 时首页不显示公告区域。
 
