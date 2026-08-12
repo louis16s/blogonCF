@@ -2,7 +2,7 @@
 
 import { ArrowLeft, ArrowRight, ArrowSquareOut, CaretRight, Eye, EyeSlash, FileText, LockKey, Rss } from "@phosphor-icons/react";
 import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChildDatabase, ChildPage, ContentBlock, Post } from "../data/types";
+import type { ChildDatabase, ChildPage, ContentBlock, Post, SiteConfig } from "../data/types";
 import { withoutHiddenNotionBlocks } from "../../shared/contentVisibility.js";
 import { CONTENT_REFRESH_INTERVAL_MS } from "./siteBootstrap";
 import { useArticleToc } from "./ArticleTocContext";
@@ -32,6 +32,7 @@ type ArticleClientProps = {
   initialFetched?: boolean;
   initialError?: string;
   initialTruncated?: boolean;
+  siteConfig?: SiteConfig;
 };
 
 type ExternalFeed = { url: string; title: string; source: string; items: Array<{ id: string; title: string; url: string; published: string; summary: string }> };
@@ -55,6 +56,23 @@ async function requestChildPage(endpoint: string, payload: Record<string, unknow
   return data.child;
 }
 
+async function requestChildHeadings(endpoint: string, payload: Record<string, unknown>, signal: AbortSignal): Promise<TocItem[]> {
+  for (let attempt = 0; attempt < 45; attempt++) {
+    const response = await fetch(`${endpoint}?headings=1`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal });
+    if (response.status === 202) {
+      await new Promise<void>((resolve, reject) => {
+        const timer = window.setTimeout(resolve, 1_000);
+        signal.addEventListener("abort", () => { window.clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+      });
+      continue;
+    }
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "目录暂时无法读取");
+    return Array.isArray(data.child?.headings) ? data.child.headings : [];
+  }
+  return [];
+}
+
 function scrollToArticleStart() {
   window.requestAnimationFrame(() => {
     const article = document.querySelector<HTMLElement>(".article-shell article");
@@ -65,7 +83,7 @@ function scrollToArticleStart() {
   });
 }
 
-export function ArticleClient({ slug, contentKind = "post", initialPost, initialBlocks = [], initialHeadings = [], initialNextCursor, initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false }: ArticleClientProps) {
+export function ArticleClient({ slug, contentKind = "post", initialPost, initialBlocks = [], initialHeadings = [], initialNextCursor, initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false, siteConfig }: ArticleClientProps) {
   const articleToc = useArticleToc();
   const [post, setPost] = useState<Post | undefined>(initialPost);
   const [blocks, setBlocks] = useState<ContentBlock[]>(initialBlocks);
@@ -190,6 +208,21 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
           const url = new URL(window.location.href);
           url.searchParams.set("child", child.id);
           window.history.pushState({ child: child.id }, "", url);
+        }
+        if (child.nextCursor) {
+          void requestChildHeadings(childEndpoint, { slug, pageId: child.id, accessSignature: child.accessSignature, trail: childTrailRef.current.map((item) => item.id) }, controller.signal)
+            .then((fullHeadings) => {
+              if (!fullHeadings.length) return;
+              setChildTrail((current) => {
+                const index = current.findIndex((item) => item.id === child.id);
+                if (index < 0) return current;
+                const next = [...current];
+                next[index] = { ...next[index], headings: fullHeadings };
+                childTrailRef.current = next;
+                return next;
+              });
+            })
+            .catch(() => undefined);
         }
       })
       .catch((reason) => { if (reason.name !== "AbortError") setChildError(reason.message || "子页面暂时无法读取"); })
@@ -328,7 +361,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const isNewsPage = contentKind === "page" && /资讯|news|links/i.test(`${slug} ${post?.title || ""}`);
   const visibleBlocks = useMemo(() => isNewsPage ? withoutHiddenNotionBlocks(blocks) : blocks, [blocks, isNewsPage]);
   useEffect(() => {
-    if (!isNewsPage) return;
+    if (!isNewsPage || siteConfig?.rssEnabled === false) return;
     const controller = new AbortController();
     const loadingTimer = window.setTimeout(() => setFeedsLoading(true), 80);
     fetch(`/api/content/rss-feeds?slug=${encodeURIComponent(slug)}`, { signal: controller.signal, cache: "no-store" })
@@ -337,7 +370,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       .catch(() => { if (!controller.signal.aborted) setFeeds([]); })
       .finally(() => { window.clearTimeout(loadingTimer); if (!controller.signal.aborted) setFeedsLoading(false); });
     return () => { window.clearTimeout(loadingTimer); controller.abort(); };
-  }, [isNewsPage, slug]);
+  }, [isNewsPage, siteConfig?.rssEnabled, slug]);
 
   const closeChild = () => {
     childRequestRef.current?.abort();
@@ -373,7 +406,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       </div>
       {post.tags.length ? <div className="tags">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
     </header> : null}
-    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} continuationLoading={childContinuationLoading} error={childError} databaseContext={{ slug, contentKind, trail: childTrail.map((item) => item.id) }} breadcrumb={[post.title, ...childTrail.map((item) => item.title)]} /> : blocks.length ? <div className="notion-content"><Blocks blocks={visibleBlocks} toc={headings.length ? headings : undefined} onOpenChild={loadChild} databaseContext={{ slug, contentKind, trail: [] }} breadcrumb={[post.title]} />{isNewsPage ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}<ContentPrefetchSentinel pending={Boolean(nextCursor)} loading={continuationLoading} onLoad={loadMoreContent} /></div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
+    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} continuationLoading={childContinuationLoading} error={childError} databaseContext={{ slug, contentKind, trail: childTrail.map((item) => item.id) }} breadcrumb={[post.title, ...childTrail.map((item) => item.title)]} /> : blocks.length ? <div className="notion-content"><Blocks blocks={visibleBlocks} toc={headings.length ? headings : undefined} onOpenChild={loadChild} databaseContext={{ slug, contentKind, trail: [] }} breadcrumb={[post.title]} />{isNewsPage && siteConfig?.rssEnabled !== false ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}<ContentPrefetchSentinel pending={Boolean(nextCursor)} loading={continuationLoading} onLoad={loadMoreContent} /></div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
   </>;
 }
 

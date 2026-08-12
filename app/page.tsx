@@ -10,7 +10,7 @@ export default async function Home() {
   return (
     <>
       <script dangerouslySetInnerHTML={{ __html: INTRO_BOOTSTRAP_SCRIPT }} />
-      <IntroSequence />
+      <IntroSequence enabled={payload?.config.introEnabled} title={payload?.config.introTitle} subtitle={payload?.config.introSubtitle} />
       <BlogExplorer initialPosts={payload?.posts} initialLinks={payload?.links} initialConfig={payload?.config} />
     </>
   );

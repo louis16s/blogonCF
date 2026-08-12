@@ -3,7 +3,7 @@
 import { useCallback, useLayoutEffect, useState } from "react";
 import { completeIntro, INTRO_DURATION_MS } from "./introState";
 
-export function IntroSequence() {
+export function IntroSequence({ enabled = true, title = "louis16s", subtitle = "正在对焦生活" }: { enabled?: boolean; title?: string; subtitle?: string }) {
   const [visible, setVisible] = useState(true);
 
   const finish = useCallback(() => {
@@ -14,6 +14,10 @@ export function IntroSequence() {
   // A layout effect prevents the homepage from flashing before the intro when
   // this component mounts after an in-app navigation from another route.
   useLayoutEffect(() => {
+    if (!enabled) {
+      const frame = window.requestAnimationFrame(finish);
+      return () => window.cancelAnimationFrame(frame);
+    }
     if (document.documentElement.dataset.intro !== "playing") {
       let reducedMotion = false;
       try {
@@ -32,9 +36,9 @@ export function IntroSequence() {
       window.clearTimeout(timer);
       document.body.classList.remove("intro-playing");
     };
-  }, [finish]);
+  }, [enabled, finish]);
 
-  if (!visible) return null;
+  if (!enabled || !visible) return null;
 
   return (
     <div
@@ -47,7 +51,7 @@ export function IntroSequence() {
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img className="intro-camera" src="/rangefinder-intro.webp" alt="" width="1280" height="853" fetchPriority="high" />
         <span className="intro-lens-flash" />
-        <div className="intro-caption"><strong>LOUIS16S</strong><span>正在对焦生活</span></div>
+        <div className="intro-caption"><strong>{title}</strong><span>{subtitle}</span></div>
         <span className="intro-progress" />
       </div>
     </div>

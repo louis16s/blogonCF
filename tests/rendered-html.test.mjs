@@ -172,7 +172,7 @@ test("overview renders every article immediately while retaining search and cate
     readFile(new URL("../app/components/SiteSidebar.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/useSiteNavigation.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(sidebar, /小工具/);
+  assert.match(sidebar, /config\.toolsLabel/);
   assert.match(sidebar, /link\.kind === "tool"/);
   assert.doesNotMatch(sidebar, /快速访问|blog-sidebar-quick-open|quick-links/);
   assert.match(navigationHook, /loadSiteBootstrap/);
@@ -182,13 +182,13 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(sidebar, /mobile-menu-disclosure mobile-category-list/);
   assert.doesNotMatch(sidebar, /mobile-category-list" open/);
   assert.doesNotMatch(sidebar, /文章归档|历史归档/);
-  assert.match(sidebar, />RSS 订阅</);
-  assert.match(sidebar, />文章分类/);
+  assert.match(sidebar, /config\.rssLabel/);
+  assert.match(sidebar, /config\.categoriesLabel/);
   assert.match(sidebar, /className="sidebar-section sidebar-categories"/);
   assert.doesNotMatch(sidebar, /sidebar-browse-title|sidebar-browse-panel|>浏览</);
   assert.match(sidebar, /key: "blog\.sidebar\.categories\.v2", defaultOpen: false/);
   assert.match(sidebar, /categories\.map\(\(item\)/);
-  assert.match(blog, /categories=\{categories\}/);
+  assert.match(blog, /categories=\{siteConfig\.categoriesEnabled \? categories : \[\]\}/);
   assert.match(blog, /onCategoryChange=\{selectCategory\}/);
   assert.doesNotMatch(blog, /className="filter-row"|className="filters"/);
   assert.match(sidebar, /className="mobile-menu-group mobile-menu-disclosure"/);
@@ -199,11 +199,11 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(footer, /function FooterCredit/);
   assert.match(sidebar, /\$\{resolvedPostCount\} 篇公开文章/);
   assert.match(sidebar, /Notion 实时同步中/);
-  assert.match(sidebar, /href=\{config\.repositoryUrl\}[\s\S]*>blogonCF/);
+  assert.match(sidebar, /href=\{config\.repositoryUrl\}[\s\S]*repositoryLabel\(config\.repositoryUrl\)/);
   assert.ok(sidebar.indexOf("newsLink.href") < sidebar.indexOf("rssLink.href"), "RSS should follow the news link");
   assert.ok(sidebar.indexOf('className="sidebar-cloud-link"') < sidebar.indexOf('className="sidebar-section sidebar-tools"'), "word cloud should precede tools");
   assert.doesNotMatch(sidebar, /sidebar-home-link|showHomeLink|返回主页/);
-  assert.ok(sidebar.indexOf('>blogonCF</a>') < sidebar.lastIndexOf("rssLink &&"), "RSS should follow blogonCF in the sidebar footer");
+  assert.ok(sidebar.indexOf("repositoryLabel(config.repositoryUrl)") < sidebar.lastIndexOf("rssLink ?"), "RSS should follow the configured repository in the sidebar footer");
   assert.doesNotMatch(sidebar, /©/);
   assert.doesNotMatch(blog, /className="sync-meta"/);
   assert.doesNotMatch(sidebar, /className="mobile-tools"/);
@@ -221,7 +221,7 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(blog, /<ContentFooter id="about" siteConfig=\{siteConfig\} postCount=\{posts\.length\}/);
   assert.doesNotMatch(blog, /最近常出现|buildWordCloud\(posts\)/);
   assert.match(blog, /<WordCloudDialog open=\{wordCloudOpen\}/);
-  assert.match(sidebar, /href="\/#word-cloud"[\s\S]*>词云<\/Link>/);
+  assert.match(sidebar, /config\.wordCloudEnabled[\s\S]*href="\/#word-cloud"[\s\S]*config\.wordCloudLabel/);
   assert.match(blog, /post\.icon \? <span className="post-emoji"/, "article cards should render the Notion page emoji when present");
   assert.doesNotMatch(blog, /post\.icon \|\|/, "article cards without a Notion emoji must not invent one");
   assert.doesNotMatch(blog, /categoryIcons|post-icon|Heart|MapTrifold/, "category guesses must not replace Notion icons");
@@ -294,7 +294,7 @@ test("rangefinder intro matches the 07cd9ba sequence, lasts at least five second
   assert.doesNotMatch(layout, /IntroSequence|INTRO_BOOTSTRAP_SCRIPT/);
   assert.match(layout, /THEME_BOOTSTRAP_SCRIPT/);
   assert.match(layout, /suppressHydrationWarning/);
-  assert.match(home, /<IntroSequence \/>/);
+  assert.match(home, /<IntroSequence enabled=\{payload\?\.config\.introEnabled\}/);
   assert.match(home, /INTRO_BOOTSTRAP_SCRIPT/);
   assert.match(intro, /INTRO_DURATION_MS/);
   assert.match(intro, /useLayoutEffect/, "in-app navigation must start the homepage intro before paint");
@@ -303,7 +303,7 @@ test("rangefinder intro matches the 07cd9ba sequence, lasts at least five second
   assert.ok(INTRO_DURATION_MS >= 5_000);
   assert.match(intro, />跳过<\/button>/);
   assert.match(intro, /rangefinder-intro\.webp/);
-  assert.match(intro, />LOUIS16S</);
+  assert.match(intro, /<strong>\{title\}<\/strong>/);
   assert.doesNotMatch(intro, /FRAME 01/);
   assert.match(intro, /正在对焦生活/);
   assert.match(intro, /intro-progress/);
@@ -326,9 +326,9 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   ]);
   assert.match(sidebar, /<span>菜单<\/span>/);
   assert.doesNotMatch(sidebar, /文章归档|历史归档|快速访问/);
-  assert.match(sidebar, />RSS 订阅<\/Link>/);
-  assert.match(sidebar, /<summary><span>小工具<\/span><small>\{toolLinks\.length\}<\/small><CaretDown/);
-  assert.match(sidebar, /小工具 <small>\{toolLinks\.length\}<\/small>/);
+  assert.match(sidebar, /config\.rssEnabled && rssLink/);
+  assert.match(sidebar, /<summary><span>\{config\.toolsLabel\}<\/span><small>\{toolLinks\.length\}<\/small><CaretDown/);
+  assert.match(sidebar, /\{config\.toolsLabel\} <small>\{toolLinks\.length\}<\/small>/);
   assert.match(sidebar, /<small>外部<\/small>/);
   assert.match(sidebar, /aboutLink && \(\s*<a href=\{aboutLink\.href\}/, "unconfigured About links must not be invented on mobile");
   assert.doesNotMatch(sidebar, /href="\/#about"/);
@@ -457,9 +457,9 @@ test("article header stays compact and the password form supports keyboard submi
   assert.match(article, /autoFocus/);
   assert.match(css, /\.article-title-row \{ display: grid;/);
   assert.match(css, /\.article-shell article \{[^}]*padding: 8px 0 70px;/);
-  assert.match(articlePage, /<SiteSidebar \/>/);
+  assert.match(articlePage, /<SiteSidebar siteConfig=\{payload\?\.config\} \/>/);
   assert.doesNotMatch(articlePage, /showHomeLink/);
-  assert.match(sitePage, /<SiteSidebar \/>/);
+  assert.match(sitePage, /<SiteSidebar siteConfig=\{payload\?\.config\} \/>/);
   assert.doesNotMatch(sitePage, /showHomeLink|返回主页/);
   assert.doesNotMatch(articlePage, /返回全部文章|article-return/);
   assert.doesNotMatch(sitePage, /返回全部文章|article-return/);
@@ -501,7 +501,7 @@ test("about and other Published Notion pages render inside the site shell", asyn
     assert.match(html, /LOUIS16S · PAGE/);
     assert.match(html, /关于 louis16s/);
     assert.match(html, /这是本站渲染的关于我正文。/);
-    assert.match(html, /爱范儿/);
+    assert.match(html, /Ifanr/);
     assert.match(html, /ifanr\.com/);
     assert.doesNotMatch(html, /sidebar-home-link|返回主页/);
     assert.doesNotMatch(html, /返回全部文章/);
@@ -517,7 +517,7 @@ test("about and other Published Notion pages render inside the site shell", asyn
     assert.equal(payload.post.slug, "me");
     assert.equal(payload.post.icon, "");
     assert.equal(payload.blocks[0].richText[0].text, "这是本站渲染的关于我正文。");
-    assert.equal(payload.blocks[1].caption, "爱范儿");
+    assert.equal(payload.blocks[1].caption, "Ifanr");
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -904,7 +904,7 @@ test("content endpoint maps only filtered metadata while keeping browser respons
     } }] });
   };
   try {
-    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id", NOTION_CONFIG_DATA_SOURCE_ID: "fffad771-48f4-8181-b48e-000b8cf60e1b" };
     const response = await worker.fetch(new Request("http://localhost/api/content/posts"), env, context);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("cache-control"), "no-cache, max-age=0, must-revalidate");
@@ -1217,12 +1217,12 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     const correctPayload = await correct.json();
     assert.deepEqual({ ...correctPayload.child, accessSignature: undefined }, { id: childId, title: "第一章", icon: "📖", blocks: [{ id: "child-paragraph", type: "paragraph", richText: [{ text: "站内子页面正文" }] }], headings: [], truncated: false, accessSignature: undefined });
     assert.match(correctPayload.child.accessSignature, /^[A-Za-z0-9_-]{40,}$/);
-    assert.equal(childBlockRequests, 2, "content and its heading index are fetched independently");
+    assert.equal(childBlockRequests, 1, "the initial child response must not re-fetch its heading index");
 
     const nested = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: nestedId }) }), env, context);
     assert.equal(nested.status, 200);
     assert.equal((await nested.json()).child.id, nestedId, "nested ancestry must return the requested page rather than its intermediate parent");
-    assert.equal(childBlockRequests, 4);
+    assert.equal(childBlockRequests, 2);
 
     const blockParentChild = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: blockParentChildId }) }), env, context);
     assert.equal(blockParentChild.status, 200, "child pages nested beneath a toggle block must inherit the root article authorization");
@@ -1249,7 +1249,7 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
 
     const outside = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: outsideId }) }), env, context);
     assert.equal(outside.status, 404);
-    assert.equal(childBlockRequests, 15, "only authorized pages may expose content and heading metadata, including the stale-trail retry");
+    assert.equal(childBlockRequests, 8, "only authorized pages may expose content; heading indexing must not duplicate reads");
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -1288,7 +1288,7 @@ test("large child pages resolve every Notion cursor in one authenticated respons
     assert.equal(response.status, 200);
     const payload = await response.json();
     assert.deepEqual(payload.child.blocks.map((block) => block.id), ["chunk-1", "chunk-2"]);
-    assert.equal(blockRequests.length, 4, "the Worker should resolve content and complete heading metadata before replying");
+    assert.equal(blockRequests.length, 2, "the Worker should return complete content without repeating the same pagination for headings");
   } finally { globalThis.fetch = originalFetch; }
 });
 

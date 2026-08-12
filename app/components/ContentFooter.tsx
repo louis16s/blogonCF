@@ -40,7 +40,7 @@ export function ContentFooter({ id, siteConfig, postCount }: ContentFooterProps)
 }
 
 function FooterCredit({ text }: { text: string }) {
-  const match = /notion/i.exec(text);
+  const match = /\[([^\]]+)]\((https:\/\/[^\s)]+)\)/.exec(text);
   if (!match) return <p>{text}</p>;
-  return <p>{text.slice(0, match.index)}<a href="https://www.notion.so/" target="_blank" rel="noreferrer">{match[0]}</a>{text.slice(match.index + match[0].length)}</p>;
+  return <p>{text.slice(0, match.index)}<a href={match[2]} target="_blank" rel="noreferrer">{match[1]}</a>{text.slice(match.index + match[0].length)}</p>;
 }

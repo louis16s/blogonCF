@@ -21,6 +21,12 @@ export type SiteLink = {
 };
 
 export type SiteConfig = {
+  siteTitle: string;
+  siteDescription: string;
+  siteLanguage: string;
+  favicon: string;
+  avatarUrl: string;
+  ogImageUrl: string;
   author: string;
   since: string;
   homeNotice: string;
@@ -29,6 +35,17 @@ export type SiteConfig = {
   footerCredit: string;
   repositoryUrl: string;
   footerQuotes: FooterQuote[];
+  wordCloudEnabled: boolean;
+  categoriesEnabled: boolean;
+  rssEnabled: boolean;
+  searchEnabled: boolean;
+  introEnabled: boolean;
+  introTitle: string;
+  introSubtitle: string;
+  wordCloudLabel: string;
+  toolsLabel: string;
+  categoriesLabel: string;
+  rssLabel: string;
 };
 
 export type FooterQuote = {
@@ -48,14 +65,31 @@ export const DEFAULT_FOOTER_QUOTES: FooterQuote[] = [
 ];
 
 export const DEFAULT_SITE_CONFIG: SiteConfig = {
+  siteTitle: "louis16s' blog",
+  siteDescription: "偶尔拍照，或是写代码，剩下的时间用来对焦生活。",
+  siteLanguage: "zh-CN",
+  favicon: "/favicon.svg",
+  avatarUrl: "",
+  ogImageUrl: "/og.jpg",
   author: "louis16s",
   since: "2020",
-  homeNotice: "blog 复活啦！",
-  homeNoticeSubtitle: "是新的一年真好啊，绝胜烟柳满皇都！",
+  homeNotice: "blog 复活啦",
+  homeNoticeSubtitle: "愿这里继续保留一些缓慢、真实而具体的记录。",
   postCountText: "这里收录着 {count} 个文章。不赶时间，慢慢翻。",
-  footerCredit: "在 Notion 创造，Cloudflare 带它兜风。",
-  repositoryUrl: "https://github.com/louis16s/blogonCF",
+  footerCredit: "在 [Notion](https://www.notion.so/) 创造，Cloudflare 带它兜风。",
+  repositoryUrl: "",
   footerQuotes: DEFAULT_FOOTER_QUOTES,
+  wordCloudEnabled: true,
+  categoriesEnabled: true,
+  rssEnabled: true,
+  searchEnabled: true,
+  introEnabled: true,
+  introTitle: "louis16s",
+  introSubtitle: "正在对焦生活",
+  wordCloudLabel: "词云",
+  toolsLabel: "小工具",
+  categoriesLabel: "文章分类",
+  rssLabel: "RSS 订阅",
 };
 
 export type RichText = {

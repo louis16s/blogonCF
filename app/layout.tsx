@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
 import { THEME_BOOTSTRAP_SCRIPT } from "./components/introState";
+import { DEFAULT_SITE_CONFIG, type SiteConfig } from "./data/types";
 import "./globals.css";
 import "katex/dist/katex.min.css";
 
@@ -9,18 +10,24 @@ function metadataBase(value: string | null): URL {
   catch { return new URL("https://1.530555.xyz"); }
 }
 
-const SITE_METADATA: Metadata = {
-  title: { default: "louis16s' blog", template: "%s · louis16s' blog" },
-  description: "关于旅行、摄影、开发与生活的个人记录。由 Notion 写作，运行在 Cloudflare。",
-  icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
-  openGraph: { type: "website", locale: "zh_CN", siteName: "louis16s' blog", images: [{ url: "/og.jpg", width: 1200, height: 630, alt: "louis16s' blog" }] },
-  twitter: { card: "summary_large_image", images: ["/og.jpg"] },
-  alternates: { canonical: "/" },
-};
+function siteConfig(value: string | null): SiteConfig {
+  if (!value) return DEFAULT_SITE_CONFIG;
+  try { return { ...DEFAULT_SITE_CONFIG, ...JSON.parse(decodeURIComponent(value)) }; }
+  catch { return DEFAULT_SITE_CONFIG; }
+}
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
-  return { ...SITE_METADATA, metadataBase: metadataBase(requestHeaders.get("x-blog-site-origin")) };
+  const config = siteConfig(requestHeaders.get("x-blog-site-config"));
+  return {
+    metadataBase: metadataBase(requestHeaders.get("x-blog-site-origin")),
+    title: { default: config.siteTitle, template: `%s · ${config.siteTitle}` },
+    description: config.siteDescription,
+    icons: { icon: "/favicon.ico", shortcut: "/favicon.ico" },
+    openGraph: { type: "website", locale: config.siteLanguage.replace("-", "_"), siteName: config.siteTitle, images: [{ url: config.ogImageUrl, width: 1200, height: 630, alt: config.siteTitle }] },
+    twitter: { card: "summary_large_image", images: [config.ogImageUrl] },
+    alternates: { canonical: "/" },
+  };
 }
 
 export const viewport: Viewport = {
@@ -31,9 +38,11 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  const requestHeaders = await headers();
+  const config = siteConfig(requestHeaders.get("x-blog-site-config"));
   return (
-    <html lang="zh-CN" suppressHydrationWarning>
+    <html lang={config.siteLanguage} suppressHydrationWarning>
       <head><script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} /></head>
       <body>{children}</body>
     </html>

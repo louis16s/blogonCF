@@ -163,8 +163,14 @@ Notion 自动转换出的 `———[hide]———` 也会被识别。标记和
 
 ## 配置中心
 
-公共接口只读取以下允许项，避免把配置数据库中的私密字段暴露给访客：
+公共接口只读取以下白名单项，避免把配置数据库中的私密字段暴露给访客。配置数据库建议包含 `配置名`（Title）、`配置值`（Rich text）、`备注`（Rich text）、`启用`（Checkbox）、`类型`（Select：`Config`/`Link`）和 `链接`（URL）：
 
+- `SITE_TITLE`：站点、浏览器标签、Open Graph 与 RSS 标题
+- `SITE_DESCRIPTION`：站点、分享卡片与 RSS 描述
+- `SITE_LANGUAGE`：语言代码，例如 `zh-CN`
+- `FAVICON_URL`：标签页图标，支持站内绝对路径或 HTTPS 图片
+- `AVATAR_URL`：侧栏头像；留空则不显示
+- `OG_IMAGE_URL`：社交分享图片
 - `AUTHOR`：页脚作者
 - `SINCE`：创始年份
 - `HOME_NOTICE`：首页公告主句
@@ -173,8 +179,20 @@ Notion 自动转换出的 `———[hide]———` 也会被识别。标记和
 - `FOOTER_CREDIT`：页脚来源说明；其中的 `Notion` 会保留官网链接
 - `REPOSITORY_URL`：侧栏项目仓库地址，仅接受 GitHub HTTPS 仓库链接
 - `FOOTER_QUOTES`：页脚随机短句；每行一组，主句与副句用 `｜` 分隔
+- `WORD_CLOUD_ENABLED`：是否启用词云（`true`/`false`）
+- `CATEGORIES_ENABLED`：是否展示文章分类
+- `RSS_ENABLED`：是否生成 RSS、展示入口并聚合外部订阅
+- `SEARCH_ENABLED`：是否展示全文搜索
+- `INTRO_ENABLED`：是否播放首页开屏动画
+- `INTRO_TITLE`、`INTRO_SUBTITLE`：开屏动画文字
+- `WORD_CLOUD_LABEL`、`TOOLS_LABEL`、`CATEGORIES_LABEL`、`RSS_LABEL`：对应栏目显示名称
+- `NOTION_DATA_SOURCE_ID`：文章/Page/Link 数据源 ID；启用后优先于 Worker 的同名普通变量
 
 配置项需要启用；年份会从文本中提取四位数。未配置时使用项目默认值。
+
+Config 数据源也能存导航链接：把 `类型` 设为 `Link`，`配置名` 填显示名称，`链接` 填 HTTPS 或站内路径，`备注` 填副标题并勾选 `启用`。这些链接会与内容数据库中的 `Link + Published` 合并并按目标去重。
+
+`NOTION_TOKEN` 不能放在 Notion Config：读取 Config 本身就需要该 Token，而且公共配置会发送到浏览器。Token 必须使用 Cloudflare Secret；`NOTION_CONFIG_DATA_SOURCE_ID` 也必须通过 Worker 变量启动，否则程序无法定位 Config 数据源。
 
 `type` 应保持为单选（Select）。不要改成 Multi-select，否则查询条件无法稳定区分文章、页面和外部链接。
 

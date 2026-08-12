@@ -18,7 +18,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const decoded = decodeRouteSegment(slug);
   const { payload } = await getSitePage(decoded);
   const title = payload?.post?.title || decoded;
-  const description = payload?.post?.summary || "louis16s 的 Notion 页面";
+  const description = payload?.post?.summary || payload?.config?.siteDescription || "Notion page";
   return {
     title,
     description,

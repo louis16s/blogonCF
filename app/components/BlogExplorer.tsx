@@ -19,7 +19,6 @@ import { CONTENT_REFRESH_INTERVAL_MS } from "./siteBootstrap";
 import { normalizeSearchText } from "../../shared/wordCloud.js";
 
 const ALL = "全部";
-const preferredCategories = ["心情随笔", "嵌入式开发", "小软件工程", "相机分享", "旅行游记", "输入密码"];
 const WordCloudDialog = dynamic(() => import("./WordCloudDialog").then((module) => module.WordCloudDialog), {
   loading: () => null,
   ssr: false,
@@ -46,6 +45,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
   const lastRefreshAt = useRef(0);
 
   useEffect(() => {
+    if (!siteConfig.wordCloudEnabled) return;
     const syncFromHash = () => setWordCloudOpen(window.location.hash === "#word-cloud");
     const openFromMenu = (event: MouseEvent) => {
       const target = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a[href="/#word-cloud"]') : null;
@@ -63,7 +63,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
       window.removeEventListener("popstate", syncFromHash);
       document.removeEventListener("click", openFromMenu);
     };
-  }, []);
+  }, [siteConfig.wordCloudEnabled]);
 
   const retrySync = () => {
     setSyncState("loading");
@@ -149,14 +149,6 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
 
   const categories = useMemo(() => {
     const found = Array.from(new Set(posts.map((post) => post.category).filter(Boolean)));
-    found.sort((a, b) => {
-      const aIndex = preferredCategories.indexOf(a);
-      const bIndex = preferredCategories.indexOf(b);
-      if (aIndex === -1 && bIndex === -1) return a.localeCompare(b, "zh-CN");
-      if (aIndex === -1) return 1;
-      if (bIndex === -1) return -1;
-      return aIndex - bIndex;
-    });
     return [ALL, ...found];
   }, [posts]);
   const visible = useMemo(() => {
@@ -169,13 +161,14 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
   }, [posts, category, normalizedQuery, contentSearch]);
 
   const groups = useMemo(() => {
+    if (!siteConfig.categoriesEnabled) return [[ALL, visible] as [string, Post[]]];
     const map = new Map<string, Post[]>();
     visible.forEach((post) => {
       const key = post.category || "未分类";
       map.set(key, [...(map.get(key) || []), post]);
     });
     return Array.from(map.entries()).sort(([a], [b]) => categories.indexOf(a) - categories.indexOf(b));
-  }, [visible, categories]);
+  }, [visible, categories, siteConfig.categoriesEnabled]);
 
   const selectCategory = (value: string) => {
     setCategory(value);
@@ -188,11 +181,11 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
         siteConfig={siteConfig}
         postCount={posts.length}
         syncState={syncState}
-        categories={categories}
+        categories={siteConfig.categoriesEnabled ? categories : []}
         activeCategory={category}
         onCategoryChange={selectCategory}
       />
-      <WordCloudDialog open={wordCloudOpen} posts={posts} onClose={closeWordCloud} />
+      {siteConfig.wordCloudEnabled ? <WordCloudDialog open={wordCloudOpen} posts={posts} onClose={closeWordCloud} /> : null}
 
       <main className="blog-main">
         <header className="blog-toolbar">
@@ -202,7 +195,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
           </div>
 
           <div className="toolbar-actions">
-            <label className={`search-box${searching ? " searching" : ""}`}>
+            {siteConfig.searchEnabled ? <label className={`search-box${searching ? " searching" : ""}`}>
               <span className="sr-only">搜索文章</span>
               <input
                 value={query}
@@ -212,7 +205,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
                 aria-busy={searching}
               />
               <MagnifyingGlass aria-hidden size={20} />
-            </label>
+            </label> : null}
             <button className="icon-button" type="button" onClick={() => setDark((value) => !value)} aria-label={dark ? "切换为浅色模式" : "切换为深色模式"}>
               {dark ? <Sun aria-hidden size={21} /> : <Moon aria-hidden size={21} />}
               <span className="theme-label">{dark ? "浅色" : "深色"}</span>
@@ -223,7 +216,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialConf
         <section className="posts-shell" id="posts" aria-label="全部文章">
           {groups.map(([name, items]) => (
             <section className="category-section" key={name} aria-labelledby={`category-${slugify(name)}`}>
-              <h2 id={`category-${slugify(name)}`}>#&nbsp; {name}</h2>
+              {siteConfig.categoriesEnabled ? <h2 id={`category-${slugify(name)}`}>#&nbsp; {name}</h2> : null}
               <div className="post-grid">
                 {items.map((post, index) => <PostCard post={post} index={index} key={post.id} />)}
               </div>

@@ -87,9 +87,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
       <div className="sidebar-main">
         <div className="sidebar-brand">
           <Link className="sidebar-identity" href="/" aria-label="返回首页">
-            {/* This is the avatar used by the reference site. */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/louis16s-avatar.jpg" alt={config.author} width="52" height="52" />
+            {config.avatarUrl ? <img src={config.avatarUrl} alt={config.author} width="52" height="52" /> : null}
             <strong>{config.author}</strong>
           </Link>
         </div>
@@ -112,7 +110,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           ))}
         </nav>
 
-        <Link className="sidebar-cloud-link" href="/#word-cloud"><Cloud aria-hidden size={17} weight="regular" />词云</Link>
+        {config.wordCloudEnabled ? <Link className="sidebar-cloud-link" href="/#word-cloud"><Cloud aria-hidden size={17} weight="regular" />{config.wordCloudLabel}</Link> : null}
 
         {toolLinks.length > 0 && (
           <details
@@ -120,11 +118,11 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
             open={toolsDisclosure.open}
             onToggle={toolsDisclosure.onToggle}
           >
-            <summary><span><Wrench aria-hidden size={16} />小工具 <small>{toolLinks.length}</small></span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
+            <summary><span><Wrench aria-hidden size={16} />{config.toolsLabel} <small>{toolLinks.length}</small></span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
             <div className="sidebar-tool-list">
               {toolLinks.map((link) => (
                 <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id} title={link.summary || link.title}>
-                  <span className="tool-link-label"><span aria-hidden>{link.icon || "↗"}</span><span>{link.title}</span></span><ArrowSquareOut aria-hidden size={13} />
+                  <span className="tool-link-label">{link.icon ? <span aria-hidden>{link.icon}</span> : null}<span>{link.title}</span></span><ArrowSquareOut aria-hidden size={13} />
                 </a>
               ))}
             </div>
@@ -140,13 +138,13 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           </details>
         )}
 
-        {categories.length > 0 && onCategoryChange && (
+        {config.categoriesEnabled && categories.length > 0 && onCategoryChange && (
           <details
             className="sidebar-section sidebar-categories"
             open={categoriesDisclosure.open}
             onToggle={categoriesDisclosure.onToggle}
           >
-            <summary><span><FolderOpen aria-hidden size={16} />文章分类</span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
+            <summary><span><FolderOpen aria-hidden size={16} />{config.categoriesLabel}</span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
             <div className="sidebar-category-list" role="group" aria-label="按分类筛选">
               {categories.map((item) => (
                 <button type="button" className={item === activeCategory ? "active" : ""} aria-pressed={item === activeCategory} onClick={() => onCategoryChange(item)} key={item}>{item}</button>
@@ -179,10 +177,10 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
             ) : (
               <Link href={link.href} key={link.id}>{link.title}</Link>
             ))}
-            <Link href="/#word-cloud">词云</Link>
+            {config.wordCloudEnabled ? <Link href="/#word-cloud">{config.wordCloudLabel}</Link> : null}
             {toolLinks.length > 0 && (
               <details className="mobile-menu-group mobile-menu-disclosure">
-                <summary><span>小工具</span><small>{toolLinks.length}</small><CaretDown className="section-caret" aria-hidden size={13} /></summary>
+                <summary><span>{config.toolsLabel}</span><small>{toolLinks.length}</small><CaretDown className="section-caret" aria-hidden size={13} /></summary>
                 <div className="mobile-menu-disclosure-content">
                   {toolLinks.map((link) => (
                     <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id}>{link.title}{link.external && <small>外部</small>}</a>
@@ -198,9 +196,9 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
                 </div>
               </details>
             )}
-            {categories.length > 0 && onCategoryChange && (
+            {config.categoriesEnabled && categories.length > 0 && onCategoryChange && (
               <details className="mobile-menu-group mobile-menu-disclosure mobile-category-list">
-                <summary><span>文章分类</span><CaretDown className="section-caret" aria-hidden size={13} /></summary>
+                <summary><span>{config.categoriesLabel}</span><CaretDown className="section-caret" aria-hidden size={13} /></summary>
                 <div className="mobile-menu-disclosure-content">
                   {categories.map((item) => (
                     <button type="button" className={item === activeCategory ? "active" : ""} aria-pressed={item === activeCategory} onClick={() => onCategoryChange(item)} key={item}>{item}</button>
@@ -212,7 +210,7 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
               <span>{countLabel}</span>
               <span className={`source ${resolvedSyncState === "live" ? "live" : ""}`}>{syncLabel}</span>
             </div>
-            <a href={config.repositoryUrl} target="_blank" rel="noreferrer">blogonCF<small>GitHub</small></a>
+            {config.repositoryUrl ? <a href={config.repositoryUrl} target="_blank" rel="noreferrer">{repositoryLabel(config.repositoryUrl)}<small>GitHub</small></a> : null}
           </nav>
         </details>
 
@@ -223,9 +221,14 @@ export function SiteSidebar({ siteLinks = [], postCount, syncState, categories =
           <span>{countLabel}</span>
           <span className={`source ${resolvedSyncState === "live" ? "live" : ""}`}>{syncLabel}</span>
         </div>
-        <a className="sidebar-repo-link" href={config.repositoryUrl} target="_blank" rel="noreferrer"><GithubLogo aria-hidden size={14} />blogonCF</a>
-        {rssLink && <Link className="sidebar-repo-link" href={rssLink.href}><Rss aria-hidden size={14} />RSS 订阅</Link>}
+        {config.repositoryUrl ? <a className="sidebar-repo-link" href={config.repositoryUrl} target="_blank" rel="noreferrer"><GithubLogo aria-hidden size={14} />{repositoryLabel(config.repositoryUrl)}</a> : null}
+        {config.rssEnabled && rssLink ? <Link className="sidebar-repo-link" href={rssLink.href}><Rss aria-hidden size={14} />{config.rssLabel}</Link> : null}
       </div>
     </aside>
   );
+}
+
+function repositoryLabel(value: string) {
+  try { return new URL(value).pathname.split("/").filter(Boolean).at(-1) || "GitHub"; }
+  catch { return "GitHub"; }
 }

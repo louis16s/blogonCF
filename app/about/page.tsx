@@ -14,7 +14,7 @@ const getAboutPage = cache(async (): Promise<{ payload?: ArticlePayload; fetched
 export async function generateMetadata(): Promise<Metadata> {
   const { payload } = await getAboutPage();
   const title = payload?.post?.title || "关于我";
-  const description = payload?.post?.summary || "关于 louis16s";
+  const description = payload?.post?.summary || payload?.config?.siteDescription || "About";
   return {
     title,
     description,

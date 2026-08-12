@@ -24,8 +24,8 @@ interface Env {
 interface ExecutionContext { waitUntil(promise: Promise<unknown>): void; passThroughOnException(): void; }
 interface ScheduledController { scheduledTime: number; cron: string; }
 
-const DEFAULT_DATA_SOURCE_ID = "fffad771-48f4-81f5-be17-000b319f85ad";
-const DEFAULT_CONFIG_DATA_SOURCE_ID = "fffad771-48f4-8181-b48e-000b8cf60e1b";
+const DEFAULT_DATA_SOURCE_ID = "";
+const DEFAULT_CONFIG_DATA_SOURCE_ID = "";
 const NOTION_VERSION = "2026-03-11";
 const NOTION_IMAGE_HOSTS = new Set(["prod-files-secure.s3.us-west-2.amazonaws.com"]);
 const MAX_BLOCKS = 10_000;
@@ -43,18 +43,22 @@ const edgeBootstrapHeaders = { ...jsonHeaders, "cache-control": "public, max-age
 const wordCloudCache = new Map<string, { expiresAt: number; payload: WordCloudPayload }>();
 const publicCorpusCache = new Map<string, { expiresAt: number; corpus: PublicCorpus }>();
 const siteBootstrapCache = new Map<string, { freshUntil: number; staleUntil: number; payload?: HomePayload; pending?: Promise<HomePayload> }>();
+const headingIndexCache = new Map<string, { expiresAt: number; headings?: HeadingSummary[]; pending?: Promise<HeadingSummary[]> }>();
+const contentSourceCache = new Map<string, { expiresAt: number; id: string }>();
 
 type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "notion" };
 type SearchDocument = ReturnType<typeof toPost> & { body: string; searchBody: string };
 type PublicCorpus = { documents: SearchDocument[]; partial: boolean };
 type WorkerCacheStorage = CacheStorage & { default?: Cache };
 type HeadingSummary = { id: string; label: string; level: number };
+type SiteConfigPayload = ReturnType<typeof defaultSiteConfig>;
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/sitemap.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedPublicDocument(request, env, ctx, () => notionSitemap(env, url)));
     if (url.pathname === "/rss.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedPublicDocument(request, env, ctx, () => notionRss(env, url)));
+    if (url.pathname === "/favicon.ico" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionSiteIcon(env, request));
     if (url.pathname === "/api/content/posts" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionPosts(env, request, ctx));
     if (url.pathname === "/api/content/navigation" && request.method === "GET") return notionNavigation(env);
     if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
@@ -63,8 +67,8 @@ const worker = {
     if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url, request, env.NOTION_TOKEN);
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") return notionWordCloud(env);
     if (url.pathname === "/api/content/unlock-session" && request.method === "GET") return notionUnlockSession(env, request, url);
-    if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
-    if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request);
+    if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request, ctx);
+    if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request, ctx);
     if (url.pathname === "/api/content/database" && request.method === "POST") return notionChildDatabase(env, request);
     if (url.pathname === "/_notion/image" && (request.method === "GET" || request.method === "HEAD")) return notionImage(request, env);
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
@@ -95,6 +99,7 @@ const worker = {
       const headers = new Headers(request.headers);
       headers.set("x-blog-article-context", key);
       setSiteOriginHeader(headers, env, url);
+      setSiteConfigHeader(headers, payload.config);
       try {
         const rendered = await handler.fetch(new Request(request, { headers }), env, ctx);
         return payload.status && payload.status >= 400 && rendered.status < 400
@@ -110,6 +115,7 @@ const worker = {
       const headers = new Headers(request.headers);
       headers.set("x-blog-article-context", key);
       setSiteOriginHeader(headers, env, url);
+      setSiteConfigHeader(headers, payload.config);
       try {
         const rendered = await handler.fetch(new Request(request, { headers }), env, ctx);
         return payload.status && payload.status >= 400 && rendered.status < 400
@@ -124,6 +130,7 @@ const worker = {
       const headers = new Headers(request.headers);
       headers.set("x-blog-home-context", key);
       setSiteOriginHeader(headers, env, url);
+      setSiteConfigHeader(headers, payload.config);
       try { return await handler.fetch(new Request(request, { headers }), env, ctx); }
       finally { clearHomePayload(key); }
     }
@@ -136,6 +143,8 @@ const worker = {
 
 async function refreshExternalFeeds(env: Env): Promise<void> {
   if (!env.NOTION_TOKEN) return;
+  const config = await queryPublicSiteConfig(env).catch(() => defaultSiteConfig());
+  if (!config.rssEnabled) return;
   const pages = await querySitePages(env, undefined, 100);
   const candidates = pages.filter((page) => /资讯|news|links/i.test(`${plain(page.properties?.slug)} ${title(page.properties?.title)}`));
   for (const page of candidates.slice(0, 4)) {
@@ -143,6 +152,17 @@ async function refreshExternalFeeds(env: Env): Promise<void> {
     const urls = extractExternalUrls(await getBlockChildren(env, page.id, state, 0)).slice(0, MAX_RSS_FEEDS);
     await mapWithConcurrency(urls, 2, (feedUrl) => fetchExternalFeed(feedUrl, env.DB, true));
   }
+}
+
+async function notionSiteIcon(env: Env, request: Request): Promise<Response> {
+  if (!env.NOTION_TOKEN) return env.ASSETS.fetch(new Request(new URL("/favicon.svg", request.url)));
+  try {
+    const config = await queryPublicSiteConfig(env);
+    if (!config.favicon || config.favicon === "/favicon.svg") return env.ASSETS.fetch(new Request(new URL("/favicon.svg", request.url)));
+    const target = new URL(config.favicon, request.url);
+    if (target.origin === new URL(request.url).origin) return env.ASSETS.fetch(new Request(target));
+    return new Response(null, { status: 302, headers: { location: target.href, "cache-control": "public, max-age=300", "x-content-type-options": "nosniff" } });
+  } catch { return env.ASSETS.fetch(new Request(new URL("/favicon.svg", request.url))); }
 }
 
 async function notionImage(request: Request, env: Env): Promise<Response> {
@@ -175,15 +195,21 @@ async function notionImage(request: Request, env: Env): Promise<Response> {
 }
 
 async function articlePayloadForRender(env: Env, slug: string, request: Request): Promise<ArticlePayload> {
-  const response = await notionPost(env, slug, new Request(request.url, { headers: request.headers }));
+  const [response, config] = await Promise.all([
+    notionPost(env, slug, new Request(request.url, { headers: request.headers })),
+    queryPublicSiteConfig(env).catch(() => defaultSiteConfig()),
+  ]);
   const payload = await response.json().catch(() => ({ error: "文章暂时无法读取" })) as ArticlePayload;
-  return { ...payload, status: response.status };
+  return { ...payload, config, status: response.status };
 }
 
 async function sitePagePayloadForRender(env: Env, slug: string): Promise<ArticlePayload> {
-  const response = await notionSitePage(env, slug, new Request(`https://internal.invalid/api/content/page/${encodeURIComponent(slug)}`));
+  const [response, config] = await Promise.all([
+    notionSitePage(env, slug, new Request(`https://internal.invalid/api/content/page/${encodeURIComponent(slug)}`)),
+    queryPublicSiteConfig(env).catch(() => defaultSiteConfig()),
+  ]);
   const payload = await response.json().catch(() => ({ error: "页面暂时无法读取" })) as ArticlePayload;
-  return { ...payload, status: response.status };
+  return { ...payload, config, status: response.status };
 }
 
 function siteBootstrapCacheKey(env: Env): string {
@@ -191,14 +217,17 @@ function siteBootstrapCacheKey(env: Env): string {
 }
 
 async function querySiteBootstrap(env: Env): Promise<HomePayload> {
-  const [pages, linkPages, config] = await Promise.all([
-    queryPosts(env, undefined, 100),
-    querySiteLinks(env),
-    queryPublicSiteConfig(env).catch(() => defaultSiteConfig()),
+  const configRows = await queryConfigRows(env).catch(() => []);
+  const sourceId = configuredContentDataSourceId(env, configRows);
+  const [pages, contentLinkPages] = await Promise.all([
+    queryPosts(env, undefined, 100, sourceId),
+    querySiteLinks(env, sourceId),
   ]);
+  const config = toPublicSiteConfig(configRows);
+  const configLinkPages = configRows.filter(isConfigLinkPage);
   return {
     posts: pages.map(toPost).filter((post) => post.slug),
-    links: toSiteLinks(linkPages),
+    links: toSiteLinks([...contentLinkPages, ...configLinkPages]).filter((link) => config.rssEnabled || link.kind !== "rss"),
     config,
   };
 }
@@ -336,15 +365,18 @@ async function notionSiteConfig(env: Env): Promise<Response> {
 async function notionNavigation(env: Env): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   try {
-    const linkPages = await querySiteLinks(env);
-    const links = toSiteLinks(linkPages);
+    const [linkPages, configRows] = await Promise.all([querySiteLinks(env), queryConfigRows(env).catch(() => [])]);
+    const config = toPublicSiteConfig(configRows);
+    const links = toSiteLinks([...linkPages, ...configRows.filter(isConfigLinkPage)]).filter((link) => config.rssEnabled || link.kind !== "rss");
     return Response.json({ links, source: "notion" }, { headers: publicContentHeaders });
   } catch (reason) { return notionError(reason); }
 }
 
 async function notionWordCloud(env: Env): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const cacheKey = env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID;
+  const config = await queryPublicSiteConfig(env).catch(() => defaultSiteConfig());
+  if (!config.wordCloudEnabled) return error(404, "Word cloud is disabled");
+  const cacheKey = `${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}:${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID || "configured"}`;
   const cached = wordCloudCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return Response.json(cached.payload, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
@@ -365,6 +397,8 @@ async function notionWordCloud(env: Env): Promise<Response> {
 
 async function notionSearch(env: Env, url: URL): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  const config = await queryPublicSiteConfig(env).catch(() => defaultSiteConfig());
+  if (!config.searchEnabled) return error(404, "Search is disabled");
   const query = normalizeSearchText(url.searchParams.get("q") || "");
   const warming = url.searchParams.get("warm") === "1";
   if (!query && !warming) return Response.json({ matches: [], partial: false, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
@@ -387,6 +421,8 @@ async function notionSearch(env: Env, url: URL): Promise<Response> {
 
 async function notionExternalRss(env: Env, url: URL): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  const config = await queryPublicSiteConfig(env).catch(() => defaultSiteConfig());
+  if (!config.rssEnabled) return error(404, "RSS is disabled");
   const slug = url.searchParams.get("slug") || "";
   if (!slug || slug.length > 180) return error(400, "Invalid page slug");
   try {
@@ -402,7 +438,7 @@ async function notionExternalRss(env: Env, url: URL): Promise<Response> {
 }
 
 async function getPublicCorpus(env: Env): Promise<PublicCorpus> {
-  const cacheKey = env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID;
+  const cacheKey = `${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}:${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID || "configured"}`;
   const cached = publicCorpusCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.corpus;
 
@@ -515,7 +551,7 @@ async function notionSitePage(env: Env, slug: string, request: Request): Promise
   } catch (reason) { return notionError(reason); }
 }
 
-async function notionChildPage(env: Env, request: Request): Promise<Response> {
+async function notionChildPage(env: Env, request: Request, ctx: ExecutionContext): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown; accessSignature?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
@@ -535,11 +571,11 @@ async function notionChildPage(env: Env, request: Request): Promise<Response> {
 
     const childPage = await resolveChildPage(env, parent, trail, pageId, accessSignature);
     if (!childPage) return error(404, "没有找到这个子页面，或它已从当前文章移除");
-    return childPageResponse(env, childPage, parent.id, cursor);
+    return childPageResponse(env, childPage, parent.id, cursor, urlBoolean(new URL(request.url), "headings"), ctx);
   } catch (reason) { return notionError(reason); }
 }
 
-async function notionSitePageChild(env: Env, request: Request): Promise<Response> {
+async function notionSitePageChild(env: Env, request: Request, ctx: ExecutionContext): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown; accessSignature?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
@@ -553,15 +589,22 @@ async function notionSitePageChild(env: Env, request: Request): Promise<Response
     if (!parent) return error(404, "Page not found");
     const childPage = await resolveChildPage(env, parent, trail, pageId, accessSignature);
     if (!childPage) return error(404, "没有找到这个子页面，或它已从当前页面移除");
-    return childPageResponse(env, childPage, parent.id, cursor);
+    return childPageResponse(env, childPage, parent.id, cursor, urlBoolean(new URL(request.url), "headings"), ctx);
   } catch (reason) { return notionError(reason); }
 }
 
-async function childPageResponse(env: Env, childPage: any, rootPageId: string, cursor = ""): Promise<Response> {
+async function childPageResponse(env: Env, childPage: any, rootPageId: string, cursor = "", headingsOnly = false, ctx?: ExecutionContext): Promise<Response> {
+  if (headingsOnly) {
+    const cached = headingIndexCache.get(childPage.id);
+    if (cached?.headings && cached.expiresAt > Date.now()) return Response.json({ child: { id: childPage.id, headings: cached.headings } }, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
+    const pending = warmHeadingIndex(env, childPage.id);
+    ctx?.waitUntil(pending);
+    return Response.json({ pending: true }, { status: 202, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": "1" } });
+  }
   const blockState = newBlockReadState();
-  const [chunk, headings] = cursor
-    ? [await getBlockChildrenChunk(env, childPage.id, blockState, 0, cursor), undefined]
-    : await Promise.all([getBlockChildrenChunk(env, childPage.id, blockState, 0, cursor), getBlockHeadings(env, childPage.id)]);
+  const chunk = await getBlockChildrenChunk(env, childPage.id, blockState, 0, cursor);
+  const headings = cursor ? undefined : collectNormalizedHeadings(chunk.blocks);
+  if (!cursor && chunk.nextCursor) ctx?.waitUntil(warmHeadingIndex(env, childPage.id));
   await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
   await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, rootPageId);
   const accessSignature = await createChildAccessSignature(env.NOTION_TOKEN!, normalizeNotionId(rootPageId)!, normalizeNotionId(childPage.id)!);
@@ -575,6 +618,38 @@ async function childPageResponse(env: Env, childPage: any, rootPageId: string, c
     nextCursor: chunk.nextCursor,
     truncated: blockState.truncated,
   } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+}
+
+function warmHeadingIndex(env: Env, pageId: string): Promise<HeadingSummary[]> {
+  const cached = headingIndexCache.get(pageId);
+  if (cached?.headings && cached.expiresAt > Date.now()) return Promise.resolve(cached.headings);
+  if (cached?.pending) return cached.pending;
+  const pending = getBlockHeadings(env, pageId).then((headings) => {
+    headingIndexCache.set(pageId, { headings, expiresAt: Date.now() + 10 * 60 * 1000 });
+    return headings;
+  }).catch((reason) => {
+    headingIndexCache.delete(pageId);
+    throw reason;
+  });
+  headingIndexCache.set(pageId, { pending, expiresAt: Date.now() + 60_000 });
+  return pending;
+}
+
+function urlBoolean(url: URL, key: string): boolean { return /^(?:1|true|yes)$/i.test(url.searchParams.get(key) || ""); }
+
+function collectNormalizedHeadings(blocks: any[]): HeadingSummary[] {
+  const output: HeadingSummary[] = [];
+  const visit = (items: any[]) => {
+    for (const block of items || []) {
+      if (/^heading_[123]$/.test(block.type)) {
+        const label = (block.richText || []).map((item: any) => item.text || "").join("").trim();
+        if (label) output.push({ id: block.id, label, level: Number(block.type.at(-1)) });
+      }
+      if (Array.isArray(block.children)) visit(block.children);
+    }
+  };
+  visit(blocks);
+  return output;
 }
 
 async function notionChildDatabase(env: Env, request: Request): Promise<Response> {
@@ -685,8 +760,13 @@ async function notionSitemap(env: Env, requestUrl: URL): Promise<Response> {
 async function notionRss(env: Env, requestUrl: URL): Promise<Response> {
   const base = publicSiteOrigin(env, requestUrl).origin;
   let posts: ReturnType<typeof toPost>[] = [];
+  let config = defaultSiteConfig();
   if (env.NOTION_TOKEN) {
-    try { posts = (await queryPosts(env, undefined, 100)).map(toPost).filter((post) => post.slug); }
+    try {
+      config = await queryPublicSiteConfig(env);
+      if (!config.rssEnabled) return error(404, "RSS is disabled");
+      posts = (await queryPosts(env, undefined, 100)).map(toPost).filter((post) => post.slug);
+    }
     catch (reason) { console.error(reason instanceof Error ? reason.message : "RSS Notion request failed"); }
   }
   const items = posts.map((post) => {
@@ -694,11 +774,11 @@ async function notionRss(env: Env, requestUrl: URL): Promise<Response> {
     const published = post.date ? new Date(`${post.date}T00:00:00Z`).toUTCString() : "";
     return `<item><title>${escapeXml(post.title)}</title><link>${escapeXml(link)}</link><guid isPermaLink="true">${escapeXml(link)}</guid>${published ? `<pubDate>${published}</pubDate>` : ""}<description>${escapeXml(post.summary)}</description><category>${escapeXml(post.category)}</category></item>`;
   }).join("");
-  const xml = `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>louis16s&apos; blog</title><link>${base}/</link><description>关于旅行、摄影、开发与生活的个人记录。</description><language>zh-CN</language><lastBuildDate>${new Date().toUTCString()}</lastBuildDate>${items}</channel></rss>`;
+  const xml = `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>${escapeXml(config.siteTitle)}</title><link>${base}/</link><description>${escapeXml(config.siteDescription)}</description><language>${escapeXml(config.siteLanguage)}</language><lastBuildDate>${new Date().toUTCString()}</lastBuildDate>${items}</channel></rss>`;
   return new Response(xml, { headers: { "content-type": "application/rss+xml; charset=utf-8" } });
 }
 
-async function queryPosts(env: Env, slug?: string, pageSize = 100): Promise<any[]> {
+async function queryPosts(env: Env, slug?: string, pageSize = 100, sourceId?: string): Promise<any[]> {
   const filters: any[] = [
     { property: "type", select: { equals: "Post" } },
     { property: "status", select: { equals: "Published" } },
@@ -707,7 +787,7 @@ async function queryPosts(env: Env, slug?: string, pageSize = 100): Promise<any[
   const results: any[] = [];
   let cursor: string | undefined;
   do {
-    const payload = await notionFetch(env, `/data_sources/${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID}/query`, {
+    const payload = await notionFetch(env, `/data_sources/${sourceId || await resolveContentDataSourceId(env)}/query`, {
       method: "POST",
       body: JSON.stringify({ filter: { and: filters }, sorts: [{ property: "date", direction: "descending" }], page_size: pageSize, ...(cursor ? { start_cursor: cursor } : {}) }),
     });
@@ -717,7 +797,7 @@ async function queryPosts(env: Env, slug?: string, pageSize = 100): Promise<any[
   return results;
 }
 
-async function querySitePages(env: Env, slug?: string, pageSize = 100): Promise<any[]> {
+async function querySitePages(env: Env, slug?: string, pageSize = 100, sourceId?: string): Promise<any[]> {
   const filters: any[] = [
     { or: [{ property: "type", select: { equals: "Page" } }] },
     { property: "status", select: { equals: "Published" } },
@@ -726,7 +806,7 @@ async function querySitePages(env: Env, slug?: string, pageSize = 100): Promise<
   const results: any[] = [];
   let cursor: string | undefined;
   do {
-    const payload = await notionFetch(env, `/data_sources/${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID}/query`, {
+    const payload = await notionFetch(env, `/data_sources/${sourceId || await resolveContentDataSourceId(env)}/query`, {
       method: "POST",
       body: JSON.stringify({ filter: { and: filters }, sorts: [{ property: "date", direction: "descending" }], page_size: pageSize, ...(cursor ? { start_cursor: cursor } : {}) }),
     });
@@ -760,11 +840,11 @@ async function findPost(env: Env, slug: string): Promise<any | null> {
   return published.find((page) => normalizeNotionId(page.id) === pageId) || null;
 }
 
-async function querySiteLinks(env: Env): Promise<any[]> {
+async function querySiteLinks(env: Env, sourceId?: string): Promise<any[]> {
   const results: any[] = [];
   let cursor: string | undefined;
   do {
-    const payload = await notionFetch(env, `/data_sources/${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID}/query`, {
+    const payload = await notionFetch(env, `/data_sources/${sourceId || await resolveContentDataSourceId(env)}/query`, {
       method: "POST",
       body: JSON.stringify({
         filter: { and: [
@@ -785,18 +865,41 @@ async function querySiteLinks(env: Env): Promise<any[]> {
   return results;
 }
 
-async function queryPublicSiteConfig(env: Env) {
+async function queryConfigRows(env: Env) {
+  const dataSourceId = env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID;
+  if (!dataSourceId) return [];
   const pages: any[] = [];
   let cursor: string | undefined;
   do {
-    const payload = await notionFetch(env, `/data_sources/${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}/query`, {
+    const payload = await notionFetch(env, `/data_sources/${dataSourceId}/query`, {
       method: "POST",
       body: JSON.stringify({ page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) }),
     });
     if (Array.isArray(payload.results)) pages.push(...payload.results);
     cursor = payload.has_more && typeof payload.next_cursor === "string" ? payload.next_cursor : undefined;
   } while (cursor);
-  return toPublicSiteConfig(pages);
+  return pages;
+}
+
+async function queryPublicSiteConfig(env: Env) {
+  return toPublicSiteConfig(await queryConfigRows(env));
+}
+
+function configuredContentDataSourceId(env: Env, rows: any[]): string {
+  const row = rows.find((page) => configPageKey(page) === "NOTION_DATA_SOURCE_ID" && page.properties?.["启用"]?.checkbox === true);
+  const fromConfig = normalizeNotionId(row ? configPageValue(row) : "");
+  return fromConfig || (env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID).trim();
+}
+
+async function resolveContentDataSourceId(env: Env): Promise<string> {
+  if (!env.NOTION_CONFIG_DATA_SOURCE_ID && env.NOTION_DATA_SOURCE_ID) return env.NOTION_DATA_SOURCE_ID.trim();
+  const cacheKey = env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID || "no-config";
+  const cached = contentSourceCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.id;
+  const id = configuredContentDataSourceId(env, await queryConfigRows(env).catch(() => []));
+  if (!id) throw new Error("Notion content Data Source ID is not configured");
+  contentSourceCache.set(cacheKey, { id, expiresAt: Date.now() + 5 * 60 * 1000 });
+  return id;
 }
 
 type BlockReadState = { remaining: number; truncated: boolean };
@@ -964,11 +1067,14 @@ function isRssSitePage(page: ReturnType<typeof toSitePagePost>): boolean {
 
 function toSiteLink(page: any) {
   const properties = page.properties || {};
-  const contentType = properties.type?.select?.name;
-  const linkTitle = (title(properties.title) || "未命名链接").replace(/_+$/, "");
-  const pageSlug = plain(properties.slug).trim();
+  const configLink = isConfigLinkPage(page);
+  const contentType = configLink ? "Link" : properties.type?.select?.name;
+  const configKey = configPageKey(page);
+  const configTitle = configKey.replace(/^LINK(?::|_)?/, "").trim();
+  const linkTitle = (configLink ? configTitle || plain(properties["备注"]) || "链接" : title(properties.title) || "未命名链接").replace(/_+$/, "");
+  const pageSlug = configLink ? configPageValue(page) : plain(properties.slug).trim();
   const isAbout = pageSlug === "me" || linkTitle.includes("关于");
-  const configuredTarget = [properties.slug, ...Object.values(properties).filter((property) => property !== properties.slug)]
+  const configuredTarget = configLink ? safeNavigationTarget(pageSlug) : [properties.slug, ...Object.values(properties).filter((property) => property !== properties.slug)]
     .map(notionPropertyLink)
     .find(Boolean) || pageSlug;
   const target = configuredTarget;
@@ -985,7 +1091,7 @@ function toSiteLink(page: any) {
     id: page.id,
     title: linkTitle,
     href,
-    summary: plain(properties.summary),
+    summary: configLink ? plain(properties["备注"]) : plain(properties.summary),
     icon: notionDisplayEmoji(page),
     external,
     kind: rss ? "rss" as const : isInternalPage ? "nav" as const : "tool" as const,
@@ -1158,14 +1264,31 @@ const DEFAULT_FOOTER_QUOTES = [
 ];
 
 function defaultSiteConfig() { return {
+  siteTitle: "louis16s' blog",
+  siteDescription: "偶尔拍照，或是写代码，剩下的时间用来对焦生活。",
+  siteLanguage: "zh-CN",
+  favicon: "/favicon.svg",
+  avatarUrl: "",
+  ogImageUrl: "/og.jpg",
   author: "louis16s",
   since: "2020",
-  homeNotice: "blog 复活啦！",
-  homeNoticeSubtitle: "是新的一年真好啊，绝胜烟柳满皇都！",
+  homeNotice: "blog 复活啦",
+  homeNoticeSubtitle: "愿这里继续保留一些缓慢、真实而具体的记录。",
   postCountText: "这里收录着 {count} 个文章。不赶时间，慢慢翻。",
-  footerCredit: "在 Notion 创造，Cloudflare 带它兜风。",
-  repositoryUrl: "https://github.com/louis16s/blogonCF",
+  footerCredit: "在 [Notion](https://www.notion.so/) 创造，Cloudflare 带它兜风。",
+  repositoryUrl: "",
   footerQuotes: DEFAULT_FOOTER_QUOTES,
+  wordCloudEnabled: true,
+  categoriesEnabled: true,
+  rssEnabled: true,
+  searchEnabled: true,
+  introEnabled: true,
+  introTitle: "louis16s",
+  introSubtitle: "正在对焦生活",
+  wordCloudLabel: "词云",
+  toolsLabel: "小工具",
+  categoriesLabel: "文章分类",
+  rssLabel: "RSS 订阅",
 }; }
 
 function toPublicSiteConfig(pages: any[]) {
@@ -1173,8 +1296,15 @@ function toPublicSiteConfig(pages: any[]) {
   for (const page of pages) {
     const properties = page.properties || {};
     if (properties["启用"]?.checkbox !== true) continue;
-    const key = title(properties["配置名"]).replaceAll("`", "").trim().toLocaleUpperCase();
-    const value = plain(properties["配置值"]).trim();
+    const key = configPageKey(page);
+    const value = configPageValue(page);
+    if (!key || isConfigLinkPage(page)) continue;
+    if (key === "SITE_TITLE" && value) config.siteTitle = cleanConfigText(value, 100) || config.siteTitle;
+    if (key === "SITE_DESCRIPTION" && value) config.siteDescription = cleanConfigText(value, 240) || config.siteDescription;
+    if (key === "SITE_LANGUAGE" && /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(value)) config.siteLanguage = value;
+    if (key === "FAVICON" || key === "FAVICON_URL") config.favicon = safePublicAsset(value) || config.favicon;
+    if (key === "AVATAR_URL") config.avatarUrl = safePublicAsset(value);
+    if (key === "OG_IMAGE_URL") config.ogImageUrl = safePublicAsset(value) || config.ogImageUrl;
     if (key === "AUTHOR" && value) config.author = value.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 80) || config.author;
     if (key === "SINCE") config.since = value.match(/(?:19|20)\d{2}/)?.[0] || config.since;
     if (key === "HOME_NOTICE" && value) config.homeNotice = cleanConfigText(value, 80) || config.homeNotice;
@@ -1182,6 +1312,17 @@ function toPublicSiteConfig(pages: any[]) {
     if (key === "POST_COUNT_TEXT" && value) config.postCountText = cleanConfigText(value, 160) || config.postCountText;
     if (key === "FOOTER_CREDIT" && value) config.footerCredit = cleanConfigText(value, 160) || config.footerCredit;
     if (key === "REPOSITORY_URL" && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/i.test(value)) config.repositoryUrl = value.slice(0, 240);
+    if (key === "WORD_CLOUD_ENABLED") config.wordCloudEnabled = configBoolean(value, config.wordCloudEnabled);
+    if (key === "CATEGORIES_ENABLED") config.categoriesEnabled = configBoolean(value, config.categoriesEnabled);
+    if (key === "RSS_ENABLED") config.rssEnabled = configBoolean(value, config.rssEnabled);
+    if (key === "SEARCH_ENABLED") config.searchEnabled = configBoolean(value, config.searchEnabled);
+    if (key === "INTRO_ENABLED") config.introEnabled = configBoolean(value, config.introEnabled);
+    if (key === "INTRO_TITLE" && value) config.introTitle = cleanConfigText(value, 60) || config.introTitle;
+    if (key === "INTRO_SUBTITLE" && value) config.introSubtitle = cleanConfigText(value, 100) || config.introSubtitle;
+    if (key === "WORD_CLOUD_LABEL" && value) config.wordCloudLabel = cleanConfigText(value, 30) || config.wordCloudLabel;
+    if (key === "TOOLS_LABEL" && value) config.toolsLabel = cleanConfigText(value, 30) || config.toolsLabel;
+    if (key === "CATEGORIES_LABEL" && value) config.categoriesLabel = cleanConfigText(value, 30) || config.categoriesLabel;
+    if (key === "RSS_LABEL" && value) config.rssLabel = cleanConfigText(value, 30) || config.rssLabel;
     if (key === "FOOTER_QUOTES" && value) {
       const quotes = value.split(/\r?\n/)
         .map((line) => line.split(/\s*[｜|]\s*/, 2).map((part) => part.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").trim()))
@@ -1192,6 +1333,39 @@ function toPublicSiteConfig(pages: any[]) {
     }
   }
   return config;
+}
+
+function configPageKey(page: any): string {
+  const properties = page.properties || {};
+  return title(properties["配置名"] || properties.title || properties.name).replaceAll("`", "").trim().toLocaleUpperCase();
+}
+
+function configPageValue(page: any): string {
+  const properties = page.properties || {};
+  return (typeof properties["链接"]?.url === "string" ? properties["链接"].url : plain(properties["配置值"] || properties.value || properties.slug)).trim();
+}
+
+function configBoolean(value: string, fallback: boolean): boolean {
+  if (/^(?:1|true|yes|on|开启|启用|是)$/i.test(value)) return true;
+  if (/^(?:0|false|no|off|关闭|禁用|否)$/i.test(value)) return false;
+  return fallback;
+}
+
+function safePublicAsset(value: string): string {
+  const cleaned = value.trim();
+  if (/^\/(?!\/)[^\s]*$/.test(cleaned)) return cleaned.slice(0, 500);
+  try {
+    const url = new URL(cleaned);
+    return url.protocol === "https:" ? url.href.slice(0, 500) : "";
+  } catch { return ""; }
+}
+
+function isConfigLinkPage(page: any): boolean {
+  const properties = page.properties || {};
+  if (properties["启用"]?.checkbox !== true) return false;
+  if (properties["类型"]?.select?.name === "Link" || properties.type?.select?.name === "Link") return true;
+  const key = configPageKey(page);
+  return key === "LINK" || key.startsWith("LINK:") || key.startsWith("LINK_");
 }
 
 function cleanConfigText(value: string, limit: number) {
@@ -1215,21 +1389,11 @@ function normalizeRichText(value: any[] = []) {
   }));
 }
 
-const BOOKMARK_TITLES: Record<string, string> = {
-  "ifanr.com": "爱范儿",
-  "ruanyifeng.com": "阮一峰的网络日志",
-  "sspai.com": "少数派",
-  "v2ex.com": "V2EX",
-  "chiphell.com": "Chiphell",
-  "topys.cn": "TOPYS",
-};
-
 function bookmarkTitle(url: unknown): string {
   if (typeof url !== "string") return "网页链接";
   try {
     const parsed = new URL(url);
     const hostname = parsed.hostname.replace(/^www\./i, "").toLocaleLowerCase();
-    if (BOOKMARK_TITLES[hostname]) return BOOKMARK_TITLES[hostname];
     const stem = hostname.split(".")[0].replace(/[-_]+/g, " ").trim();
     return stem ? stem.replace(/\b\w/g, (letter) => letter.toLocaleUpperCase()) : "网页链接";
   } catch {
@@ -1295,6 +1459,11 @@ function publicSiteOrigin(env: Env, requestUrl: URL): URL {
 
 function setSiteOriginHeader(headers: Headers, env: Env, requestUrl: URL): void {
   headers.set("x-blog-site-origin", publicSiteOrigin(env, requestUrl).origin);
+}
+
+function setSiteConfigHeader(headers: Headers, config?: SiteConfigPayload): void {
+  if (!config) return;
+  headers.set("x-blog-site-config", encodeURIComponent(JSON.stringify(config)));
 }
 
 function requestWithSiteOrigin(request: Request, env: Env): Request {

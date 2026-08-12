@@ -21,7 +21,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const decoded = decodeRouteSegment(slug);
   const { payload } = await getArticle(decoded);
   const title = payload?.post?.title || decoded;
-  const description = payload?.post?.summary || "louis16s 的 Notion 博客文章";
+  const description = payload?.post?.summary || payload?.config?.siteDescription || "Notion article";
   return {
     title,
     description,
@@ -36,5 +36,5 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
   const decoded = decodeRouteSegment(slug);
   const { payload, fetched } = await getArticle(decoded);
   if (payload?.status === 404) notFound();
-  return <ArticleTocProvider initialHeadings={payload?.headings || []}><div className="blog-frame article-frame"><SiteSidebar /><main className="article-shell"><article><ArticleClient slug={decoded} initialPost={payload?.post} initialBlocks={payload?.locked ? [] : payload?.blocks || []} initialHeadings={payload?.headings || []} initialNextCursor={payload?.locked ? undefined : payload?.nextCursor} initialLocked={Boolean(payload?.locked)} initialFetched={fetched} initialError={payload?.error || ""} initialTruncated={Boolean(payload?.truncated)} /></article><ContentFooter /></main></div></ArticleTocProvider>;
+  return <ArticleTocProvider initialHeadings={payload?.headings || []}><div className="blog-frame article-frame"><SiteSidebar siteConfig={payload?.config} /><main className="article-shell"><article><ArticleClient slug={decoded} initialPost={payload?.post} initialBlocks={payload?.locked ? [] : payload?.blocks || []} initialHeadings={payload?.headings || []} initialNextCursor={payload?.locked ? undefined : payload?.nextCursor} initialLocked={Boolean(payload?.locked)} initialFetched={fetched} initialError={payload?.error || ""} initialTruncated={Boolean(payload?.truncated)} siteConfig={payload?.config} /></article><ContentFooter siteConfig={payload?.config} /></main></div></ArticleTocProvider>;
 }
