@@ -1454,6 +1454,18 @@ test("TOC clicks survive in-flight prefetches and keep loading until the target 
   assert.match(css, /\.sidebar-toc-list a\.is-loading/);
 });
 
+test("reading typography stays crisp after entrance animations finish", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /-webkit-font-smoothing: auto/);
+  assert.match(css, /text-rendering: optimizeLegibility/);
+  assert.match(css, /\.sidebar-toc-list a \{[^}]*font-size: 13px;[^}]*font-weight: 500;/);
+  assert.match(css, /\.notion-content \{[^}]*color: var\(--ink\);[^}]*font-family: var\(--font-reading\)/);
+  assert.match(css, /animation: sidebar-arrive [^;]* backwards/);
+  assert.match(css, /animation: page-arrive [^;]* backwards/);
+  assert.doesNotMatch(css, /animation: sidebar-arrive [^;]* both/);
+  assert.doesNotMatch(css, /animation: page-arrive [^;]* both/);
+});
+
 test("password endpoint rate-limits repeated failures before calling Notion again", async () => {
   const workerA = await loadWorker();
   const workerB = await loadWorker();
