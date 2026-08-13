@@ -1527,6 +1527,17 @@ test("article renderer opens child pages internally instead of linking to Notion
   assert.doesNotMatch(article, /case "child_page"[^\n]+notion\.so/);
 });
 
+test("Notion page mentions become internal child links with inherited access signatures", async () => {
+  const [workerSource, articleSource] = await Promise.all([
+    readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(workerSource, /item\.mention\?\.page\?\.title/);
+  assert.match(workerSource, /notionPageUrl\(item\.mention\?\.page\?\.id\)/);
+  assert.match(workerSource, /if \(!target\.text && page\) target\.text = notionPageTitle\(page\)/);
+  assert.match(articleSource, /notionPageIdFromHref\(item\.href\)/);
+});
+
 test("article client verifies the unlock cookie and sends it with child-page requests", async () => {
   const source = await readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8");
   assert.match(source, /credentials:\s*"same-origin"/);
