@@ -7,9 +7,10 @@ import { deleteHeadingJob, readHeadingCache, readHeadingJob, writeHeadingCache, 
 import { clearArticlePayload, storeArticlePayload, type ArticlePayload } from "../server/article-context";
 import { clearHomePayload, storeHomePayload, type HomePayload } from "../server/home-context";
 import { buildWordCloud, normalizeSearchText } from "../shared/wordCloud.js";
-import { createDefaultSiteConfig, type SiteConfig, type ThemeMode, type ThemePreset, type TocDefaultState } from "../shared/site-config";
+import { createDefaultSiteConfig, type SiteConfig } from "../shared/site-config";
 import { decodeRouteSegment } from "../shared/url";
 import { externalLinkPreview, extractExternalUrls, fetchExternalFeed, isSafeExternalUrl, signPreviewUrl, type ExternalFeed } from "./external-content";
+import { CONFIG_IMAGE_KEYS, NOTION_FILE_HOSTS, configPageFileUrl, configPageKey, configPageValue, isConfigLinkPage, toPublicSiteConfig, type NotionConfigPage } from "./site-config";
 import { createChildAccessSignature, createUnlockCookie, hasUnlockSession, verifyChildAccessSignature } from "./unlock-session";
 
 interface Env {
@@ -29,14 +30,13 @@ interface ScheduledController { scheduledTime: number; cron: string; }
 const DEFAULT_DATA_SOURCE_ID = "";
 const DEFAULT_CONFIG_DATA_SOURCE_ID = "";
 const NOTION_VERSION = "2026-03-11";
-const NOTION_IMAGE_HOSTS = new Set(["prod-files-secure.s3.us-west-2.amazonaws.com"]);
-const CONFIG_IMAGE_KEYS = new Set(["FAVICON_URL", "AVATAR_URL", "OG_IMAGE_URL"]);
 const MAX_CONFIG_IMAGE_BYTES = 12 * 1024 * 1024;
 const MAX_BLOCKS = 10_000;
 const CONTENT_CHUNK_BLOCKS = 300;
 const MAX_BLOCK_DEPTH = 12;
 const MAX_INDEX_BLOCKS_PER_POST = 800;
 const WORD_CLOUD_CACHE_TTL_MS = 10 * 60 * 1000;
+const CONFIG_ROWS_CACHE_TTL_MS = 5 * 60 * 1000;
 const SITE_BOOTSTRAP_CACHE_TTL_MS = 5 * 60 * 1000;
 const SITE_BOOTSTRAP_STALE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_RSS_FEEDS = 8;
@@ -50,6 +50,7 @@ const siteBootstrapCache = new Map<string, { freshUntil: number; staleUntil: num
 const headingIndexCache = new Map<string, { expiresAt: number; headings?: HeadingSummary[]; pending?: Promise<HeadingSummary[]> }>();
 const headingJobCache = new Map<string, HeadingIndexJob>();
 const contentSourceCache = new Map<string, { expiresAt: number; id: string }>();
+const configRowsCache = new Map<string, { expiresAt: number; rows?: NotionConfigPage[]; pending?: Promise<NotionConfigPage[]> }>();
 
 type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "notion" };
 type SearchDocument = ReturnType<typeof toPost> & { body: string; searchBody: string };
@@ -63,8 +64,8 @@ const worker = {
     const url = new URL(request.url);
     if (url.pathname === "/sitemap.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedPublicDocument(request, env, ctx, () => notionSitemap(env, url)));
     if (url.pathname === "/rss.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedPublicDocument(request, env, ctx, () => notionRss(env, url)));
-    if (url.pathname === "/favicon.ico" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionSiteIcon(env, request));
-    if (url.pathname.startsWith("/_notion/config-image/") && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionConfigImage(env, url));
+    if (url.pathname === "/favicon.ico" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedConfigAsset(request, env, ctx, () => notionSiteIcon(env, request)));
+    if (url.pathname.startsWith("/_notion/config-image/") && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedConfigAsset(request, env, ctx, () => notionConfigImage(env, url)));
     if (url.pathname === "/api/content/posts" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionPosts(env, request, ctx));
     if (url.pathname === "/api/content/navigation" && request.method === "GET") return notionNavigation(env);
     if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
@@ -149,7 +150,7 @@ const worker = {
 
 async function refreshExternalFeeds(env: Env): Promise<void> {
   if (!env.NOTION_TOKEN) return;
-  const config = await queryPublicSiteConfig(env).catch(() => defaultSiteConfig());
+  const config = await queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig());
   if (!config.rssEnabled) return;
   const pages = await querySitePages(env, undefined, 100);
   const candidates = pages.filter((page) => /资讯|news|links/i.test(`${plain(page.properties?.slug)} ${title(page.properties?.title)}`));
@@ -176,32 +177,64 @@ async function notionSiteIcon(env: Env, request: Request): Promise<Response> {
 
 async function notionConfigImage(env: Env, requestUrl: URL): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const key = decodeURIComponent(requestUrl.pathname.slice("/_notion/config-image/".length)).toLocaleUpperCase();
+  const key = decodeRouteSegment(requestUrl.pathname.slice("/_notion/config-image/".length)).toLocaleUpperCase();
   if (!CONFIG_IMAGE_KEYS.has(key)) return error(404, "Config image not found");
   try {
     return await notionConfigImageByKey(env, key) || error(404, "Config image not found");
   } catch (reason) { return notionError(reason); }
 }
 
-async function notionConfigImageByKey(env: Env, key: string, rows?: any[]): Promise<Response | null> {
+async function notionConfigImageByKey(env: Env, key: string, rows?: NotionConfigPage[]): Promise<Response | null> {
   const page = (rows || await queryConfigRows(env)).find((row) => row.properties?.["启用"]?.checkbox === true && configPageKey(row) === key);
   const rawUrl = configPageFileUrl(page);
   if (!rawUrl) return null;
   let source: URL;
   try { source = new URL(rawUrl); }
   catch { return null; }
-  if (source.protocol !== "https:" || !NOTION_IMAGE_HOSTS.has(source.hostname)) return null;
+  if (source.protocol !== "https:" || !NOTION_FILE_HOSTS.has(source.hostname)) return null;
   const response = await fetch(source, { redirect: "manual" });
   if (!response.ok || !response.body) return error(response.status || 502, "Config image is temporarily unavailable");
   const contentType = response.headers.get("content-type")?.split(";", 1)[0].toLocaleLowerCase() || "";
   const contentLength = Number(response.headers.get("content-length") || 0);
   if (!contentType.startsWith("image/")) return error(415, "Unsupported config image response");
-  if (contentLength > MAX_CONFIG_IMAGE_BYTES) return error(413, "Config image is too large");
-  return new Response(response.body, { headers: {
+  if (Number.isFinite(contentLength) && contentLength > MAX_CONFIG_IMAGE_BYTES) {
+    await response.body.cancel();
+    return error(413, "Config image is too large");
+  }
+  const bytes = await readLimitedBytes(response.body, MAX_CONFIG_IMAGE_BYTES);
+  if (!bytes) return error(413, "Config image is too large");
+  return new Response(bytes, { headers: {
     "content-type": contentType,
     "cache-control": "public, max-age=300, stale-while-revalidate=86400",
     "x-content-type-options": "nosniff",
   } });
+}
+
+async function readLimitedBytes(body: ReadableStream<Uint8Array>, limit: number): Promise<ArrayBuffer | null> {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel("response exceeds configured limit");
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const output = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output.buffer as ArrayBuffer;
 }
 
 async function notionImage(request: Request, env: Env): Promise<Response> {
@@ -209,7 +242,7 @@ async function notionImage(request: Request, env: Env): Promise<Response> {
   let source: URL;
   try { source = new URL(rawUrl || ""); }
   catch { return error(400, "Invalid image URL"); }
-  if (source.protocol !== "https:" || !NOTION_IMAGE_HOSTS.has(source.hostname)) return error(400, "Image host is not allowed");
+  if (source.protocol !== "https:" || !NOTION_FILE_HOSTS.has(source.hostname)) return error(400, "Image host is not allowed");
   try {
     const response = await fetch(source, { redirect: "manual" });
     if (!response.ok || !response.body) return error(response.status || 502, "Image is temporarily unavailable");
@@ -236,7 +269,7 @@ async function notionImage(request: Request, env: Env): Promise<Response> {
 async function articlePayloadForRender(env: Env, slug: string, request: Request): Promise<ArticlePayload> {
   const [response, config] = await Promise.all([
     notionPost(env, slug, new Request(request.url, { headers: request.headers })),
-    queryPublicSiteConfig(env).catch(() => defaultSiteConfig()),
+    queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig()),
   ]);
   const payload = await response.json().catch(() => ({ error: "文章暂时无法读取" })) as ArticlePayload;
   return { ...payload, config, status: response.status };
@@ -245,7 +278,7 @@ async function articlePayloadForRender(env: Env, slug: string, request: Request)
 async function sitePagePayloadForRender(env: Env, slug: string): Promise<ArticlePayload> {
   const [response, config] = await Promise.all([
     notionSitePage(env, slug, new Request(`https://internal.invalid/api/content/page/${encodeURIComponent(slug)}`)),
-    queryPublicSiteConfig(env).catch(() => defaultSiteConfig()),
+    queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig()),
   ]);
   const payload = await response.json().catch(() => ({ error: "页面暂时无法读取" })) as ArticlePayload;
   return { ...payload, config, status: response.status };
@@ -329,6 +362,7 @@ async function cachedPublicDocument(request: Request, env: Env, ctx: ExecutionCo
   keyUrl.search = "";
   keyUrl.searchParams.set("schema", "5");
   keyUrl.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
+  keyUrl.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
   const key = new Request(keyUrl.toString(), { method: "GET" });
   const cached = await cache?.match(key);
   if (cached) return cached;
@@ -340,6 +374,23 @@ async function cachedPublicDocument(request: Request, env: Env, ctx: ExecutionCo
   const cacheable = new Response(response.body, { status: response.status, headers });
   if (cache) ctx.waitUntil(cache.put(key, cacheable.clone()));
   return cacheable;
+}
+
+async function cachedConfigAsset(request: Request, env: Env, ctx: ExecutionContext, load: () => Promise<Response>): Promise<Response> {
+  const cache = defaultWorkerCache();
+  const keyUrl = new URL(request.url);
+  keyUrl.search = "";
+  keyUrl.searchParams.set("schema", "1");
+  keyUrl.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
+  const key = new Request(keyUrl.toString(), { method: "GET" });
+  const cached = await cache?.match(key).catch(() => undefined);
+  if (cached) return cached;
+
+  const response = await load();
+  if (cache && response.ok && response.headers.get("content-type")?.toLocaleLowerCase().startsWith("image/")) {
+    ctx.waitUntil(cache.put(key, response.clone()).catch(() => undefined));
+  }
+  return response;
 }
 
 function siteBootstrapEdgeKey(env: Env, request: Request): Request {
@@ -356,16 +407,16 @@ function siteBootstrapEdgeKey(env: Env, request: Request): Request {
 }
 
 async function homePayloadForRender(env: Env, request: Request, ctx: ExecutionContext): Promise<HomePayload> {
-  if (!env.NOTION_TOKEN) return { posts: [], links: [], config: defaultSiteConfig() };
+  if (!env.NOTION_TOKEN) return { posts: [], links: [], config: createDefaultSiteConfig() };
   const endpoint = new URL("/api/content/posts", request.url);
   const response = await notionPosts(env, new Request(endpoint, { headers: request.headers }), ctx);
-  if (!response.ok) return { posts: [], links: [], config: defaultSiteConfig() };
+  if (!response.ok) return { posts: [], links: [], config: createDefaultSiteConfig() };
   const payload = await response.json().catch(() => ({})) as Partial<HomePayload>;
   return {
     posts: Array.isArray(payload.posts) ? payload.posts : [],
     links: Array.isArray(payload.links) ? payload.links : [],
     notice: payload.notice?.id && payload.notice?.title ? payload.notice : undefined,
-    config: payload.config?.author && payload.config?.since ? payload.config : defaultSiteConfig(),
+    config: payload.config?.author && payload.config?.since ? payload.config : createDefaultSiteConfig(),
   };
 }
 
@@ -416,7 +467,7 @@ async function notionNavigation(env: Env): Promise<Response> {
 
 async function notionWordCloud(env: Env): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const config = await queryPublicSiteConfig(env).catch(() => defaultSiteConfig());
+  const config = await queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig());
   if (!config.wordCloudEnabled) return error(404, "Word cloud is disabled");
   const cacheKey = `${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}:${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID || "configured"}`;
   const cached = wordCloudCache.get(cacheKey);
@@ -439,7 +490,7 @@ async function notionWordCloud(env: Env): Promise<Response> {
 
 async function notionSearch(env: Env, url: URL): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const config = await queryPublicSiteConfig(env).catch(() => defaultSiteConfig());
+  const config = await queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig());
   if (!config.searchEnabled) return error(404, "Search is disabled");
   const query = normalizeSearchText(url.searchParams.get("q") || "");
   const warming = url.searchParams.get("warm") === "1";
@@ -463,7 +514,7 @@ async function notionSearch(env: Env, url: URL): Promise<Response> {
 
 async function notionExternalRss(env: Env, url: URL): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const config = await queryPublicSiteConfig(env).catch(() => defaultSiteConfig());
+  const config = await queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig());
   if (!config.rssEnabled) return error(404, "RSS is disabled");
   const slug = url.searchParams.get("slug") || "";
   if (!slug || slug.length > 180) return error(400, "Invalid page slug");
@@ -829,7 +880,7 @@ async function notionSitemap(env: Env, requestUrl: URL): Promise<Response> {
 async function notionRss(env: Env, requestUrl: URL): Promise<Response> {
   const base = publicSiteOrigin(env, requestUrl).origin;
   let posts: ReturnType<typeof toPost>[] = [];
-  let config = defaultSiteConfig();
+  let config = createDefaultSiteConfig();
   if (env.NOTION_TOKEN) {
     try {
       config = await queryPublicSiteConfig(env);
@@ -868,7 +919,7 @@ async function queryPosts(env: Env, slug?: string, pageSize = 100, sourceId?: st
 
 async function querySitePages(env: Env, slug?: string, pageSize = 100, sourceId?: string): Promise<any[]> {
   const filters: any[] = [
-    { or: [{ property: "type", select: { equals: "Page" } }] },
+    { property: "type", select: { equals: "Page" } },
     { property: "status", select: { equals: "Published" } },
   ];
   if (slug) filters.push({ property: "slug", rich_text: { equals: slug } });
@@ -935,10 +986,32 @@ async function querySiteLinks(env: Env, sourceId?: string): Promise<any[]> {
   return results;
 }
 
-async function queryConfigRows(env: Env) {
+async function queryConfigRows(env: Env): Promise<NotionConfigPage[]> {
   const dataSourceId = env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID;
   if (!dataSourceId) return [];
-  const pages: any[] = [];
+  const cached = configRowsCache.get(dataSourceId);
+  if (cached?.rows && cached.expiresAt > Date.now()) return cached.rows;
+  if (cached?.pending) return cached.pending;
+
+  const pending = queryConfigRowsUncached(env, dataSourceId)
+    .then((rows) => {
+      configRowsCache.set(dataSourceId, { rows, expiresAt: Date.now() + CONFIG_ROWS_CACHE_TTL_MS });
+      if (configRowsCache.size > 8) {
+        const oldestKey = configRowsCache.keys().next().value;
+        if (oldestKey && oldestKey !== dataSourceId) configRowsCache.delete(oldestKey);
+      }
+      return rows;
+    })
+    .catch((reason) => {
+      configRowsCache.delete(dataSourceId);
+      throw reason;
+    });
+  configRowsCache.set(dataSourceId, { pending, expiresAt: 0 });
+  return pending;
+}
+
+async function queryConfigRowsUncached(env: Env, dataSourceId: string): Promise<NotionConfigPage[]> {
+  const pages: NotionConfigPage[] = [];
   let cursor: string | undefined;
   do {
     const payload = await notionFetch(env, `/data_sources/${dataSourceId}/query`, {
@@ -951,7 +1024,7 @@ async function queryConfigRows(env: Env) {
   return pages.sort((left, right) => configPageOrder(left) - configPageOrder(right));
 }
 
-function configPageOrder(page: any): number {
+function configPageOrder(page: NotionConfigPage): number {
   const order = page.properties?.["排序"]?.number;
   return typeof order === "number" && Number.isFinite(order) ? order : Number.MAX_SAFE_INTEGER;
 }
@@ -1338,120 +1411,6 @@ function notionPageTitle(page: any): string {
   return title(property);
 }
 
-function defaultSiteConfig(): SiteConfig { return createDefaultSiteConfig(); }
-
-function toPublicSiteConfig(pages: any[]) {
-  const config = defaultSiteConfig();
-  for (const page of pages) {
-    const properties = page.properties || {};
-    if (properties["启用"]?.checkbox !== true) continue;
-    const key = configPageKey(page);
-    const value = configPageValue(page);
-    if (!key || isConfigLinkPage(page)) continue;
-    if (key === "SITE_TITLE" && value) config.siteTitle = cleanConfigText(value, 100) || config.siteTitle;
-    if (key === "SITE_DESCRIPTION" && value) config.siteDescription = cleanConfigText(value, 240) || config.siteDescription;
-    if (key === "SITE_LANGUAGE" && /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(value)) config.siteLanguage = value;
-    const hasConfigImage = Boolean(configPageFileUrl(page));
-    if (key === "FAVICON" || key === "FAVICON_URL") config.favicon = hasConfigImage ? "/favicon.ico" : safePublicAsset(value) || config.favicon;
-    if (key === "AVATAR_URL") config.avatarUrl = hasConfigImage ? "/_notion/config-image/AVATAR_URL" : safePublicAsset(value);
-    if (key === "OG_IMAGE_URL") config.ogImageUrl = hasConfigImage ? "/_notion/config-image/OG_IMAGE_URL" : safePublicAsset(value) || config.ogImageUrl;
-    if (key === "AUTHOR" && value) config.author = value.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 80) || config.author;
-    if (key === "SINCE") config.since = value.match(/(?:19|20)\d{2}/)?.[0] || config.since;
-    if (key === "POST_COUNT_TEXT" && value) config.postCountText = cleanConfigText(value, 160) || config.postCountText;
-    if (key === "FOOTER_CREDIT" && value) config.footerCredit = cleanConfigText(value, 160) || config.footerCredit;
-    if (key === "REPOSITORY_URL" && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/i.test(value)) config.repositoryUrl = value.slice(0, 240);
-    if (key === "WORD_CLOUD_ENABLED") config.wordCloudEnabled = configBoolean(value, config.wordCloudEnabled);
-    if (key === "CATEGORIES_ENABLED") config.categoriesEnabled = configBoolean(value, config.categoriesEnabled);
-    if (key === "RSS_ENABLED") config.rssEnabled = configBoolean(value, config.rssEnabled);
-    if (key === "SEARCH_ENABLED") config.searchEnabled = configBoolean(value, config.searchEnabled);
-    if (key === "INTRO_ENABLED") config.introEnabled = configBoolean(value, config.introEnabled);
-    if (key === "INTRO_TITLE" && value) config.introTitle = cleanConfigText(value, 60) || config.introTitle;
-    if (key === "INTRO_SUBTITLE" && value) config.introSubtitle = cleanConfigText(value, 100) || config.introSubtitle;
-    if (key === "THEME_MODE") config.themeMode = configEnum(value, ["system", "light", "dark"], config.themeMode) as ThemeMode;
-    if (key === "THEME_PRESET") config.themePreset = configEnum(value, ["warm", "neutral", "forest", "ocean"], config.themePreset) as ThemePreset;
-    if (key === "THEME_TOGGLE_ENABLED") config.themeToggleEnabled = configBoolean(value, config.themeToggleEnabled);
-    if (key === "LIGHT_BACKGROUND") config.lightBackground = configColor(value);
-    if (key === "LIGHT_SURFACE") config.lightSurface = configColor(value);
-    if (key === "LIGHT_TEXT") config.lightText = configColor(value);
-    if (key === "LIGHT_ACCENT") config.lightAccent = configColor(value);
-    if (key === "DARK_BACKGROUND") config.darkBackground = configColor(value);
-    if (key === "DARK_SURFACE") config.darkSurface = configColor(value);
-    if (key === "DARK_TEXT") config.darkText = configColor(value);
-    if (key === "DARK_ACCENT") config.darkAccent = configColor(value);
-    if (key === "TOOLS_DEFAULT_OPEN") config.toolsDefaultOpen = configBoolean(value, config.toolsDefaultOpen);
-    if (key === "CATEGORIES_DEFAULT_OPEN") config.categoriesDefaultOpen = configBoolean(value, config.categoriesDefaultOpen);
-    if (key === "TOC_DEFAULT_STATE") config.tocDefaultState = configEnum(value, ["auto", "open", "closed"], config.tocDefaultState) as TocDefaultState;
-    if (key === "FOOTER_QUOTES" && value) {
-      const quotes = value.split(/\r?\n/)
-        .map((line) => line.split(/\s*[｜|]\s*/, 2).map((part) => part.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").trim()))
-        .filter((parts) => parts.length === 2 && parts[0] && parts[1])
-        .slice(0, 16)
-        .map(([lead, sub]) => ({ lead: lead.slice(0, 100), sub: sub.slice(0, 120) }));
-      if (quotes.length) config.footerQuotes = quotes;
-    }
-  }
-  return config;
-}
-
-function configPageKey(page: any): string {
-  const properties = page.properties || {};
-  return title(properties["配置名"] || properties.title || properties.name).replaceAll("`", "").trim().toLocaleUpperCase();
-}
-
-function configPageValue(page: any): string {
-  const properties = page.properties || {};
-  return (typeof properties["链接"]?.url === "string" ? properties["链接"].url : plain(properties["配置值"] || properties.value || properties.slug)).trim();
-}
-
-function configPageFileUrl(page: any): string {
-  const properties = page?.properties || {};
-  const files = properties["图片"]?.files || properties.image?.files || properties.Image?.files;
-  if (!Array.isArray(files) || !files.length) return "";
-  const file = files[0];
-  const rawUrl = typeof file?.file?.url === "string" ? file.file.url : typeof file?.external?.url === "string" ? file.external.url : "";
-  try {
-    const url = new URL(rawUrl);
-    return url.protocol === "https:" && NOTION_IMAGE_HOSTS.has(url.hostname) ? url.href : "";
-  } catch { return ""; }
-}
-
-function configBoolean(value: string, fallback: boolean): boolean {
-  if (/^(?:1|true|yes|on|开启|启用|是)$/i.test(value)) return true;
-  if (/^(?:0|false|no|off|关闭|禁用|否)$/i.test(value)) return false;
-  return fallback;
-}
-
-function configEnum<T extends string>(value: string, allowed: readonly T[], fallback: T): T {
-  const normalized = value.trim().toLocaleLowerCase() as T;
-  return allowed.includes(normalized) ? normalized : fallback;
-}
-
-function configColor(value: string): string {
-  const normalized = value.trim().toLocaleLowerCase();
-  return /^#[0-9a-f]{6}$/.test(normalized) ? normalized : "";
-}
-
-function safePublicAsset(value: string): string {
-  const cleaned = value.trim();
-  if (/^\/(?!\/)[^\s]*$/.test(cleaned)) return cleaned.slice(0, 500);
-  try {
-    const url = new URL(cleaned);
-    return url.protocol === "https:" ? url.href.slice(0, 500) : "";
-  } catch { return ""; }
-}
-
-function isConfigLinkPage(page: any): boolean {
-  const properties = page.properties || {};
-  if (properties["启用"]?.checkbox !== true) return false;
-  if (properties["类型"]?.select?.name === "Link" || properties.type?.select?.name === "Link") return true;
-  const key = configPageKey(page);
-  return key === "LINK" || key.startsWith("LINK:") || key.startsWith("LINK_");
-}
-
-function cleanConfigText(value: string, limit: number) {
-  return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").trim().slice(0, limit);
-}
-
 function title(property: any): string { return richText(property?.title); }
 function plain(property: any): string { return richText(property?.rich_text || property?.title || property); }
 function richText(value: any): string { return Array.isArray(value) ? value.map((item) => item.plain_text || item.text?.content || "").join("") : typeof value === "string" ? value : ""; }
@@ -1520,7 +1479,7 @@ function needsBrowserImageConversion(url: unknown): url is string {
   if (typeof url !== "string") return false;
   try {
     const source = new URL(url);
-    return NOTION_IMAGE_HOSTS.has(source.hostname) && /\.(?:heic|heif)$/i.test(decodeURIComponent(source.pathname));
+    return NOTION_FILE_HOSTS.has(source.hostname) && /\.(?:heic|heif)$/i.test(decodeURIComponent(source.pathname));
   }
   catch { return false; }
 }

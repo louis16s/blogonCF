@@ -223,12 +223,13 @@ pnpm dev
 ## 数据与性能架构
 
 - 首页由 Worker 并行读取文章、菜单和公共配置后直接 SSR，不等待浏览器二次拼装。
-- Cloudflare Cache API 与 Worker 内存会共同对公共 bootstrap 做 45 秒跨实例缓存和并发请求去重；上游短暂失败时最多保留 5 分钟的最近公开列表。
-- 访客响应使用重新校验策略，避免 Cloudflare 区域缓存规则把 Notion 内容固定数小时；45 秒缓存只存在于 Worker 内部。
+- Cloudflare Cache API 与 Worker 内存会共同对公共 bootstrap 做 5 分钟跨实例缓存和并发请求去重；上游短暂失败时最多回退到 24 小时内最近一次成功的公开列表。
+- 访客响应使用重新校验策略，避免浏览器或额外缓存规则把 Notion 内容固定数小时；站点 Config 查询同样会在 Worker 内合并并发请求并缓存 5 分钟。
 - 浏览器端的侧栏、文章统计和页脚配置共用一个 `/api/content/posts` 请求，避免文章页重复请求三个接口。
 - 首页与文章页面每 5 分钟检查一次更新；页面重新可见时，只有缓存已经过期才同步。
 - 全文索引仅在访客聚焦搜索框后预热，普通首页访问不会读取所有文章正文。
 - 词云、KaTeX 和 HEIC 浏览器兜底按需加载；配置 Cloudflare Images 后，HEIC 会优先在 Worker 侧转换。
+- Config 中上传的公开图片使用稳定站内路径和 5 分钟边缘缓存；即使上游没有声明文件大小，Worker 仍会在读取时执行 12 MB 上限。
 - 密码校验、密码文章正文和错误响应始终使用 `no-store`，不会进入公共缓存。
 
 ## 安全设计
@@ -247,7 +248,7 @@ pnpm dev
 
 ```text
 app/        页面、组件与样式
-worker/     Cloudflare Worker 路由、Notion 网关与隔离的外部内容抓取模块
+worker/     Cloudflare Worker 路由、Notion 网关，以及隔离的外部抓取和 Config 规范化模块
 shared/     浏览器与 Worker 共用的纯逻辑
 db/         D1 数据结构与限流逻辑
 drizzle/    D1 迁移

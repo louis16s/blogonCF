@@ -492,7 +492,7 @@ test("about and other Published Notion pages render inside the site shell", asyn
     ], has_more: false });
     if (url.includes("/data_sources/source-id/query")) {
       const body = JSON.parse(init.body);
-      assert.ok(body.filter.and.some((item) => item.or?.some((entry) => entry.property === "type" && entry.select?.equals === "Page")));
+      assert.ok(body.filter.and.some((item) => item.property === "type" && item.select?.equals === "Page"));
       return Response.json({ results: [{ id: pageId, properties: {
         type: { select: { name: "Page" } }, status: { select: { name: "Published" } },
         title: { title: [{ plain_text: "关于我_" }] }, slug: { rich_text: [{ plain_text: "me" }] }, summary: { rich_text: [{ plain_text: "关于 louis16s" }] }, icon: { rich_text: [{ plain_text: "fas fa-info" }] },
@@ -1066,6 +1066,62 @@ test("Config file images use stable same-origin paths and refresh Notion signatu
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("Config image gateway rejects malformed keys and oversized streaming bodies", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    if (String(input).includes("/data_sources/config-source/query")) return Response.json({ results: [
+      { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "OG_IMAGE_URL" }] }, "图片": { files: [{ file: { url: "https://prod-files-secure.s3.us-west-2.amazonaws.com/config/large.jpg?signature=fresh" } }] } } },
+    ] });
+    const chunks = [new Uint8Array(6 * 1024 * 1024), new Uint8Array(6 * 1024 * 1024), new Uint8Array(1)];
+    return new Response(new ReadableStream({ pull(controller) {
+      const chunk = chunks.shift();
+      if (chunk) controller.enqueue(chunk);
+      else controller.close();
+    } }), { headers: { "content-type": "image/jpeg" } });
+  };
+  try {
+    const malformed = await worker.fetch(new Request("http://localhost/_notion/config-image/%"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_CONFIG_DATA_SOURCE_ID: "config-source" }, context);
+    assert.equal(malformed.status, 404);
+    const oversized = await worker.fetch(new Request("http://localhost/_notion/config-image/OG_IMAGE_URL"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_CONFIG_DATA_SOURCE_ID: "config-source" }, context);
+    assert.equal(oversized.status, 413);
+    assert.deepEqual(await oversized.json(), { error: "Config image is too large" });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Config normalization is isolated, supports empty-field fallback, and coalesces reads", async () => {
+  const [workerSource, configSource] = await Promise.all([
+    readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../worker/site-config.ts", import.meta.url), "utf8"),
+  ]);
+  assert.doesNotMatch(workerSource, /function toPublicSiteConfig/);
+  assert.match(configSource, /export function toPublicSiteConfig/);
+
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  let reads = 0;
+  globalThis.fetch = async () => {
+    reads += 1;
+    return Response.json({ results: [{ properties: {
+      "启用": { checkbox: true },
+      "配置名": { title: [] },
+      title: { title: [{ plain_text: "AUTHOR" }] },
+      "链接": { url: "" },
+      "配置值": { rich_text: [{ plain_text: "  fallback author  " }] },
+    } }], has_more: false });
+  };
+  try {
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_CONFIG_DATA_SOURCE_ID: "config-source" };
+    const [first, second] = await Promise.all([
+      worker.fetch(new Request("http://localhost/api/content/config"), env, context),
+      worker.fetch(new Request("http://localhost/api/content/config"), env, context),
+    ]);
+    assert.equal((await first.json()).config.author, "fallback author");
+    assert.equal((await second.json()).config.author, "fallback author");
+    assert.equal(reads, 1, "concurrent consumers should share one Config query");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("public config endpoint follows pagination before resolving AUTHOR and SINCE", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
@@ -1218,7 +1274,7 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     if (url.includes(`/blocks/${richReferenceId}/children`)) { childBlockRequests++; return Response.json({ results: [], has_more: false }); }
     if (url.includes("/data_sources/") && init.body) {
       const body = JSON.parse(init.body);
-      const pageFilter = body.filter?.and?.some((item) => item.or?.some((entry) => entry.property === "type" && entry.select?.equals === "Page"));
+      const pageFilter = body.filter?.and?.some((item) => item.property === "type" && item.select?.equals === "Page");
       if (pageFilter) return Response.json({ results: [referencedId, richReferenceId].map((id) => ({
         id,
         properties: {
