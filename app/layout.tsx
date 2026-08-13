@@ -25,7 +25,7 @@ export async function generateMetadata(): Promise<Metadata> {
     metadataBase: metadataBase(requestHeaders.get("x-blog-site-origin")),
     title: { default: config.siteTitle, template: `%s · ${config.siteTitle}` },
     description: config.siteDescription,
-    icons: { icon: "/favicon.ico", shortcut: "/favicon.ico" },
+    icons: { icon: config.favicon, shortcut: config.favicon },
     openGraph: { type: "website", locale: config.siteLanguage.replace("-", "_"), siteName: config.siteTitle, images: [{ url: config.ogImageUrl, width: 1200, height: 630, alt: config.siteTitle }] },
     twitter: { card: "summary_large_image", images: [config.ogImageUrl] },
     alternates: { canonical: "/" },

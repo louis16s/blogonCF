@@ -21,6 +21,7 @@ type NotionProperty = {
 
 export type NotionConfigPage = {
   id?: string;
+  last_edited_time?: string;
   properties?: Record<string, NotionProperty | undefined>;
 };
 
@@ -47,9 +48,9 @@ export function toPublicSiteConfig(pages: NotionConfigPage[]): SiteConfig {
     if (key === "SITE_LANGUAGE" && LANGUAGE_CODE.test(value)) config.siteLanguage = value;
 
     const hasConfigImage = Boolean(configPageFileUrl(page));
-    if (key === "FAVICON_URL") config.favicon = hasConfigImage ? "/favicon.ico" : safePublicAsset(value) || config.favicon;
-    if (key === "AVATAR_URL") config.avatarUrl = hasConfigImage ? "/_notion/config-image/AVATAR_URL" : safePublicAsset(value);
-    if (key === "OG_IMAGE_URL") config.ogImageUrl = hasConfigImage ? "/_notion/config-image/OG_IMAGE_URL" : safePublicAsset(value) || config.ogImageUrl;
+    if (key === "FAVICON_URL") config.favicon = hasConfigImage ? versionedConfigAsset("/favicon.ico", page) : safePublicAsset(value) || config.favicon;
+    if (key === "AVATAR_URL") config.avatarUrl = hasConfigImage ? versionedConfigAsset("/_notion/config-image/AVATAR_URL", page) : safePublicAsset(value);
+    if (key === "OG_IMAGE_URL") config.ogImageUrl = hasConfigImage ? versionedConfigAsset("/_notion/config-image/OG_IMAGE_URL", page) : safePublicAsset(value) || config.ogImageUrl;
 
     if (key === "AUTHOR" && value) config.author = cleanConfigText(value, 80) || config.author;
     if (key === "SINCE") config.since = value.match(/(?:19|20)\d{2}/)?.[0] || config.since;
@@ -147,6 +148,11 @@ function safePublicAsset(value: string): string {
     const url = new URL(cleaned);
     return url.protocol === "https:" ? url.href.slice(0, 500) : "";
   } catch { return ""; }
+}
+
+function versionedConfigAsset(path: string, page: NotionConfigPage): string {
+  const editedAt = Date.parse(page.last_edited_time || "");
+  return Number.isFinite(editedAt) ? `${path}?v=${editedAt.toString(36)}` : path;
 }
 
 function cleanConfigText(value: string, limit: number): string {

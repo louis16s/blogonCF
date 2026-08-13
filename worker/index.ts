@@ -379,9 +379,11 @@ async function cachedPublicDocument(request: Request, env: Env, ctx: ExecutionCo
 async function cachedConfigAsset(request: Request, env: Env, ctx: ExecutionContext, load: () => Promise<Response>): Promise<Response> {
   const cache = defaultWorkerCache();
   const keyUrl = new URL(request.url);
+  const revision = keyUrl.searchParams.get("v") || "";
   keyUrl.search = "";
   keyUrl.searchParams.set("schema", "1");
   keyUrl.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
+  if (/^[a-z0-9]{1,16}$/i.test(revision)) keyUrl.searchParams.set("v", revision);
   const key = new Request(keyUrl.toString(), { method: "GET" });
   const cached = await cache?.match(key).catch(() => undefined);
   if (cached) return cached;
@@ -400,7 +402,7 @@ function siteBootstrapEdgeKey(env: Env, request: Request): Request {
   url.host = canonical.host;
   url.pathname = "/__blog-cache/site-bootstrap";
   url.search = "";
-  url.searchParams.set("schema", "5");
+  url.searchParams.set("schema", "6");
   url.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
   url.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
   return new Request(url.toString(), { method: "GET" });

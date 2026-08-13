@@ -1019,7 +1019,7 @@ test("public config endpoint exposes only the public footer, author, and year al
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "THEME_PRESET" }] }, "配置值": { rich_text: [{ plain_text: "forest" }] } } },
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "LIGHT_ACCENT" }] }, "配置值": { rich_text: [{ plain_text: "#4f745d" }] } } },
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "DARK_TEXT" }] }, "配置值": { rich_text: [{ plain_text: "red; background:url(x)" }] } } },
-      { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AVATAR_URL" }] }, "配置值": { rich_text: [{ plain_text: "https://legacy.example/avatar.jpg" }] }, "图片": { files: [{ type: "file", file: { url: "https://prod-files-secure.s3.us-west-2.amazonaws.com/config/avatar.jpg?signature=temporary" } }] } } },
+      { last_edited_time: "2026-08-13T01:02:03.000Z", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AVATAR_URL" }] }, "配置值": { rich_text: [{ plain_text: "https://legacy.example/avatar.jpg" }] }, "图片": { files: [{ type: "file", file: { url: "https://prod-files-secure.s3.us-west-2.amazonaws.com/config/avatar.jpg?signature=temporary" } }] } } },
       { properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "SECRET" }] }, "配置值": { rich_text: [{ plain_text: "never-leak" }] } } },
       { properties: { "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "缺少启用字段" }] } } },
     ] });
@@ -1036,7 +1036,7 @@ test("public config endpoint exposes only the public footer, author, and year al
     assert.equal(payload.config.themePreset, "forest");
     assert.equal(payload.config.lightAccent, "#4f745d");
     assert.equal(payload.config.darkText, "");
-    assert.equal(payload.config.avatarUrl, "/_notion/config-image/AVATAR_URL");
+    assert.equal(payload.config.avatarUrl, `/_notion/config-image/AVATAR_URL?v=${Date.parse("2026-08-13T01:02:03.000Z").toString(36)}`);
     assert.ok(payload.config.footerQuotes.length >= 6);
     assert.doesNotMatch(JSON.stringify(payload), /never-leak|缺少启用字段/);
   } finally { globalThis.fetch = originalFetch; }
