@@ -290,13 +290,13 @@ test("every generated word uses the same Unicode normalization as article search
   assert.equal(normalizeSearchText("  ＡＩ  "), "ai");
 });
 
-test("rangefinder intro matches the 07cd9ba sequence, lasts at least five seconds, and remains motion-safe", async () => {
+test("Nikon S3 intro uses a compact five-blade aperture and remains motion-safe", async () => {
   const [layout, home, intro, css, asset, favicon] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/IntroSequence.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
-    readFile(new URL("../public/rangefinder-intro.webp", import.meta.url)),
+    readFile(new URL("../public/nikon-s3-intro.svg", import.meta.url), "utf8"),
     readFile(new URL("../public/favicon.svg", import.meta.url), "utf8"),
   ]);
   assert.doesNotMatch(layout, /IntroSequence|INTRO_BOOTSTRAP_SCRIPT/);
@@ -310,15 +310,16 @@ test("rangefinder intro matches the 07cd9ba sequence, lasts at least five second
   assert.match(intro, /completeIntro\(document\.documentElement/);
   assert.ok(INTRO_DURATION_MS >= 5_000);
   assert.match(intro, />跳过<\/button>/);
-  assert.match(intro, /rangefinder-intro\.webp/);
+  assert.match(intro, /nikon-s3-intro\.svg/);
   assert.match(intro, /<strong>\{title\}<\/strong>/);
   assert.doesNotMatch(intro, /FRAME 01/);
   assert.doesNotMatch(intro, /正在对焦生活/);
   assert.match(intro, /intro-camera-rig/);
   assert.match(intro, /intro-aperture/);
   assert.match(intro, /intro-aperture-blade/);
+  assert.match(intro, /Array\.from\(\{ length: 5 \}/);
   assert.match(intro, /intro-exposure-curtain/);
-  assert.match(intro, /intro-wind-lever/);
+  assert.doesNotMatch(intro, /intro-wind-lever/);
   assert.doesNotMatch(intro, /intro-progress|intro-lens-flash/);
   assert.match(css, /@keyframes intro-camera-journey/);
   assert.match(css, /@keyframes intro-aperture-blade/);
@@ -326,7 +327,8 @@ test("rangefinder intro matches the 07cd9ba sequence, lasts at least five second
   assert.match(css, /@keyframes intro-caption-journey/);
   assert.match(css, /html\[data-intro="playing"\] \.site-intro \{ display: grid; \}/);
   assert.match(css, /\.site-intro \{ display: none !important; \}/);
-  assert.ok(asset.length > 100_000, "intro asset should be a real optimized camera render");
+  assert.match(asset, /viewBox="0 0 640 400"/);
+  assert.match(asset, /Nikon/);
   assert.match(favicon, /class="blade"/);
   assert.match(favicon, /prefers-color-scheme: dark/);
 });
