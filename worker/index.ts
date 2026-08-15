@@ -849,12 +849,8 @@ async function attachChildAccessSignatures(blocks: any[], secret: string | undef
   };
   await Promise.all(targets.map(async ({ target, pageId }) => {
     target.accessSignature = await createChildAccessSignature(secret, normalizeNotionId(rootPageId), pageId);
-    const page = await readPage(pageId);
-    // Notion page mentions often arrive without plain_text. Resolve their
-    // title and icon once on the Worker so grouped pages remain readable and
-    // clickable even when the source mention is represented as <mention-page>.
-    if (!target.text && page) target.text = notionPageTitle(page) || "未命名页面";
     if (target.type === "child_page") {
+      const page = await readPage(pageId);
       if (page?.icon?.type === "emoji" && typeof page.icon.emoji === "string") target.icon = page.icon.emoji;
       else delete target.icon;
     }
@@ -1423,8 +1419,8 @@ function richText(value: any): string { return Array.isArray(value) ? value.map(
 
 function normalizeRichText(value: any[] = []) {
   return value.map((item) => ({
-    text: item.plain_text || item.text?.content || item.mention?.page?.title || "",
-    href: item.href || notionPageUrl(item.mention?.page?.id),
+    text: item.plain_text || item.text?.content || "",
+    href: item.href || undefined,
     bold: item.annotations?.bold || undefined,
     italic: item.annotations?.italic || undefined,
     code: item.annotations?.code || undefined,
@@ -1432,11 +1428,6 @@ function normalizeRichText(value: any[] = []) {
     underline: item.annotations?.underline || undefined,
     color: item.annotations?.color && item.annotations.color !== "default" ? item.annotations.color : undefined,
   }));
-}
-
-function notionPageUrl(value: unknown): string | undefined {
-  const id = normalizeNotionId(value);
-  return id ? `https://www.notion.so/${id.replaceAll("-", "")}` : undefined;
 }
 
 function bookmarkTitle(url: unknown): string {

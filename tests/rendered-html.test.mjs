@@ -313,17 +313,12 @@ test("rangefinder intro matches the 07cd9ba sequence, lasts at least five second
   assert.match(intro, /rangefinder-intro\.webp/);
   assert.match(intro, /<strong>\{title\}<\/strong>/);
   assert.doesNotMatch(intro, /FRAME 01/);
-  assert.doesNotMatch(intro, /正在对焦生活/);
-  assert.match(intro, /intro-camera-rig/);
-  assert.match(intro, /intro-aperture/);
-  assert.match(intro, /intro-aperture-blade/);
-  assert.match(intro, /intro-exposure-curtain/);
-  assert.match(intro, /intro-wind-lever/);
-  assert.doesNotMatch(intro, /intro-progress|intro-lens-flash/);
+  assert.match(intro, /正在对焦生活/);
+  assert.match(intro, /intro-progress/);
+  assert.doesNotMatch(intro, /intro-camera-rig|intro-lens-aperture|intro-aperture-blade|intro-shutter/);
   assert.match(css, /@keyframes intro-camera-journey/);
-  assert.match(css, /@keyframes intro-aperture-blade/);
-  assert.match(css, /@keyframes intro-exposure-curtain/);
   assert.match(css, /@keyframes intro-caption-journey/);
+  assert.match(css, /@keyframes intro-progress/);
   assert.match(css, /html\[data-intro="playing"\] \.site-intro \{ display: grid; \}/);
   assert.match(css, /\.site-intro \{ display: none !important; \}/);
   assert.ok(asset.length > 100_000, "intro asset should be a real optimized camera render");
@@ -1530,17 +1525,6 @@ test("article renderer opens child pages internally instead of linking to Notion
   assert.match(css, /\.child-document-head \{[^}]*border-bottom:/);
   assert.match(css, /\.child-document-body>\.notion-content \{ padding-top:/);
   assert.doesNotMatch(article, /case "child_page"[^\n]+notion\.so/);
-});
-
-test("Notion page mentions become internal child links with inherited access signatures", async () => {
-  const [workerSource, articleSource] = await Promise.all([
-    readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
-  ]);
-  assert.match(workerSource, /item\.mention\?\.page\?\.title/);
-  assert.match(workerSource, /notionPageUrl\(item\.mention\?\.page\?\.id\)/);
-  assert.match(workerSource, /if \(!target\.text && page\) target\.text = notionPageTitle\(page\)/);
-  assert.match(articleSource, /notionPageIdFromHref\(item\.href\)/);
 });
 
 test("article client verifies the unlock cookie and sends it with child-page requests", async () => {
