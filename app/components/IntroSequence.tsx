@@ -4,7 +4,7 @@ import { useCallback, useLayoutEffect, useState, type CSSProperties } from "reac
 import { completeIntro, INTRO_DURATION_MS } from "./introState";
 
 const APERTURE_STOPS = ["F2", "F2.8", "F4", "F5.6", "F8", "F11", "F16"];
-const APERTURE_BLADES = Array.from({ length: 5 }, (_, index) => index);
+const APERTURE_BLADES = Array.from({ length: 10 }, (_, index) => index);
 
 export function IntroSequence({ enabled = true, title = "louis16s" }: { enabled?: boolean; title?: string; subtitle?: string }) {
   const [visible, setVisible] = useState(true);
@@ -53,7 +53,8 @@ export function IntroSequence({ enabled = true, title = "louis16s" }: { enabled?
       <div className="intro-stage" aria-hidden="true">
         <div className="intro-camera-rig">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img className="intro-camera" src="/nikon-s3-intro.svg" alt="" width="1280" height="800" fetchPriority="high" />
+          <img className="intro-camera" src="/rangefinder-intro.webp" alt="" width="1280" height="853" fetchPriority="high" />
+          <span className="intro-wind-lever" />
           <span className="intro-shutter-button" />
           <span className="intro-focus-ring" />
           <span className="intro-rangefinder-patch"><i /><i /></span>
