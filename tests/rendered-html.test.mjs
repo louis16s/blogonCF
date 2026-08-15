@@ -327,7 +327,7 @@ test("Nikon S3 intro uses a compact five-blade aperture and remains motion-safe"
   assert.match(css, /@keyframes intro-caption-journey/);
   assert.match(css, /html\[data-intro="playing"\] \.site-intro \{ display: grid; \}/);
   assert.match(css, /\.site-intro \{ display: none !important; \}/);
-  assert.match(asset, /viewBox="0 0 640 400"/);
+  assert.match(asset, /viewBox="0 0 720 420"/);
   assert.match(asset, /Nikon/);
   assert.match(favicon, /class="blade"/);
   assert.match(favicon, /prefers-color-scheme: dark/);
