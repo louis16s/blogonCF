@@ -1,4 +1,6 @@
-export const INTRO_DURATION_MS = 5600;
+// Keep the React timer aligned with the six-second CSS sequence so the
+// curtain sweep and shutter release are never cut off mid-motion.
+export const INTRO_DURATION_MS = 6000;
 
 export const THEME_BOOTSTRAP_SCRIPT = `(() => {
   const root = document.documentElement;
