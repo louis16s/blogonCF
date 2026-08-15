@@ -1,31 +1,30 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" role="img" aria-label="Nikon S3 rangefinder camera">
-  <g stroke="#34414b" stroke-linecap="round" stroke-linejoin="round">
-    <path fill="#cbd5d3" stroke-width="8" d="M74 138h124l35-39h58l21 26h255l42 38v184H74z"/>
-    <path fill="#b8c5c2" stroke-width="8" d="M86 119h116V86h92v37h43V78h64v45h39V82h60v42h88l31 35H86z"/>
-    <path fill="none" stroke-width="6" d="M86 142h125l36-41h50l22 28M204 87v36M263 87v36M320 80v43M389 84v39M448 84v39"/>
-    <path fill="#cbd5d3" stroke-width="8" d="M492 132h127v74H492z"/>
-    <path fill="none" stroke-width="5" d="M507 147h98v43h-98z"/>
-    <path fill="#cbd5d3" stroke-width="8" d="M624 104h38v78h-38z"/>
-    <circle fill="#8a9a96" stroke-width="5" cx="643" cy="143" r="10"/>
-    <path fill="#cbd5d3" stroke-width="8" d="M49 198c-18 0-27 11-27 24s9 24 27 24"/>
-    <path fill="none" stroke-width="6" d="M32 211v23"/>
-    <path fill="#cbd5d3" stroke-width="8" d="M662 198c18 0 27 11 27 24s-9 24-27 24"/>
-    <path fill="#8a9a96" stroke-width="7" d="M91 159h184v151H91z"/>
-    <path fill="none" stroke-width="6" d="M93 332h565M93 348h565"/>
-    <path fill="#cbd5d3" stroke-width="7" d="M209 237c5-26 27-26 32 0l-8 61h-16z"/>
-    <circle fill="#cbd5d3" stroke-width="6" cx="233" cy="300" r="11"/>
-    <circle fill="#cbd5d3" stroke-width="6" cx="260" cy="178" r="9"/>
-    <circle fill="#cbd5d3" stroke-width="6" cx="283" cy="199" r="9"/>
-    <circle fill="#b8c5c2" stroke-width="8" cx="378" cy="248" r="108"/>
-    <circle fill="#8a9a96" stroke-width="7" cx="378" cy="248" r="91"/>
-    <circle fill="#b8c5c2" stroke-width="6" cx="378" cy="248" r="76"/>
-    <circle fill="#62736f" stroke-width="5" cx="378" cy="248" r="61"/>
-    <circle fill="#26343b" stroke-width="5" cx="378" cy="248" r="47"/>
-    <path fill="none" stroke-width="4" opacity=".72" d="M304 173c22-23 47-35 74-35s52 12 74 35M304 323c22 23 47 35 74 35s52-12 74-35"/>
-    <path fill="#cbd5d3" stroke-width="7" d="M287 66h48v39h-48zM354 61h57v44h-57zM438 64h56v41h-56z"/>
-    <path fill="none" stroke-width="5" d="M298 75h26M365 71h34M449 74h33"/>
-    <path fill="#cbd5d3" stroke-width="7" d="M277 115h39v25h-39z"/>
-    <text x="320" y="157" fill="#34414b" stroke="none" font-family="Arial, Helvetica, sans-serif" font-size="21" letter-spacing="4">Nikon</text>
-    <path fill="none" stroke-width="5" d="M329 167h95" opacity=".55"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 400" role="img" aria-label="Nikon S3 rangefinder camera">
+  <g fill="none" stroke="#34414b" stroke-linecap="round" stroke-linejoin="round">
+    <path fill="#dce3e1" stroke-width="10" d="M60 112h150l43-52h65l19 39h214l28 34v187H60z"/>
+    <path fill="#cbd5d4" stroke-width="10" d="M74 91h87V66h72v35h35V61h54v43h185l25 31H74z"/>
+    <path stroke-width="8" d="M74 120h139l44-47h55l19 39M94 91h64M183 67v35M226 66v35M278 63v40"/>
+    <path fill="#dce3e1" stroke-width="9" d="M435 82h126v72H435z"/>
+    <path stroke-width="5" d="M449 96h97v44h-97z"/>
+    <path fill="#dce3e1" stroke-width="8" d="M584 101c19 0 26 12 26 29s-7 29-26 29"/>
+    <path stroke-width="6" d="M608 112v36M620 121v18"/>
+    <path fill="#dce3e1" stroke-width="8" d="M38 174c-17 0-24 12-24 25s7 25 24 25"/>
+    <path stroke-width="6" d="M21 187v24"/>
+    <path fill="#879894" stroke-width="7" d="M78 123h178v155H78z"/>
+    <path stroke-width="7" d="M80 294h510M78 310h512"/>
+    <path fill="#dce3e1" stroke-width="8" d="M336 126c64 0 116 50 116 112s-52 112-116 112-116-50-116-112 52-112 116-112z"/>
+    <circle fill="#879894" stroke-width="8" cx="336" cy="238" r="88"/>
+    <circle fill="#dce3e1" stroke-width="7" cx="336" cy="238" r="75"/>
+    <circle stroke-width="6" cx="336" cy="238" r="61"/>
+    <path stroke-width="5" d="M254 172c25-28 57-43 82-43s57 15 82 43M254 304c25 28 57 43 82 43s57-15 82-43"/>
+    <path fill="#dce3e1" stroke-width="8" d="M254 95h36v-33h41v33h37v-35h42v35h51"/>
+    <circle fill="#dce3e1" stroke-width="7" cx="231" cy="148" r="10"/>
+    <circle fill="#dce3e1" stroke-width="7" cx="224" cy="177" r="9"/>
+    <path fill="#dce3e1" stroke-width="8" d="M294 46h55v24h-55zM368 45h48v25h-48z"/>
+    <path stroke-width="6" d="M301 52h40M375 51h34"/>
+    <path fill="#dce3e1" stroke-width="8" d="M541 49h38v51h-38z"/>
+    <path stroke-width="6" d="M549 58h22v33h-22z"/>
+    <text x="321" y="111" fill="#34414b" stroke="none" font-family="Arial, Helvetica, sans-serif" font-size="22" letter-spacing="5">Nikon</text>
+    <path fill="#879894" stroke-width="7" d="M174 204c7-30 31-30 38 0l-9 67h-20z"/>
+    <circle fill="#dce3e1" stroke-width="7" cx="193" cy="278" r="12"/>
   </g>
 </svg>
