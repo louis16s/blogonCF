@@ -25,10 +25,9 @@ const WordCloudDialog = dynamic(() => import("./WordCloudDialog").then((module) 
   ssr: false,
 });
 const warmSearchIndex = createSharedRequest(async () => {
-  const response = await fetch("/api/content/search?warm=1", { cache: "no-store" });
+  const response = await fetch("/api/content/search?warm=1", { cache: "default" });
   if (!response.ok) throw new Error("Search index warm-up failed");
 });
-
 export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNotice, initialConfig = DEFAULT_SITE_CONFIG }: { initialPosts?: Post[]; initialLinks?: SiteLink[]; initialNotice?: SiteNotice; initialConfig?: SiteConfig }) {
   const [posts, setPosts] = useState<Post[]>(initialPosts);
   const [siteLinks, setSiteLinks] = useState<SiteLink[]>(initialLinks);
@@ -157,18 +156,21 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
 
   useEffect(() => {
     const needle = normalizeSearchText(deferredQuery);
-    if (!needle) return;
+    if (needle.length < 2) {
+      return;
+    }
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       fetch(`/api/content/search?q=${encodeURIComponent(needle)}`, { signal: controller.signal, cache: "no-store" })
         .then((response) => response.ok ? response.json() : Promise.reject())
         .then((data) => setContentSearch({ query: needle, ids: Array.isArray(data.matches) ? data.matches : [] }))
         .catch(() => { if (!controller.signal.aborted) setContentSearch({ query: needle, ids: [] }); });
-    }, 120);
+    }, 350);
     return () => { controller.abort(); window.clearTimeout(timer); };
   }, [deferredQuery]);
 
-  const normalizedQuery = normalizeSearchText(deferredQuery);
+  const normalizedValue = normalizeSearchText(deferredQuery);
+  const normalizedQuery = normalizedValue.length >= 2 ? normalizedValue : "";
   const searching = Boolean(normalizedQuery && contentSearch.query !== normalizedQuery);
 
   const categories = useMemo(() => {

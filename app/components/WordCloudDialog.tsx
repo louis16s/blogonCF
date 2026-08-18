@@ -21,6 +21,23 @@ type CloudPayload = {
   partial?: boolean;
 };
 
+let cachedCloudPayload: CloudPayload | null = null;
+let pendingCloudRequest: Promise<CloudPayload> | null = null;
+
+function loadCloudPayload(signal: AbortSignal): Promise<CloudPayload> {
+  if (cachedCloudPayload) return Promise.resolve(cachedCloudPayload);
+  if (!pendingCloudRequest) {
+    pendingCloudRequest = fetch("/api/content/word-cloud", { signal, cache: "default" })
+      .then((response) => response.ok ? response.json() as Promise<CloudPayload> : Promise.reject(new Error("word cloud unavailable")))
+      .then((payload) => {
+        cachedCloudPayload = payload;
+        return payload;
+      })
+      .finally(() => { pendingCloudRequest = null; });
+  }
+  return pendingCloudRequest;
+}
+
 type CloudMode = "pile" | "drift" | "rows" | "cascade" | "constellation" | "rank";
 
 const modes: Array<{ id: CloudMode; label: string; icon: typeof DotsNine }> = [
@@ -57,8 +74,7 @@ export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts
   useEffect(() => {
     if (!open || status !== "loading") return;
     const controller = new AbortController();
-    fetch("/api/content/word-cloud", { signal: controller.signal })
-      .then((response) => response.ok ? response.json() as Promise<CloudPayload> : Promise.reject(new Error("word cloud unavailable")))
+    loadCloudPayload(controller.signal)
       .then((payload) => {
         setWords(Array.isArray(payload.words) ? payload.words : []);
         setSourceCount(Number(payload.sourceCount) || 0);

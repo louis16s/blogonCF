@@ -35,6 +35,7 @@ const MAX_BLOCKS = 10_000;
 const CONTENT_CHUNK_BLOCKS = 300;
 const MAX_BLOCK_DEPTH = 12;
 const MAX_INDEX_BLOCKS_PER_POST = 800;
+const MAX_INDEX_CHARS_PER_POST = 120_000;
 const WORD_CLOUD_CACHE_TTL_MS = 10 * 60 * 1000;
 const CONFIG_ROWS_CACHE_TTL_MS = 5 * 60 * 1000;
 const SITE_BOOTSTRAP_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -45,7 +46,7 @@ const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-cont
 const publicContentHeaders = { ...jsonHeaders, "cache-control": "no-cache, max-age=0, must-revalidate" };
 const edgeBootstrapHeaders = { ...jsonHeaders, "cache-control": "public, max-age=300, stale-while-revalidate=86400" };
 const wordCloudCache = new Map<string, { expiresAt: number; payload: WordCloudPayload }>();
-const publicCorpusCache = new Map<string, { expiresAt: number; corpus: PublicCorpus }>();
+const publicCorpusCache = new Map<string, { expiresAt: number; corpus?: PublicCorpus; pending?: Promise<PublicCorpus> }>();
 const siteBootstrapCache = new Map<string, { freshUntil: number; staleUntil: number; payload?: HomePayload; pending?: Promise<HomePayload> }>();
 const headingIndexCache = new Map<string, { expiresAt: number; headings?: HeadingSummary[]; pending?: Promise<HeadingSummary[]> }>();
 const headingJobCache = new Map<string, HeadingIndexJob>();
@@ -496,7 +497,7 @@ async function notionSearch(env: Env, url: URL): Promise<Response> {
   if (!config.searchEnabled) return error(404, "Search is disabled");
   const query = normalizeSearchText(url.searchParams.get("q") || "");
   const warming = url.searchParams.get("warm") === "1";
-  if (!query && !warming) return Response.json({ matches: [], partial: false, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    if (!query && !warming) return Response.json({ matches: [], partial: false, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   if (query.length > 100) return error(400, "Search query is too long");
   try {
     const corpus = await getPublicCorpus(env);
@@ -535,26 +536,35 @@ async function notionExternalRss(env: Env, url: URL): Promise<Response> {
 async function getPublicCorpus(env: Env): Promise<PublicCorpus> {
   const cacheKey = `${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}:${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID || "configured"}`;
   const cached = publicCorpusCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.corpus;
+  if (cached?.corpus && cached.expiresAt > Date.now()) return cached.corpus;
+  if (cached?.pending) return cached.pending;
 
-  const pages = await queryPosts(env, undefined, 100);
-  const publicPages = pages.filter((page) => !plain(page.properties?.password));
-  let partial = false;
-  const documents = await mapWithConcurrency(publicPages, 2, async (page) => {
-    try {
-      const state: BlockReadState = { remaining: MAX_INDEX_BLOCKS_PER_POST, truncated: false };
-      const blocks = await getBlockChildren(env, page.id, state, 0);
-      if (state.truncated) partial = true;
-      return { ...toPost(page), body: blockText(blocks), searchBody: blockText(blocks, true) };
-    } catch (reason) {
-      partial = true;
-      console.warn(reason instanceof Error ? reason.message : "Public article index read failed");
-      return { ...toPost(page), body: "", searchBody: "" };
-    }
-  });
-  const corpus = { documents, partial };
-  publicCorpusCache.set(cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, corpus });
-  return corpus;
+  const pending = (async () => {
+    const pages = await queryPosts(env, undefined, 100);
+    const publicPages = pages.filter((page) => !plain(page.properties?.password));
+    let partial = false;
+    const documents = await mapWithConcurrency(publicPages, 2, async (page) => {
+      try {
+        const state: BlockReadState = { remaining: MAX_INDEX_BLOCKS_PER_POST, truncated: false };
+        const blocks = await getBlockChildren(env, page.id, state, 0);
+        if (state.truncated) partial = true;
+        return { ...toPost(page), body: blockText(blocks), searchBody: blockText(blocks, true) };
+      } catch (reason) {
+        partial = true;
+        console.warn(reason instanceof Error ? reason.message : "Public article index read failed");
+        return { ...toPost(page), body: "", searchBody: "" };
+      }
+    });
+    const corpus = { documents, partial };
+    publicCorpusCache.set(cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, corpus });
+    return corpus;
+  })();
+  publicCorpusCache.set(cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, pending });
+  try { return await pending; }
+  catch (reason) {
+    publicCorpusCache.delete(cacheKey);
+    throw reason;
+  }
 }
 
 async function notionPost(env: Env, slug: string, request: Request): Promise<Response> {
@@ -1144,19 +1154,21 @@ async function mapWithConcurrency<T, U>(items: T[], concurrency: number, mapper:
   return results;
 }
 
-function blockText(blocks: any[], includeCode = false): string {
+function blockText(blocks: any[], includeCode = false, maxChars = MAX_INDEX_CHARS_PER_POST): string {
   const fragments: string[] = [];
+  let length = 0;
   const visit = (items: any[]) => {
     for (const block of items || []) {
+      if (length >= maxChars) return;
       if (block.type === "code" && !includeCode) continue;
       const rich = Array.isArray(block.richText) ? block.richText.map((item: any) => item.text || "").join("") : "";
-      if (rich) fragments.push(rich);
-      if (typeof block.caption === "string" && block.caption) fragments.push(block.caption);
+      if (rich) { fragments.push(rich); length += rich.length + 1; }
+      if (typeof block.caption === "string" && block.caption) { fragments.push(block.caption); length += block.caption.length + 1; }
       if (Array.isArray(block.children)) visit(block.children);
     }
   };
   visit(blocks);
-  return fragments.join("\n");
+  return fragments.join("\n").slice(0, maxChars);
 }
 
 async function notionFetch(env: Env, path: string, init: RequestInit = {}): Promise<any> {
@@ -1164,10 +1176,11 @@ async function notionFetch(env: Env, path: string, init: RequestInit = {}): Prom
     const response = await fetch(`https://api.notion.com/v1${path}`, { ...init, headers: { authorization: `Bearer ${env.NOTION_TOKEN}`, "notion-version": NOTION_VERSION, "content-type": "application/json", ...init.headers } });
     const payload = await response.json().catch(() => ({}));
     if (response.ok) return payload;
-    if (response.status !== 429 || attempt === 4) throw new Error(`Notion ${response.status}: ${payload.message || "request failed"}`);
+    if (response.status !== 429 || attempt === 2) throw new Error(`Notion ${response.status}: ${payload.message || "request failed"}`);
     const retryHeader = response.headers.get("retry-after");
     const retryAfter = retryHeader === null ? Number.NaN : Number(retryHeader);
-    const delay = Number.isFinite(retryAfter) ? Math.max(0, retryAfter * 1000) : 350 * (attempt + 1);
+    const jitter = Math.floor(Math.random() * 120);
+    const delay = Number.isFinite(retryAfter) ? Math.max(0, retryAfter * 1000) : 350 * (2 ** attempt) + jitter;
     await new Promise((resolve) => setTimeout(resolve, Math.min(delay, 3_000)));
   }
   throw new Error("Notion request failed after retries");
