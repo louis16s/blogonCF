@@ -52,6 +52,7 @@ const headingIndexCache = new Map<string, { expiresAt: number; headings?: Headin
 const headingJobCache = new Map<string, HeadingIndexJob>();
 const contentSourceCache = new Map<string, { expiresAt: number; id: string }>();
 const configRowsCache = new Map<string, { expiresAt: number; rows?: NotionConfigPage[]; pending?: Promise<NotionConfigPage[]> }>();
+const expensiveRequestWindows = new Map<string, { startedAt: number; count: number }>();
 
 type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "notion" };
 type SearchDocument = ReturnType<typeof toPost> & { body: string; searchBody: string };
@@ -70,10 +71,18 @@ const worker = {
     if (url.pathname === "/api/content/posts" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionPosts(env, request, ctx));
     if (url.pathname === "/api/content/navigation" && request.method === "GET") return notionNavigation(env);
     if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
-    if (url.pathname === "/api/content/search" && request.method === "GET") return notionSearch(env, url);
+    if (url.pathname === "/api/content/search" && request.method === "GET") {
+      const limited = checkExpensiveRequest(request, "search", 20, 60_000);
+      if (limited) return limited;
+      return notionSearch(env, url);
+    }
     if (url.pathname === "/api/content/rss-feeds" && request.method === "GET") return notionExternalRss(env, url);
     if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url, request, env.NOTION_TOKEN);
-    if (url.pathname === "/api/content/word-cloud" && request.method === "GET") return notionWordCloud(env);
+    if (url.pathname === "/api/content/word-cloud" && request.method === "GET") {
+      const limited = checkExpensiveRequest(request, "word-cloud", 2, 10 * 60_000);
+      if (limited) return limited;
+      return notionWordCloud(env);
+    }
     if (url.pathname === "/api/content/unlock-session" && request.method === "GET") return notionUnlockSession(env, request, url);
     if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
     if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request);
@@ -538,6 +547,7 @@ async function getPublicCorpus(env: Env): Promise<PublicCorpus> {
   const cached = publicCorpusCache.get(cacheKey);
   if (cached?.corpus && cached.expiresAt > Date.now()) return cached.corpus;
   if (cached?.pending) return cached.pending;
+  const staleCorpus = cached?.corpus;
 
   const pending = (async () => {
     const pages = await queryPosts(env, undefined, 100);
@@ -560,6 +570,13 @@ async function getPublicCorpus(env: Env): Promise<PublicCorpus> {
     return corpus;
   })();
   publicCorpusCache.set(cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, pending });
+  if (staleCorpus) {
+    void pending.catch((reason) => {
+      if (publicCorpusCache.get(cacheKey)?.pending === pending) publicCorpusCache.delete(cacheKey);
+      console.warn(reason instanceof Error ? reason.message : "Public article index refresh failed");
+    });
+    return staleCorpus;
+  }
   try { return await pending; }
   catch (reason) {
     publicCorpusCache.delete(cacheKey);
@@ -783,6 +800,25 @@ async function advanceHeadingIndex(env: Env, pageId: string, version: string): P
 }
 
 function urlBoolean(url: URL, key: string): boolean { return /^(?:1|true|yes)$/i.test(url.searchParams.get(key) || ""); }
+
+function checkExpensiveRequest(request: Request, route: string, limit: number, windowMs: number): Response | null {
+  const ip = request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim() || "unknown";
+  const key = `${route}:${ip}`;
+  const now = Date.now();
+  const current = expensiveRequestWindows.get(key);
+  if (!current || current.startedAt <= now - windowMs) {
+    expensiveRequestWindows.set(key, { startedAt: now, count: 1 });
+  } else if (current.count >= limit) {
+    const retryAfter = Math.max(1, Math.ceil((current.startedAt + windowMs - now) / 1000));
+    return Response.json({ error: "请求过于频繁，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(retryAfter) } });
+  } else {
+    current.count += 1;
+  }
+  if (expensiveRequestWindows.size > 2_000) {
+    for (const [windowKey, window] of expensiveRequestWindows) if (window.startedAt <= now - windowMs) expensiveRequestWindows.delete(windowKey);
+  }
+  return null;
+}
 
 async function notionChildDatabase(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
