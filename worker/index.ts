@@ -70,19 +70,25 @@ const worker = {
     if (url.pathname === "/favicon.ico" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedConfigAsset(request, env, ctx, () => notionSiteIcon(env, request)));
     if (url.pathname.startsWith("/_notion/config-image/") && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedConfigAsset(request, env, ctx, () => notionConfigImage(env, url)));
     if (url.pathname === "/api/content/posts" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionPosts(env, request, ctx));
-    if (url.pathname === "/api/content/navigation" && request.method === "GET") return notionNavigation(env);
-    if (url.pathname === "/api/content/config" && request.method === "GET") return notionSiteConfig(env);
+    if (url.pathname === "/api/content/navigation" && request.method === "GET") {
+      return cachedPublicApi(request, env, ctx, "navigation", 300, () => notionNavigation(env));
+    }
+    if (url.pathname === "/api/content/config" && request.method === "GET") {
+      return cachedPublicApi(request, env, ctx, "config", 300, () => notionSiteConfig(env));
+    }
     if (url.pathname === "/api/content/search" && request.method === "GET") {
-      const limited = checkExpensiveRequest(request, "search", 20, 60_000);
-      if (limited) return limited;
-      return notionSearch(env, url, ctx);
+      return cachedPublicApi(request, env, ctx, "search", 120, async () => {
+        const limited = checkExpensiveRequest(request, "search", 20, 60_000);
+        return limited || notionSearch(env, url, ctx);
+      });
     }
     if (url.pathname === "/api/content/rss-feeds" && request.method === "GET") return notionExternalRss(env, url);
     if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url, request, env.NOTION_TOKEN, env.DB);
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") {
-      const limited = checkExpensiveRequest(request, "word-cloud", 2, 10 * 60_000);
-      if (limited) return limited;
-      return notionWordCloud(env, ctx);
+      return cachedPublicApi(request, env, ctx, "word-cloud", 900, async () => {
+        const limited = checkExpensiveRequest(request, "word-cloud", 2, 10 * 60_000);
+        return limited || notionWordCloud(env, ctx);
+      });
     }
     if (url.pathname === "/api/content/unlock-session" && request.method === "GET") return notionUnlockSession(env, request, url);
     if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
@@ -450,6 +456,50 @@ async function cachedPublicDocument(request: Request, env: Env, ctx: ExecutionCo
   headers.set("cache-control", "public, max-age=300, stale-while-revalidate=86400");
   const cacheable = new Response(response.body, { status: response.status, headers });
   if (cache) ctx.waitUntil(cache.put(key, cacheable.clone()));
+  return cacheable;
+}
+
+async function cachedPublicApi(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  namespace: string,
+  maxAgeSeconds: number,
+  load: () => Promise<Response>,
+): Promise<Response> {
+  const cache = defaultWorkerCache();
+  // Keep unit tests and local Miniflare behavior identical when Cache API is
+  // unavailable; production Workers have the default cache binding enabled.
+  if (!cache) return load();
+
+  const keyUrl = new URL(request.url);
+  const canonical = publicSiteOrigin(env, keyUrl);
+  keyUrl.protocol = canonical.protocol;
+  keyUrl.host = canonical.host;
+  const sortedParams = [...keyUrl.searchParams.entries()].sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+    leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue));
+  keyUrl.search = new URLSearchParams(sortedParams).toString();
+  keyUrl.searchParams.set("schema", "1");
+  keyUrl.searchParams.set("cache", namespace);
+  keyUrl.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
+  keyUrl.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
+  const key = new Request(keyUrl.toString(), { method: "GET" });
+  const cached = await cache.match(key).catch(() => undefined);
+  if (cached) {
+    const headers = new Headers(cached.headers);
+    headers.set("x-blog-cache", "hit");
+    return new Response(cached.body, { status: cached.status, headers });
+  }
+
+  const response = await load();
+  if (!response.ok) return response;
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", `public, max-age=${maxAgeSeconds}, stale-while-revalidate=86400`);
+  headers.set("x-blog-cache", "miss");
+  const cacheable = new Response(response.body, { status: response.status, headers });
+  ctx.waitUntil(cache.put(key, cacheable.clone()).catch((reason) => {
+    console.warn(reason instanceof Error ? reason.message : "Public API cache write failed");
+  }));
   return cacheable;
 }
 

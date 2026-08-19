@@ -961,6 +961,40 @@ test("navigation endpoint returns only live Notion-configured jump links", async
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("public JSON endpoints reuse the edge cache across Worker isolates", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const originalCaches = globalThis.caches;
+  const entries = new Map();
+  let upstreamCalls = 0;
+  globalThis.caches = {
+    default: {
+      async match(key) { return entries.get(key.url)?.clone(); },
+      async put(key, response) { entries.set(key.url, response.clone()); },
+    },
+  };
+  globalThis.fetch = async () => {
+    upstreamCalls += 1;
+    return Response.json({ results: [
+      { id: "author", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "缓存作者" }] } } },
+    ] });
+  };
+  try {
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_CONFIG_DATA_SOURCE_ID: "edge-config" };
+    const first = await worker.fetch(new Request("https://cache.example/api/content/config"), env, context);
+    const second = await worker.fetch(new Request("https://cache.example/api/content/config"), env, context);
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(first.headers.get("x-blog-cache"), "miss");
+    assert.equal(second.headers.get("x-blog-cache"), "hit");
+    assert.equal(upstreamCalls, 1, "the second request should not traverse Notion");
+    assert.deepEqual(await second.json(), await first.clone().json());
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.caches = originalCaches;
+  }
+});
+
 test("navigation endpoint follows Notion pagination", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
