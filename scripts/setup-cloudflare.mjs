@@ -47,8 +47,14 @@ async function main() {
   const databaseName = `${workerName}-rate-limit`;
   prompt.close();
 
-  const whoami = run(["exec", "wrangler", "whoami"], { allowFailure: true });
-  if (whoami.status !== 0) run(["exec", "wrangler", "login"]);
+  // `wrangler whoami` can exit successfully while printing "not
+  // authenticated". Use the same preflight as normal deploys so setup does
+  // not reach D1 with an invalid bearer token.
+  const auth = run(["run", "cloudflare:auth"], { allowFailure: true });
+  if (auth.status !== 0) {
+    run(["exec", "wrangler", "login"]);
+    run(["run", "cloudflare:auth"]);
+  }
 
   const list = run(["exec", "wrangler", "d1", "list", "--json"], { capture: true });
   const databases = JSON.parse(list.stdout || "[]");
