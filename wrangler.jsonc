@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "blogincf",
+  "name": "blogoncf",
   "main": "dist/server/index.js",
   // Keep this within the compatibility range supported by the pinned
   // Cloudflare Vite/Miniflare runtime so `pnpm dev` and production agree.

@@ -176,7 +176,7 @@ async function notionSiteIcon(env: Env, request: Request): Promise<Response> {
   try {
     const rows = await queryConfigRows(env);
     const fileResponse = await notionConfigImageByKey(env, "FAVICON_URL", rows);
-    if (fileResponse) return fileResponse;
+    if (fileResponse?.ok) return fileResponse;
     const config = toPublicSiteConfig(rows);
     if (!config.favicon || config.favicon === "/favicon.svg") return env.ASSETS.fetch(new Request(new URL("/favicon.svg", request.url)));
     const target = new URL(config.favicon, request.url);
@@ -202,8 +202,13 @@ async function notionConfigImageByKey(env: Env, key: string, rows?: NotionConfig
   try { source = new URL(rawUrl); }
   catch { return null; }
   if (source.protocol !== "https:" || !NOTION_FILE_HOSTS.has(source.hostname)) return null;
-  const response = await fetch(source, { redirect: "manual" });
-  if (!response.ok || !response.body) return error(response.status || 502, "Config image is temporarily unavailable");
+  let response: Response;
+  try {
+    response = await fetch(source, { redirect: "manual", signal: AbortSignal.timeout(8_000) });
+  } catch {
+    return null;
+  }
+  if (!response.ok || !response.body) return response.status >= 500 ? null : error(response.status || 502, "Config image is temporarily unavailable");
   const contentType = response.headers.get("content-type")?.split(";", 1)[0].toLocaleLowerCase() || "";
   const contentLength = Number(response.headers.get("content-length") || 0);
   if (!contentType.startsWith("image/")) return error(415, "Unsupported config image response");
