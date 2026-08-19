@@ -5,7 +5,6 @@ import { THEME_BOOTSTRAP_SCRIPT } from "./components/introState";
 import { DEFAULT_SITE_CONFIG, type SiteConfig } from "./data/types";
 import { siteThemeVariables } from "../shared/site-config";
 import "./globals.css";
-import "katex/dist/katex.min.css";
 
 function metadataBase(value: string | null): URL {
   try { return new URL(value || "https://530555.xyz"); }

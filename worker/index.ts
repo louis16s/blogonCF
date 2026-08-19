@@ -4,6 +4,7 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } fr
 import handler from "vinext/server/app-router-entry";
 import { clearPasswordAttempts, getPasswordAttemptStatus, recordPasswordFailure, type PasswordRateLimitDatabase } from "../db/rate-limit";
 import { deleteHeadingJob, readHeadingCache, readHeadingJob, writeHeadingCache, writeHeadingJob, type HeadingIndexJob, type HeadingIndexTask } from "../db/heading-cache";
+import { deleteContentIndexPage, hasContentIndex, readContentIndex, readContentIndexVersions, writeContentIndex, type IndexedContentDocument } from "../db/content-index";
 import { clearArticlePayload, storeArticlePayload, type ArticlePayload } from "../server/article-context";
 import { clearHomePayload, storeHomePayload, type HomePayload } from "../server/home-context";
 import { buildWordCloud, normalizeSearchText } from "../shared/wordCloud.js";
@@ -54,9 +55,9 @@ const contentSourceCache = new Map<string, { expiresAt: number; id: string }>();
 const configRowsCache = new Map<string, { expiresAt: number; rows?: NotionConfigPage[]; pending?: Promise<NotionConfigPage[]> }>();
 const expensiveRequestWindows = new Map<string, { startedAt: number; count: number }>();
 
-type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "notion" };
+type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "d1" | "notion" };
 type SearchDocument = ReturnType<typeof toPost> & { body: string; searchBody: string };
-type PublicCorpus = { documents: SearchDocument[]; partial: boolean };
+type PublicCorpus = { documents: SearchDocument[]; partial: boolean; source: "d1" | "notion" };
 type WorkerCacheStorage = CacheStorage & { default?: Cache };
 type HeadingSummary = { id: string; label: string; level: number };
 type SiteConfigPayload = SiteConfig;
@@ -74,14 +75,14 @@ const worker = {
     if (url.pathname === "/api/content/search" && request.method === "GET") {
       const limited = checkExpensiveRequest(request, "search", 20, 60_000);
       if (limited) return limited;
-      return notionSearch(env, url);
+      return notionSearch(env, url, ctx);
     }
     if (url.pathname === "/api/content/rss-feeds" && request.method === "GET") return notionExternalRss(env, url);
-    if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url, request, env.NOTION_TOKEN);
+    if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url, request, env.NOTION_TOKEN, env.DB);
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") {
       const limited = checkExpensiveRequest(request, "word-cloud", 2, 10 * 60_000);
       if (limited) return limited;
-      return notionWordCloud(env);
+      return notionWordCloud(env, ctx);
     }
     if (url.pathname === "/api/content/unlock-session" && request.method === "GET") return notionUnlockSession(env, request, url);
     if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
@@ -119,9 +120,10 @@ const worker = {
       setSiteConfigHeader(headers, payload.config);
       try {
         const rendered = await handler.fetch(new Request(request, { headers }), env, ctx);
-        return payload.status && payload.status >= 400 && rendered.status < 400
-          ? new Response(rendered.body, { status: payload.status, headers: rendered.headers })
-          : rendered;
+        const status = payload.status && payload.status >= 400 && rendered.status < 400 ? payload.status : rendered.status;
+        const responseHeaders = new Headers(rendered.headers);
+        responseHeaders.set("cache-control", renderedCacheControl(request, payload.status, Boolean(payload.post?.locked)));
+        return new Response(rendered.body, { status, headers: responseHeaders });
       }
       finally { clearArticlePayload(key); }
     }
@@ -135,9 +137,10 @@ const worker = {
       setSiteConfigHeader(headers, payload.config);
       try {
         const rendered = await handler.fetch(new Request(request, { headers }), env, ctx);
-        return payload.status && payload.status >= 400 && rendered.status < 400
-          ? new Response(rendered.body, { status: payload.status, headers: rendered.headers })
-          : rendered;
+        const status = payload.status && payload.status >= 400 && rendered.status < 400 ? payload.status : rendered.status;
+        const responseHeaders = new Headers(rendered.headers);
+        responseHeaders.set("cache-control", renderedCacheControl(request, payload.status));
+        return new Response(rendered.body, { status, headers: responseHeaders });
       }
       finally { clearArticlePayload(key); }
     }
@@ -148,15 +151,74 @@ const worker = {
       headers.set("x-blog-home-context", key);
       setSiteOriginHeader(headers, env, url);
       setSiteConfigHeader(headers, payload.config);
-      try { return await handler.fetch(new Request(request, { headers }), env, ctx); }
+      try {
+        const rendered = await handler.fetch(new Request(request, { headers }), env, ctx);
+        const responseHeaders = new Headers(rendered.headers);
+        responseHeaders.set("cache-control", renderedCacheControl(request));
+        return new Response(rendered.body, { status: rendered.status, headers: responseHeaders });
+      }
       finally { clearHomePayload(key); }
     }
     return handler.fetch(requestWithSiteOrigin(request, env), env, ctx);
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(refreshContentIndex(env));
     ctx.waitUntil(refreshExternalFeeds(env));
   },
 };
+
+function contentIndexSourceKey(env: Env): string {
+  return `${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID}:${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}`;
+}
+
+function renderedCacheControl(request: Request, status?: number, privateContent = false): string {
+  // RSC/soft-navigation responses vary by router headers and must never be
+  // served as the cached HTML document for another request.
+  if (isClientNavigationRequest(request) || (status && status >= 400)) return "no-store";
+  if (privateContent) return "private, no-store";
+  return "public, max-age=300, stale-while-revalidate=86400";
+}
+
+function isClientNavigationRequest(request: Request): boolean {
+  const accept = request.headers.get("accept") || "";
+  return request.headers.has("rsc")
+    || request.headers.has("next-router-state-tree")
+    || request.headers.has("next-router-prefetch")
+    || request.headers.get("purpose") === "prefetch"
+    || accept.includes("text/x-component");
+}
+
+async function refreshContentIndex(env: Env): Promise<void> {
+  if (!env.NOTION_TOKEN || !env.DB) return;
+  try {
+    const sourceKey = contentIndexSourceKey(env);
+    const pages = await queryPosts(env, undefined, 100);
+    const versions = new Map((await readContentIndexVersions(env.DB, sourceKey)).map((row) => [row.page_id, row]));
+    const currentIds = new Set<string>();
+    for (const page of pages) {
+      const pageId = normalizeNotionId(page.id) || page.id;
+      currentIds.add(pageId);
+      const lastEdited = typeof page.last_edited_time === "string" ? page.last_edited_time : "";
+      const locked = Boolean(plain(page.properties?.password));
+      const existing = versions.get(pageId);
+      if (existing && existing.last_edited_time === lastEdited && Boolean(existing.locked) === locked) continue;
+      const document = await buildIndexedDocument(env, page);
+      await writeContentIndex(env.DB, sourceKey, pageId, lastEdited, document);
+    }
+    for (const pageId of versions.keys()) if (!currentIds.has(pageId)) await deleteContentIndexPage(env.DB, pageId);
+  } catch (reason) {
+    console.warn(reason instanceof Error ? reason.message : "Content index refresh failed");
+  }
+}
+
+async function buildIndexedDocument(env: Env, page: any): Promise<IndexedContentDocument> {
+  const post = toPost(page);
+  const locked = Boolean(post.locked);
+  if (locked) return { ...post, body: "", searchBody: "", partial: false };
+  const state = { remaining: MAX_INDEX_BLOCKS_PER_POST, truncated: false };
+  const blocks = await getBlockChildren(env, page.id, state, 0);
+  return { ...post, body: blockText(blocks), searchBody: blockText(blocks, true), partial: state.truncated };
+}
 
 async function refreshExternalFeeds(env: Env): Promise<void> {
   if (!env.NOTION_TOKEN) return;
@@ -167,7 +229,7 @@ async function refreshExternalFeeds(env: Env): Promise<void> {
   for (const page of candidates.slice(0, 4)) {
     const state = newBlockReadState();
     const urls = extractExternalUrls(await getBlockChildren(env, page.id, state, 0)).slice(0, MAX_RSS_FEEDS);
-    await mapWithConcurrency(urls, 2, (feedUrl) => fetchExternalFeed(feedUrl, env.DB, true));
+    await mapWithConcurrency(urls, 2, (feedUrl) => fetchExternalFeed(feedUrl, env.DB));
   }
 }
 
@@ -482,40 +544,40 @@ async function notionNavigation(env: Env): Promise<Response> {
   } catch (reason) { return notionError(reason); }
 }
 
-async function notionWordCloud(env: Env): Promise<Response> {
+async function notionWordCloud(env: Env, ctx?: ExecutionContext): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   const config = await queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig());
   if (!config.wordCloudEnabled) return error(404, "Word cloud is disabled");
   const cacheKey = `${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}:${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID || "configured"}`;
   const cached = wordCloudCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
-    return Response.json(cached.payload, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
+    return Response.json(cached.payload, { headers: { ...jsonHeaders, "cache-control": "public, max-age=900, stale-while-revalidate=86400" } });
   }
 
   try {
-    const corpus = await getPublicCorpus(env);
+    const corpus = await getPublicCorpus(env, ctx);
     const payload: WordCloudPayload = {
       words: buildWordCloud(corpus.documents.map(({ id, title, body }) => ({ id, title, body }))),
       sourceCount: corpus.documents.length,
       partial: corpus.partial,
-      source: "notion",
+      source: corpus.source,
     };
     wordCloudCache.set(cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, payload });
-    return Response.json(payload, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
+    return Response.json(payload, { headers: { ...jsonHeaders, "cache-control": "public, max-age=900, stale-while-revalidate=86400" } });
   } catch (reason) { return notionError(reason); }
 }
 
-async function notionSearch(env: Env, url: URL): Promise<Response> {
+async function notionSearch(env: Env, url: URL, ctx?: ExecutionContext): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   const config = await queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig());
   if (!config.searchEnabled) return error(404, "Search is disabled");
   const query = normalizeSearchText(url.searchParams.get("q") || "");
   const warming = url.searchParams.get("warm") === "1";
-    if (!query && !warming) return Response.json({ matches: [], partial: false, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+  if (!query && !warming) return Response.json({ matches: [], partial: false, source: "index" }, { headers: { ...jsonHeaders, "cache-control": "public, max-age=60" } });
   if (query.length > 100) return error(400, "Search query is too long");
   try {
-    const corpus = await getPublicCorpus(env);
-    if (warming) return Response.json({ matches: [], warmed: true, partial: corpus.partial, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    const corpus = await getPublicCorpus(env, ctx);
+    if (warming) return Response.json({ matches: [], warmed: true, partial: corpus.partial, source: corpus.source }, { headers: { ...jsonHeaders, "cache-control": "public, max-age=60" } });
     const matches = corpus.documents
       .filter((document) => normalizeSearchText([
         document.title,
@@ -525,7 +587,7 @@ async function notionSearch(env: Env, url: URL): Promise<Response> {
         document.searchBody,
       ].join("\n")).includes(query))
       .map((document) => document.id);
-    return Response.json({ matches, partial: corpus.partial, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    return Response.json({ matches, partial: corpus.partial, source: corpus.source }, { headers: { ...jsonHeaders, "cache-control": "public, max-age=120, stale-while-revalidate=600" } });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -547,30 +609,53 @@ async function notionExternalRss(env: Env, url: URL): Promise<Response> {
   } catch (reason) { return notionError(reason); }
 }
 
-async function getPublicCorpus(env: Env): Promise<PublicCorpus> {
+async function getPublicCorpus(env: Env, ctx?: ExecutionContext): Promise<PublicCorpus> {
   const cacheKey = `${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}:${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID || "configured"}`;
   const cached = publicCorpusCache.get(cacheKey);
   if (cached?.corpus && cached.expiresAt > Date.now()) return cached.corpus;
   if (cached?.pending) return cached.pending;
   const staleCorpus = cached?.corpus;
 
+  // D1 is the cross-isolate fallback. It contains only public normalized text,
+  // so search and word-cloud requests do not need to traverse Notion after the
+  // hourly sync (or the first cold rebuild).
+  const sourceKey = contentIndexSourceKey(env);
+  const indexed = await readContentIndex(env.DB, sourceKey);
+  if (indexed.length || await hasContentIndex(env.DB, sourceKey)) {
+    const corpus = { documents: indexed, partial: indexed.some((document) => document.partial), source: "d1" as const };
+    publicCorpusCache.set(cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, corpus });
+    return corpus;
+  }
+
   const pending = (async () => {
     const pages = await queryPosts(env, undefined, 100);
     const publicPages = pages.filter((page) => !plain(page.properties?.password));
     let partial = false;
-    const documents = await mapWithConcurrency(publicPages, 2, async (page) => {
+    const indexedDocuments = await mapWithConcurrency(publicPages, 2, async (page) => {
       try {
         const state: BlockReadState = { remaining: MAX_INDEX_BLOCKS_PER_POST, truncated: false };
         const blocks = await getBlockChildren(env, page.id, state, 0);
         if (state.truncated) partial = true;
-        return { ...toPost(page), body: blockText(blocks), searchBody: blockText(blocks, true) };
+        return { document: { ...toPost(page), body: blockText(blocks), searchBody: blockText(blocks, true), partial: state.truncated }, lastEditedTime: typeof page.last_edited_time === "string" ? page.last_edited_time : "" };
       } catch (reason) {
         partial = true;
         console.warn(reason instanceof Error ? reason.message : "Public article index read failed");
-        return { ...toPost(page), body: "", searchBody: "" };
+        return { document: { ...toPost(page), body: "", searchBody: "", partial: true }, lastEditedTime: typeof page.last_edited_time === "string" ? page.last_edited_time : "" };
       }
     });
-    const corpus = { documents, partial };
+    const documents = indexedDocuments.map(({ document }) => document);
+    const corpus = { documents, partial, source: "notion" as const };
+    if (env.DB) {
+      const persist = Promise.all(indexedDocuments.map(({ document, lastEditedTime }) => writeContentIndex(
+        env.DB,
+        contentIndexSourceKey(env),
+        document.id,
+        lastEditedTime,
+        document,
+      )));
+      if (ctx) ctx.waitUntil(persist);
+      else await persist;
+    }
     publicCorpusCache.set(cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, corpus });
     return corpus;
   })();
@@ -622,9 +707,7 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
       }
       if (env.DB) await clearPasswordAttempts(env.DB, attemptKey);
       const blockState = newBlockReadState();
-      const [chunk, headings] = cursor
-        ? [await getBlockChildrenChunk(env, page.id, blockState, 0, cursor), undefined]
-        : await Promise.all([getBlockChildrenChunk(env, page.id, blockState, 0, cursor), getBlockHeadings(env, page.id)]);
+      const { chunk, headings } = await readArticleChunk(env, page.id, blockState, cursor);
       await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
       await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id);
       const headers = new Headers({ ...jsonHeaders, "cache-control": "no-store" });
@@ -632,9 +715,7 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
       return Response.json({ post: { ...post, locked: true }, locked: false, blocks: chunk.blocks, headings, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers });
     }
     const blockState = newBlockReadState();
-    const [chunk, headings] = cursor
-      ? [await getBlockChildrenChunk(env, page.id, blockState, 0, cursor), undefined]
-      : await Promise.all([getBlockChildrenChunk(env, page.id, blockState, 0, cursor), getBlockHeadings(env, page.id)]);
+    const { chunk, headings } = await readArticleChunk(env, page.id, blockState, cursor);
     await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
     await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id);
     return Response.json({ post: { ...post, locked: Boolean(expectedPassword) }, locked: false, blocks: chunk.blocks, headings, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
@@ -662,9 +743,7 @@ async function notionSitePage(env: Env, slug: string, request: Request): Promise
     const page = await findSitePage(env, slug);
     if (!page) return error(404, "Page not found");
     const blockState = newBlockReadState();
-    const [chunk, headings] = cursor
-      ? [await getBlockChildrenChunk(env, page.id, blockState, 0, cursor), undefined]
-      : await Promise.all([getBlockChildrenChunk(env, page.id, blockState, 0, cursor), getBlockHeadings(env, page.id)]);
+    const { chunk, headings } = await readArticleChunk(env, page.id, blockState, cursor);
     await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
     await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id);
     return Response.json({
@@ -726,7 +805,7 @@ async function childPageResponse(env: Env, childPage: any, rootPageId: string, c
     // body chunk happened to load first. Wait for every Notion cursor here so
     // the client can only ever replace its TOC with a complete result.
     const index = await advanceHeadingIndex(env, childPage.id, childPage.last_edited_time || "");
-    if (!index.complete) return Response.json({ pending: true }, { status: 202, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": "0" } });
+    if (!index.complete) return Response.json({ pending: true }, { status: 202, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": "1" } });
     return Response.json({ child: { id: childPage.id, headings: index.headings } }, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
   }
   const blockState = newBlockReadState();
@@ -1182,6 +1261,32 @@ async function getBlockHeadings(env: Env, id: string): Promise<HeadingSummary[]>
   return result;
 }
 
+async function readArticleChunk(env: Env, pageId: string, budget: BlockReadState, cursor = "") {
+  const chunk = await getBlockChildrenChunk(env, pageId, budget, 0, cursor);
+  if (cursor) return { chunk, headings: undefined as HeadingSummary[] | undefined };
+  // Most articles fit in the initial chunk. Reuse its normalized block tree
+  // for the TOC instead of traversing the same Notion blocks a second time.
+  if (!chunk.nextCursor && !budget.truncated) return { chunk, headings: headingsFromBlocks(chunk.blocks) };
+  // Long/deep pages still receive a complete index, but only pay the second
+  // traversal when the first chunk cannot contain the whole article.
+  return { chunk, headings: await getBlockHeadings(env, pageId) };
+}
+
+function headingsFromBlocks(blocks: any[]): HeadingSummary[] {
+  const result: HeadingSummary[] = [];
+  const visit = (items: any[]) => {
+    for (const block of items || []) {
+      if (/^heading_[123]$/.test(block.type)) {
+        const label = Array.isArray(block.richText) ? block.richText.map((item: any) => item.text || "").join("").trim() : "";
+        if (label) result.push({ id: block.id, label, level: Number(block.type.at(-1)) });
+      }
+      if (Array.isArray(block.children)) visit(block.children);
+    }
+  };
+  visit(blocks);
+  return result;
+}
+
 async function mapWithConcurrency<T, U>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<U>): Promise<U[]> {
   const results = new Array<U>(items.length);
   let nextIndex = 0;
@@ -1213,7 +1318,7 @@ function blockText(blocks: any[], includeCode = false, maxChars = MAX_INDEX_CHAR
 }
 
 async function notionFetch(env: Env, path: string, init: RequestInit = {}): Promise<any> {
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     const response = await fetch(`https://api.notion.com/v1${path}`, { ...init, headers: { authorization: `Bearer ${env.NOTION_TOKEN}`, "notion-version": NOTION_VERSION, "content-type": "application/json", ...init.headers } });
     const payload = await response.json().catch(() => ({}));
     if (response.ok) return payload;

@@ -4,7 +4,6 @@ import { ArrowLeft, ArrowRight, ArrowSquareOut, CaretRight, Eye, EyeSlash, FileT
 import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChildDatabase, ChildPage, ContentBlock, Post, SiteConfig } from "../data/types";
 import { withoutHiddenNotionBlocks } from "../../shared/contentVisibility.js";
-import { CONTENT_REFRESH_INTERVAL_MS } from "./siteBootstrap";
 import { useArticleToc } from "./ArticleTocContext";
 
 const HEIC_DECODE_CONCURRENCY = 3;
@@ -57,10 +56,23 @@ async function requestChildPage(endpoint: string, payload: Record<string, unknow
 }
 
 async function requestChildHeadings(endpoint: string, payload: Record<string, unknown>, signal: AbortSignal): Promise<TocItem[]> {
-  for (let attempt = 0; attempt < 20; attempt++) {
+  // Heading indexes are built incrementally on the Worker. Avoid a tight
+  // request loop while D1 resumes the job; a small exponential backoff keeps
+  // the UI responsive without turning one click into 20 Worker invocations.
+  for (let attempt = 0; attempt < 5; attempt++) {
     const response = await fetch(`${endpoint}?headings=1`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal });
     const data = await response.json();
-    if (response.status === 202) continue;
+    if (response.status === 202) {
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const delay = Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(4000, retryAfter * 1000)
+        : Math.min(4000, 250 * 2 ** attempt);
+      await new Promise<void>((resolve, reject) => {
+        const timer = window.setTimeout(resolve, delay);
+        signal.addEventListener("abort", () => { window.clearTimeout(timer); reject(signal.reason); }, { once: true });
+      });
+      continue;
+    }
     if (!response.ok) throw new Error(data.error || "目录暂时无法读取");
     return Array.isArray(data.child?.headings) ? data.child.headings : [];
   }
@@ -100,8 +112,6 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const childHeadingRequestRef = useRef<AbortController | null>(null);
   const pendingHeadingIdRef = useRef("");
   const nextCursorRef = useRef(initialNextCursor);
-  const skipInitialRefresh = useRef(initialFetched);
-  const lastRefreshAt = useRef(0);
   const continuationLoadedRef = useRef(false);
   const contentEndpoint = contentKind === "page" ? "/api/content/page" : "/api/content/post";
   const childEndpoint = contentKind === "page" ? "/api/content/page-child" : "/api/content/child";
@@ -335,13 +345,13 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   };
 
   useEffect(() => {
+    // SSR already loaded this article. Periodic refreshes caused open tabs to
+    // repeatedly traverse Notion and could overwrite long-article state. The
+    // scheduled snapshot handles updates; navigation/reload is explicit.
+    if (initialFetched) return;
     const controller = new AbortController();
-    let inFlight = false;
-    const refresh = async () => {
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        const response = await fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, { signal: controller.signal, cache: "no-store", credentials: "same-origin" });
+    fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, { signal: controller.signal, cache: "no-store", credentials: "same-origin" })
+      .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
         setPost(data.post);
@@ -353,28 +363,13 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
         }
         setTruncated((current) => continuationLoadedRef.current ? Boolean(current || data.truncated) : Boolean(data.truncated));
         setError("");
-      } catch (reason) {
-        if (reason instanceof Error && reason.name !== "AbortError") {
-          setError("实时同步暂时不可用，正在显示最近内容。");
-        }
-      } finally {
-        inFlight = false;
-        lastRefreshAt.current = Date.now();
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    };
-    if (skipInitialRefresh.current) {
-      skipInitialRefresh.current = false;
-      lastRefreshAt.current = Date.now();
-    }
-    else void refresh();
-    const timer = window.setInterval(refresh, CONTENT_REFRESH_INTERVAL_MS);
-    const onVisible = () => {
-      if (document.visibilityState === "visible" && Date.now() - lastRefreshAt.current >= CONTENT_REFRESH_INTERVAL_MS) void refresh();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
-  }, [contentEndpoint, setRootCursor, slug]);
+      })
+      .catch((reason) => {
+        if (reason instanceof Error && reason.name !== "AbortError") setError("文章暂时无法读取，请刷新页面重试。");
+      })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [contentEndpoint, initialFetched, setRootCursor, slug]);
 
   useEffect(() => {
     const syncChildFromUrl = () => {
@@ -718,7 +713,7 @@ function EquationBlock({ expression }: { expression: string }) {
   const [html, setHtml] = useState("");
   useEffect(() => {
     let active = true;
-    import("katex").then(({ default: katex }) => {
+    Promise.all([import("katex/dist/katex.min.css"), import("katex")]).then(([, { default: katex }]) => {
       if (active) setHtml(katex.renderToString(expression, { throwOnError: false, strict: "ignore", trust: false, displayMode: true }));
     }).catch(() => undefined);
     return () => { active = false; };

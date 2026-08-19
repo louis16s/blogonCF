@@ -1,10 +1,11 @@
 /* External metadata and feed gateway. Kept separate from the Notion/SSR router. */
 /* eslint-disable @typescript-eslint/no-explicit-any -- normalized Notion blocks enter at this boundary. */
 import { readFeedCache, writeFeedCache } from "../db/feed-cache";
+import { readLinkPreviewCache, writeLinkPreviewCache } from "../db/link-preview-cache";
 import type { PasswordRateLimitDatabase } from "../db/rate-limit";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
-const RSS_CACHE_TTL_MS = 15 * 60 * 1000;
+const RSS_CACHE_TTL_MS = 60 * 60 * 1000;
 const LINK_PREVIEW_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const MAX_LINK_PREVIEWS = 300;
 const MAX_PREVIEW_BYTES = 600_000;
@@ -74,13 +75,23 @@ function isBlockedHostname(host: string): boolean {
     || (a === 203 && b === 0 && octets[2] === 113);
 }
 
-export async function externalLinkPreview(url: URL, request: Request, secret: string | undefined): Promise<Response> {
+export async function externalLinkPreview(url: URL, request: Request, secret: string | undefined, db?: PasswordRateLimitDatabase): Promise<Response> {
   const target = url.searchParams.get("url")?.trim() || "";
   if (!target || target.length > 2_048 || !isSafeExternalUrl(target)) return jsonError(400, "Invalid link URL");
   const signature = url.searchParams.get("signature") || "";
   if (!secret || !await verifyPreviewSignature(secret, target, signature)) return jsonError(403, "Preview URL is not authorized");
   const cached = linkPreviewCache.get(target);
   if (cached && cached.expiresAt > Date.now()) return previewResponse(cached.preview, 21_600);
+  const stored = await readLinkPreviewCache(db, target);
+  if (stored?.expires_at && stored.expires_at > Date.now()) {
+    try {
+      const preview = JSON.parse(stored.payload) as LinkPreview;
+      if (preview && typeof preview.source === "string") {
+        rememberPreview(target, preview, stored.expires_at - Date.now());
+        return previewResponse(preview, Math.min(21_600, Math.max(60, Math.ceil((stored.expires_at - Date.now()) / 1000))));
+      }
+    } catch { /* Refresh malformed rows. */ }
+  }
   const retryAfter = previewRetryAfter(request);
   if (retryAfter) return Response.json({ error: "Too many preview requests" }, { status: 429, headers: { ...JSON_HEADERS, "cache-control": "no-store", "retry-after": String(retryAfter) } });
   if (activePreviews >= MAX_ACTIVE_PREVIEWS) return Response.json({ error: "Preview service is busy" }, { status: 503, headers: { ...JSON_HEADERS, "cache-control": "no-store", "retry-after": "2" } });
@@ -101,11 +112,13 @@ export async function externalLinkPreview(url: URL, request: Request, secret: st
       const metadata = htmlMetadata(await readLimitedText(response, MAX_PREVIEW_BYTES));
       const preview = { ...metadata, source: externalSource(current, fallback.source) };
       rememberPreview(target, preview, LINK_PREVIEW_CACHE_TTL_MS);
+      await writeLinkPreviewCache(db, target, JSON.stringify(preview), Date.now(), Date.now() + LINK_PREVIEW_CACHE_TTL_MS);
       return previewResponse(preview, 21_600);
     }
   } catch { /* A domain-only card is the intended fallback. */ }
   finally { activePreviews--; }
   rememberPreview(target, fallback, 10 * 60 * 1000);
+  await writeLinkPreviewCache(db, target, JSON.stringify(fallback), Date.now(), Date.now() + 10 * 60 * 1000);
   return previewResponse(fallback, 600);
 }
 

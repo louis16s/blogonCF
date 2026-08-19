@@ -3,8 +3,6 @@
 import type { Post, SiteConfig, SiteLink, SiteNotice } from "../data/types";
 import { createSharedRequest } from "./clientState";
 
-export const CONTENT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-
 export type SiteBootstrap = {
   posts: Post[];
   links: SiteLink[];

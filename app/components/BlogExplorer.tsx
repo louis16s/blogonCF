@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
   FileText,
   LockSimple,
@@ -14,8 +14,6 @@ import {
 import { DEFAULT_SITE_CONFIG, type Post, type SiteConfig, type SiteLink, type SiteNotice } from "../data/types";
 import { ContentFooter } from "./ContentFooter";
 import { SiteSidebar } from "./SiteSidebar";
-import { createSharedRequest } from "./clientState";
-import { CONTENT_REFRESH_INTERVAL_MS } from "./siteBootstrap";
 import { normalizeSearchText } from "../../shared/wordCloud.js";
 import { siteThemeVariables } from "../../shared/site-config";
 
@@ -23,10 +21,6 @@ const ALL = "全部";
 const WordCloudDialog = dynamic(() => import("./WordCloudDialog").then((module) => module.WordCloudDialog), {
   loading: () => null,
   ssr: false,
-});
-const warmSearchIndex = createSharedRequest(async () => {
-  const response = await fetch("/api/content/search?warm=1", { cache: "default" });
-  if (!response.ok) throw new Error("Search index warm-up failed");
 });
 export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNotice, initialConfig = DEFAULT_SITE_CONFIG }: { initialPosts?: Post[]; initialLinks?: SiteLink[]; initialNotice?: SiteNotice; initialConfig?: SiteConfig }) {
   const [posts, setPosts] = useState<Post[]>(initialPosts);
@@ -42,8 +36,6 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
   const [themeReady, setThemeReady] = useState(false);
   const [wordCloudOpen, setWordCloudOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
-  const skipInitialRefresh = useRef(initialPosts.length > 0);
-  const lastRefreshAt = useRef(0);
 
   useEffect(() => {
     if (!siteConfig.wordCloudEnabled) return;
@@ -117,42 +109,25 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
   }, [dark, themeReady, siteConfig.themeToggleEnabled]);
 
   useEffect(() => {
+    // The server-rendered bootstrap and the hourly Worker sync are the source
+    // of truth. Avoid making every open tab poll Notion; retrySync remains the
+    // explicit recovery path for a failed initial request.
+    if (initialPosts.length > 0) return;
     const controller = new AbortController();
-    let inFlight = false;
-    const refresh = async () => {
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        const response = await fetch("/api/content/posts", { signal: controller.signal });
+    fetch("/api/content/posts", { signal: controller.signal })
+      .then(async (response) => {
         if (!response.ok) throw new Error("Content refresh failed");
         const data = await response.json();
-        if (Array.isArray(data.posts)) {
-          setPosts(data.posts);
-          setSiteLinks(Array.isArray(data.links) ? data.links : []);
-          setNotice(data.notice?.id && data.notice?.title ? data.notice : undefined);
-          if (data.config?.author && data.config?.since) setSiteConfig({ ...DEFAULT_SITE_CONFIG, ...data.config });
-          setSyncState("live");
-        }
-      } catch {
-        if (!controller.signal.aborted) setSyncState("unavailable");
-      } finally {
-        inFlight = false;
-        lastRefreshAt.current = Date.now();
-      }
-    };
-    if (skipInitialRefresh.current) {
-      skipInitialRefresh.current = false;
-      lastRefreshAt.current = Date.now();
-    } else {
-      void refresh();
-    }
-    const timer = window.setInterval(refresh, CONTENT_REFRESH_INTERVAL_MS);
-    const onVisible = () => {
-      if (document.visibilityState === "visible" && Date.now() - lastRefreshAt.current >= CONTENT_REFRESH_INTERVAL_MS) void refresh();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
-  }, [refreshKey]);
+        if (!Array.isArray(data.posts)) throw new Error("Invalid content response");
+        setPosts(data.posts);
+        setSiteLinks(Array.isArray(data.links) ? data.links : []);
+        setNotice(data.notice?.id && data.notice?.title ? data.notice : undefined);
+        if (data.config?.author && data.config?.since) setSiteConfig({ ...DEFAULT_SITE_CONFIG, ...data.config });
+        setSyncState("live");
+      })
+      .catch(() => { if (!controller.signal.aborted) setSyncState("unavailable"); });
+    return () => controller.abort();
+  }, [initialPosts.length, refreshKey]);
 
   useEffect(() => {
     const needle = normalizeSearchText(deferredQuery);
@@ -226,7 +201,6 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                onFocus={() => { void warmSearchIndex().catch(() => undefined); }}
                 placeholder="搜索标题、正文…"
                 aria-busy={searching}
               />

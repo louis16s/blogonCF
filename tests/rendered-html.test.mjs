@@ -148,7 +148,8 @@ test("client refresh failures preserve the last verified homepage and article co
   ]);
   assert.match(blog, /setSyncState\("unavailable"\)/);
   assert.doesNotMatch(blog, /\.catch\(\(\) => \{ setPosts\(\[\]\)/);
-  assert.match(article, /实时同步暂时不可用，正在显示最近内容/);
+  assert.match(article, /文章暂时无法读取，请刷新页面重试/);
+  assert.doesNotMatch(article, /setInterval\(refresh/);
   assert.doesNotMatch(article, /setPost\(undefined\)|setBlocks\(\[\]\)|setLocked\(false\)/);
 });
 
@@ -158,7 +159,7 @@ test("HEIC decoding survives signed URL refreshes without repeated work", async 
   assert.match(article, /sourceRef\.current = src/);
   assert.match(article, /return `\$\{block\.id\}:\$\{source\.hostname\}\$\{source\.pathname\}`/);
   assert.match(article, /\}, \[identity\]\)/);
-  assert.match(article, /if \(skipInitialRefresh\.current\) \{[\s\S]*skipInitialRefresh\.current = false/);
+  assert.doesNotMatch(article, /CONTENT_REFRESH_INTERVAL_MS|setInterval\(refresh/);
 });
 
 test("overview renders every article immediately while retaining search and category filters", async () => {
@@ -663,7 +664,7 @@ test("word-cloud endpoint reads public titles and bodies without leaking propert
   try {
     const response = await worker.fetch(new Request("http://localhost/api/content/word-cloud"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get("cache-control"), "private, max-age=300");
+    assert.match(response.headers.get("cache-control"), /public, max-age=900/);
     const payload = await response.json();
     assert.equal(payload.sourceCount, 2);
     assert.equal(payload.partial, false);
@@ -675,7 +676,7 @@ test("word-cloud endpoint reads public titles and bodies without leaking propert
 
     const bodySearch = await worker.fetch(new Request("http://localhost/api/content/search?q=cloudflare"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     assert.equal(bodySearch.status, 200);
-    assert.equal(bodySearch.headers.get("cache-control"), "no-store");
+    assert.match(bodySearch.headers.get("cache-control"), /public, max-age=120/);
     assert.deepEqual((await bodySearch.json()).matches.sort(), ["public-one", "public-two"]);
 
     const codeSearch = await worker.fetch(new Request("http://localhost/api/content/search?q=forbidden_code"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
@@ -736,7 +737,7 @@ test("news pages turn Notion-configured public feed URLs into safe RSS and Atom 
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("search prewarms its public body index and waits with skeletons before an empty result", async () => {
+test("search uses the durable public body index and waits with skeletons before an empty result", async () => {
   const [worker, blog, article, css] = await Promise.all([
     readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8"),
@@ -744,8 +745,8 @@ test("search prewarms its public body index and waits with skeletons before an e
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
   assert.match(worker, /url\.searchParams\.get\("warm"\) === "1"/);
-  assert.match(blog, /\/api\/content\/search\?warm=1/);
-  assert.match(blog, /onFocus=\{\(\) => \{ void warmSearchIndex\(\)/);
+  assert.doesNotMatch(blog, /\/api\/content\/search\?warm=1/);
+  assert.doesNotMatch(blog, /warmSearchIndex/);
   assert.doesNotMatch(blog, /requestIdleCallback/, "body indexing should start from search intent, not every homepage visit");
   assert.match(blog, /!visible\.length && searching && <div className="search-skeleton"/);
   assert.match(blog, /!visible\.length && !searching && \(/);
