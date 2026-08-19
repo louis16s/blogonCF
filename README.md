@@ -114,7 +114,7 @@ pnpm test
 pnpm release
 ```
 
-`pnpm release` 会先构建 vinext Worker，再执行 D1 迁移并通过 Wrangler 发布。Cloudflare Workers Builds 会分别调用 `pnpm build` 与 `pnpm deploy`，不会重复构建。
+`pnpm release` 会先检查 Wrangler 登录状态，再构建 vinext Worker、执行 D1 迁移并发布。Cloudflare Workers Builds 会分别调用 `pnpm build` 与 `pnpm deploy`，不会重复构建；未登录时会在迁移前直接给出认证提示，不会产生无效的远程 D1 请求。
 
 ## Notion 数据库约定
 
@@ -213,6 +213,7 @@ pnpm dev
 | `pnpm lint` | 运行 ESLint |
 | `pnpm deploy` | 迁移 D1 并部署已经构建的产物（供 Workers Builds 使用） |
 | `pnpm release` | 本地完整构建并部署 |
+| `pnpm cloudflare:auth` | 只检查 Wrangler 登录状态，不执行迁移或发布 |
 | `pnpm setup:cloudflare` | 新账号交互式初始化并部署 |
 | `pnpm db:generate` | 数据库结构变化后生成 D1 迁移 |
 

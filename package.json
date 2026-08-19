@@ -37,8 +37,9 @@
     "test": "pnpm run typecheck && pnpm run build && node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern work --ignore-pattern outputs",
     "db:generate": "drizzle-kit generate",
+    "cloudflare:auth": "node scripts/check-cloudflare-auth.mjs",
     "db:migrate": "wrangler d1 migrations apply DB --remote --config wrangler.jsonc",
-    "deploy:worker": "pnpm run db:migrate && wrangler deploy --config wrangler.jsonc",
+    "deploy:worker": "pnpm run cloudflare:auth && pnpm run db:migrate && pnpm wrangler deploy --config wrangler.jsonc",
     "deploy": "pnpm run deploy:worker",
     "release": "pnpm run build && pnpm run deploy:worker",
     "setup:cloudflare": "node scripts/setup-cloudflare.mjs"
