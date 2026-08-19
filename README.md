@@ -116,6 +116,12 @@ pnpm release
 
 `pnpm release` 会先检查 Wrangler 登录状态，再构建 vinext Worker、执行 D1 迁移并发布。Cloudflare Workers Builds 会分别调用 `pnpm build` 与 `pnpm deploy`，不会重复构建；未登录时会在迁移前直接给出认证提示，不会产生无效的远程 D1 请求。
 
+如果使用旧式 Global API Key，可临时通过环境变量提供邮箱和密钥（仅建议在本机或 CI Secret 中使用；API Token 权限更易收敛）：
+
+```bash
+CLOUDFLARE_EMAIL=你的邮箱 CLOUDFLARE_API_KEY=你的GlobalAPIKey pnpm release
+```
+
 ## Notion 数据库约定
 
 项目直接读取 Notion 数据库。字段名区分大小写时请保持一致。
