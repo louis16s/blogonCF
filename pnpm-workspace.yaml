@@ -3,6 +3,9 @@ packages:
 
 allowBuilds:
   esbuild: true
+  # sharp is an unused optional dependency in this Worker build. Explicitly
+  # deny its install script so strict CI installs do not treat it as unreviewed.
+  sharp: false
   unrs-resolver: true
   workerd: true
 ignoredOptionalDependencies:

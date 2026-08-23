@@ -4,6 +4,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Major toolchain releases need coordinated migration work. Keeping them
+      # out of automated PRs prevents incompatible TypeScript/ESLint mixtures.
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
     groups:
       production-dependencies:
         dependency-type: production
