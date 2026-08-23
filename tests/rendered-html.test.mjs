@@ -468,6 +468,8 @@ test("article raw HTML contains live title, summary, and public Notion content",
     const response = await worker.fetch(new Request("http://localhost/blog/Penang", { headers: { accept: "text/html" } }), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     const html = await response.text();
     assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'self'/);
+    assert.match(response.headers.get("content-security-policy"), /https:\/\/static\.cloudflareinsights\.com/);
+    assert.match(response.headers.get("content-security-policy"), /https:\/\/cloudflareinsights\.com/);
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
     assert.equal(response.headers.get("referrer-policy"), "strict-origin-when-cross-origin");
     assert.match(html, /<title>2026槟城 · louis16s&#x27; blog<\/title>/);
@@ -476,6 +478,29 @@ test("article raw HTML contains live title, summary, and public Notion content",
     assert.match(html, /服务端正文内容/);
     assert.doesNotMatch(html, /正在从 Notion 读取文章/);
     assert.doesNotMatch(html, /site-intro|网站开场动画|rangefinder-intro/, "article routes must not render the homepage intro");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Vinext RSC data routes resolve the underlying article slug", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const queryBodies = [];
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("/children")) return Response.json({ results: [], has_more: false });
+    queryBodies.push(String(init.body || ""));
+    const matchesArticle = queryBodies.at(-1).includes('"Penang"') && !queryBodies.at(-1).includes("Penang.rsc");
+    return Response.json({ results: matchesArticle ? [{ id: "penang", properties: {
+      title: { title: [{ plain_text: "2026槟城" }] }, slug: { rich_text: [{ plain_text: "Penang" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
+    } }] : [] });
+  };
+  try {
+    const response = await worker.fetch(new Request("http://localhost/blog/Penang.rsc?_rsc", {
+      headers: { accept: "text/x-component", rsc: "1" },
+    }), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(response.status, 200);
+    assert.ok(queryBodies.some((body) => body.includes('"Penang"')));
+    assert.ok(queryBodies.every((body) => !body.includes("Penang.rsc")));
   } finally { globalThis.fetch = originalFetch; }
 });
 

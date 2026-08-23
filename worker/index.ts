@@ -134,7 +134,7 @@ const worker = {
       }, allowedWidths);
     }
     if (request.method === "GET" && url.pathname.startsWith("/blog/")) {
-      const slug = decodeRouteSegment(url.pathname.slice("/blog/".length));
+      const slug = renderRouteSlug(url.pathname.slice("/blog/".length));
       const payload = await articlePayloadForRender(env, slug, request);
       const key = storeArticlePayload(payload);
       const headers = new Headers(request.headers);
@@ -151,7 +151,7 @@ const worker = {
       finally { clearArticlePayload(key); }
     }
     if (request.method === "GET" && (url.pathname === "/about" || url.pathname.startsWith("/page/"))) {
-      const slug = url.pathname === "/about" ? "about" : decodeRouteSegment(url.pathname.slice("/page/".length));
+      const slug = url.pathname === "/about" ? "about" : renderRouteSlug(url.pathname.slice("/page/".length));
       const payload = await sitePagePayloadForRender(env, slug);
       const key = storeArticlePayload(payload);
       const headers = new Headers(request.headers);
@@ -1814,16 +1814,20 @@ function secureDocumentResponse(response: Response): Response {
       "form-action 'self'",
       "frame-ancestors 'self'",
       "object-src 'none'",
-      "script-src 'self' 'unsafe-inline'",
+      "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' https: data: blob:",
       "font-src 'self' data:",
       "media-src 'self' https: blob:",
       "frame-src https:",
-      "connect-src 'self' https:",
+      "connect-src 'self' https: https://cloudflareinsights.com",
     ].join("; "));
   }
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+function renderRouteSlug(pathSegment: string): string {
+  return decodeRouteSegment(pathSegment.endsWith(".rsc") ? pathSegment.slice(0, -4) : pathSegment);
 }
 
 function error(status: number, message: string) { return Response.json({ error: message }, { status, headers: { ...jsonHeaders, "cache-control": "no-store" } }); }
