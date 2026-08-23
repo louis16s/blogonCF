@@ -5,6 +5,7 @@ import { FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, use
 import type { ChildDatabase, ChildPage, ContentBlock, Post, SiteConfig } from "../data/types";
 import { withoutHiddenNotionBlocks } from "../../shared/contentVisibility.js";
 import { useArticleToc } from "./ArticleTocContext";
+import { loadLinkPreview, type LinkPreview } from "./linkPreviewClient";
 
 const HEIC_DECODE_CONCURRENCY = 3;
 let activeHeicDecodes = 0;
@@ -35,7 +36,6 @@ type ArticleClientProps = {
 };
 
 type ExternalFeed = { url: string; title: string; source: string; items: Array<{ id: string; title: string; url: string; published: string; summary: string }> };
-type LinkPreview = { title: string; subtitle: string; source: string };
 
 async function requestChildPage(endpoint: string, payload: Record<string, unknown>, signal: AbortSignal): Promise<ChildPage> {
   const send = (body: Record<string, unknown>) => fetch(endpoint, {
@@ -627,12 +627,11 @@ function BookmarkCard({ block, className }: { block: ContentBlock; className: st
   const signature = block.previewSignature || "";
   useEffect(() => {
     if (!url || !signature) return;
-    const controller = new AbortController();
-    fetch(`/api/content/link-preview?url=${encodeURIComponent(url)}&signature=${encodeURIComponent(signature)}`, { signal: controller.signal })
-      .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((value) => { if (!controller.signal.aborted) setPreview(value); })
+    let active = true;
+    loadLinkPreview(url, signature)
+      .then((value) => { if (active) setPreview(value); })
       .catch(() => undefined);
-    return () => controller.abort();
+    return () => { active = false; };
   }, [signature, url]);
   if (!url) return null;
   const source = preview?.source || bookmarkSource(url);

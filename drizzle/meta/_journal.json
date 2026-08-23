@@ -8,6 +8,41 @@
       "when": 1784310890413,
       "tag": "0000_swift_night_nurse",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1784310890414,
+      "tag": "0001_external_feed_cache",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1784310890415,
+      "tag": "0002_article_heading_cache",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1784310890416,
+      "tag": "0003_article_heading_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1784310890417,
+      "tag": "0004_content_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1784310890418,
+      "tag": "0005_link_preview_cache",
+      "breakpoints": true
     }
   ]
 }

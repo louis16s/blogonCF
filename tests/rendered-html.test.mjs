@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 import { createSharedRequest, readDisclosureState, writeDisclosureState } from "../app/components/clientState.js";
@@ -50,12 +50,36 @@ test("server-renders a safe loading state without stale Notion content", async (
   const html = await response.text();
   assert.match(html, /<title>louis16s&#x27; blog<\/title>/);
   assert.doesNotMatch(html, /blog 复活啦/, "a missing Notice must not invent an announcement");
-  assert.match(html, /正在从 Notion 读取文章/);
+  assert.match(html, /请先配置 Notion 内容源/);
   assert.match(html, /prefers-reduced-motion/);
   assert.ok(html.indexOf("prefers-reduced-motion") < html.indexOf("site-intro"), "pre-paint decision must run before the intro markup");
   assert.doesNotMatch(html, /2026槟城/);
   assert.match(html, /http:\/\/localhost\/og\.jpg/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/);
+});
+
+test("local production server renders when the platform does not inject an env object", async () => {
+  const worker = await loadWorker();
+  const response = await worker.fetch(
+    new Request("http://localhost/", { headers: { accept: "text/html" } }),
+    undefined,
+    context,
+  );
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /请先配置 Notion 内容源/);
+});
+
+test("every non-lazy browser chunk stays below the 500 KiB initial-load budget", async () => {
+  const manifestUrl = new URL("../dist/client/.vite/manifest.json", import.meta.url);
+  const manifest = JSON.parse(await readFile(manifestUrl, "utf8"));
+  const oversized = [];
+  for (const [source, chunk] of Object.entries(manifest)) {
+    if (!chunk?.file?.endsWith(".js") || chunk.isDynamicEntry) continue;
+    const size = (await stat(new URL(`../dist/client/${chunk.file}`, import.meta.url))).size;
+    if (size > 500 * 1024) oversized.push({ source, file: chunk.file, size });
+  }
+  assert.deepEqual(oversized, []);
 });
 
 test("news-page hide markers remove their whole display region while keeping source blocks immutable", () => {
@@ -183,6 +207,8 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(sidebar, /link\.kind === "tool"/);
   assert.doesNotMatch(sidebar, /快速访问|blog-sidebar-quick-open|quick-links/);
   assert.match(navigationHook, /loadSiteBootstrap/);
+  assert.match(navigationHook, /initialLinks !== undefined/);
+  assert.match(navigationHook, /return initialLinks \?\? fetchedLinks/);
   assert.doesNotMatch(sidebar, /categories\.slice/);
   assert.match(sidebar, /className="mobile-menu"/);
   assert.match(sidebar, />菜单</);
@@ -441,6 +467,9 @@ test("article raw HTML contains live title, summary, and public Notion content",
   try {
     const response = await worker.fetch(new Request("http://localhost/blog/Penang", { headers: { accept: "text/html" } }), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     const html = await response.text();
+    assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'self'/);
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(response.headers.get("referrer-policy"), "strict-origin-when-cross-origin");
     assert.match(html, /<title>2026槟城 · louis16s&#x27; blog<\/title>/);
     assert.match(html, /<meta name="description" content="南洋旧梦"/);
     assert.match(html, /<h1>2026槟城<\/h1>/);
@@ -451,8 +480,9 @@ test("article raw HTML contains live title, summary, and public Notion content",
 });
 
 test("article header stays compact and the password form supports keyboard submission", async () => {
-  const [article, articlePage, sitePage, css] = await Promise.all([
+  const [article, linkPreviewClient, articlePage, sitePage, css] = await Promise.all([
     readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/linkPreviewClient.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/blog/[slug]/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/SiteContentPage.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
@@ -475,7 +505,8 @@ test("article header stays compact and the password form supports keyboard submi
   assert.doesNotMatch(css, /\.sidebar-home-link/);
   assert.match(article, /className="bookmark-preview"/);
   assert.match(article, /className="bookmark-copy"/);
-  assert.match(article, /\/api\/content\/link-preview\?url=/);
+  assert.match(linkPreviewClient, /\/api\/content\/link-preview\?url=/);
+  assert.match(linkPreviewClient, /MAX_CONCURRENT_REQUESTS = 4/);
   assert.doesNotMatch(article, /bookmarkSource\(block\.url\)\} · \{block\.url\}/);
   assert.match(css, /\.password-card-fields \{ display: grid;/);
   assert.match(css, /\.password-card \.password-submit/);
@@ -819,25 +850,37 @@ test("health endpoint reports missing Notion configuration without leaking secre
   const response = await worker.fetch(new Request("http://localhost/api/health"), { ASSETS: assets }, context);
   assert.deepEqual(await response.json(), { ok: true, notionConfigured: false });
   assert.equal(response.headers.get("cache-control"), "no-store");
+  const head = await worker.fetch(new Request("http://localhost/api/health", { method: "HEAD" }), { ASSETS: assets }, context);
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), "");
+  const rejected = await worker.fetch(new Request("http://localhost/api/health", { method: "POST" }), { ASSETS: assets }, context);
+  assert.equal(rejected.status, 405);
+  assert.equal(rejected.headers.get("allow"), "GET, HEAD");
 });
 
 test("Notion HEIC files use the same-origin conversion endpoint", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
+  const pageId = "11111111-1111-4111-8111-111111111111";
+  const imageId = "22222222-2222-4222-8222-222222222222";
   const source = "https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/photo.HEIC?signature=test";
   globalThis.fetch = async (input) => String(input).includes("/children")
     ? Response.json({ results: [
-      { id: "heic", type: "image", has_children: false, image: { type: "file_upload", file: { url: source }, caption: [] } },
-      { id: "external-heic", type: "image", has_children: false, image: { type: "external", external: { url: "https://images.example.com/photo.heic" }, caption: [] } },
+      { id: imageId, type: "image", has_children: false, image: { type: "file_upload", file: { url: source }, caption: [] } },
+      { id: "33333333-3333-4333-8333-333333333333", type: "image", has_children: false, image: { type: "external", external: { url: "https://images.example.com/photo.heic" }, caption: [] } },
     ], has_more: false })
-    : Response.json({ results: [{ id: "photo-page", properties: {
+    : Response.json({ results: [{ id: pageId, properties: {
       title: { title: [{ plain_text: "照片" }] }, slug: { rich_text: [{ plain_text: "photo" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
     } }] });
   try {
     const response = await worker.fetch(new Request("http://localhost/api/content/post/photo"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     const payload = await response.json();
-    assert.match(payload.blocks[0].url, /^\/_notion\/image\?id=.*&url=/);
-    assert.equal(new URL(payload.blocks[0].url, "http://localhost").searchParams.get("url"), source);
+    const gateway = new URL(payload.blocks[0].url, "http://localhost");
+    assert.equal(gateway.pathname, "/_notion/image");
+    assert.equal(gateway.searchParams.get("id"), imageId);
+    assert.equal(gateway.searchParams.get("root"), pageId);
+    assert.match(gateway.searchParams.get("signature"), /^[A-Za-z0-9_-]{43}$/);
+    assert.equal(gateway.searchParams.has("url"), false, "expiring Notion URLs must not be exposed to the client");
     assert.equal(payload.blocks[1].url, "https://images.example.com/photo.heic", "non-allowlisted external images must not be proxied");
   } finally { globalThis.fetch = originalFetch; }
 });
@@ -845,34 +888,58 @@ test("Notion HEIC files use the same-origin conversion endpoint", async () => {
 test("Notion image gateway proxies allowlisted HEIC and rejects SSRF hosts", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
-  let fetches = 0;
+  const pageId = "44444444-4444-4444-8444-444444444444";
+  const imageId = "55555555-5555-4555-8555-555555555555";
+  const source = "https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/photo.heic?signature=fresh";
+  let upstreamImageFetches = 0;
   globalThis.fetch = async (input, init) => {
-    fetches++;
-    assert.equal(new URL(String(input)).hostname, "prod-files-secure.s3.us-west-2.amazonaws.com");
+    const url = String(input);
+    if (url.includes("/data_sources/")) return Response.json({ results: [{ id: pageId, properties: {
+      title: { title: [{ plain_text: "照片" }] }, slug: { rich_text: [{ plain_text: "photo" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
+    } }] });
+    if (url.includes("/children")) return Response.json({ results: [{ id: imageId, type: "image", has_children: false, image: { type: "file_upload", file: { url: source }, caption: [] } }], has_more: false });
+    if (url.includes(`/blocks/${imageId}`)) return Response.json({ object: "block", id: imageId, type: "image", image: { type: "file", file: { url: source } } });
+    upstreamImageFetches++;
+    assert.equal(new URL(url).hostname, "prod-files-secure.s3.us-west-2.amazonaws.com");
     assert.equal(init.redirect, "manual");
     return new Response("heic-binary", { headers: { "content-type": "image/heic" } });
   };
   try {
-    const source = encodeURIComponent("https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/photo.heic?signature=test");
-    const response = await worker.fetch(new Request(`http://localhost/_notion/image?url=${source}`), { ASSETS: assets }, context);
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
+    const article = await worker.fetch(new Request("http://localhost/api/content/post/photo"), env, context);
+    const gatewayUrl = (await article.json()).blocks[0].url;
+    const response = await worker.fetch(new Request(new URL(gatewayUrl, "http://localhost")), env, context);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), "image/heic");
-    assert.equal(response.headers.get("cache-control"), "private, max-age=3600");
+    assert.equal(response.headers.get("cache-control"), "public, max-age=300, stale-while-revalidate=86400");
     assert.equal(await response.text(), "heic-binary");
 
-    const blocked = await worker.fetch(new Request("http://localhost/_notion/image?url=https%3A%2F%2Fexample.com%2Fprivate.heic"), { ASSETS: assets }, context);
-    assert.equal(blocked.status, 400);
-    assert.equal(fetches, 1, "blocked hosts must never be fetched");
+    const blocked = await worker.fetch(new Request("http://localhost/_notion/image?id=55555555-5555-4555-8555-555555555555&root=44444444-4444-4444-8444-444444444444&signature=invalid"), env, context);
+    assert.equal(blocked.status, 403);
+    assert.equal(upstreamImageFetches, 1, "unsigned image requests must never reach the upstream file host");
   } finally { globalThis.fetch = originalFetch; }
 });
 
 test("Notion image gateway rejects non-image upstream payloads", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response("not-an-image", { headers: { "content-type": "text/html" } });
+  const pageId = "66666666-6666-4666-8666-666666666666";
+  const imageId = "77777777-7777-4777-8777-777777777777";
+  const source = "https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/photo.heic?signature=fresh";
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/data_sources/")) return Response.json({ results: [{ id: pageId, properties: {
+      title: { title: [{ plain_text: "照片" }] }, slug: { rich_text: [{ plain_text: "photo" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
+    } }] });
+    if (url.includes("/children")) return Response.json({ results: [{ id: imageId, type: "image", has_children: false, image: { type: "file_upload", file: { url: source }, caption: [] } }], has_more: false });
+    if (url.includes(`/blocks/${imageId}`)) return Response.json({ object: "block", id: imageId, type: "image", image: { type: "file", file: { url: source } } });
+    return new Response("not-an-image", { headers: { "content-type": "text/html" } });
+  };
   try {
-    const source = encodeURIComponent("https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/photo.heic?signature=test");
-    const response = await worker.fetch(new Request(`http://localhost/_notion/image?url=${source}`), { ASSETS: assets }, context);
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
+    const article = await worker.fetch(new Request("http://localhost/api/content/post/photo"), env, context);
+    const gatewayUrl = (await article.json()).blocks[0].url;
+    const response = await worker.fetch(new Request(new URL(gatewayUrl, "http://localhost")), env, context);
     assert.equal(response.status, 415);
     assert.deepEqual(await response.json(), { error: "Unsupported image response" });
   } finally { globalThis.fetch = originalFetch; }
@@ -1215,17 +1282,40 @@ test("password-protected articles never return blocks before successful unlock",
 test("correct password unlocks normalized content", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input) => String(input).includes("/children")
-    ? Response.json({ results: [{ id: "block-1", type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: "正文内容", annotations: {} }] } }], has_more: false })
-    : Response.json({ results: [{ id: "unlock-page", properties: {
+  const pageId = "88888888-8888-4888-8888-888888888888";
+  const imageId = "99999999-9999-4999-8999-999999999999";
+  const imageSource = "https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/private.jpg?signature=fresh";
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/children")) return Response.json({ results: [
+      { id: "block-1", type: "paragraph", has_children: false, paragraph: { rich_text: [
+        { plain_text: "正文内容", href: "javascript:alert(1)", annotations: {} },
+        { plain_text: "安全链接", href: "https://example.com/read", annotations: {} },
+      ] } },
+      { id: imageId, type: "image", has_children: false, image: { type: "file_upload", file: { url: imageSource }, caption: [] } },
+    ], has_more: false });
+    if (url.includes(`/blocks/${imageId}`)) return Response.json({ object: "block", id: imageId, type: "image", image: { type: "file", file: { url: imageSource } } });
+    if (url.startsWith("https://prod-files-secure")) return new Response("jpeg", { headers: { "content-type": "image/jpeg" } });
+    return Response.json({ results: [{ id: pageId, properties: {
       title: { title: [{ plain_text: "可解锁文章" }] }, slug: { rich_text: [{ plain_text: "unlock" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "correct" }] },
     } }] });
+  };
   try {
-    const response = await worker.fetch(new Request("http://localhost/api/content/post/unlock", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.1" }, body: JSON.stringify({ password: "correct" }) }), { ASSETS: assets, DB: createRateLimitDb(), NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    const env = { ASSETS: assets, DB: createRateLimitDb(), NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
+    const response = await worker.fetch(new Request("http://localhost/api/content/post/unlock", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "192.0.2.1" }, body: JSON.stringify({ password: "correct" }) }), env, context);
     assert.equal(response.status, 200);
     const payload = await response.json();
     assert.equal(payload.locked, false);
     assert.equal(payload.blocks[0].richText[0].text, "正文内容");
+    assert.equal(payload.blocks[0].richText[0].href, undefined, "unsafe rich-text protocols must be discarded");
+    assert.equal(payload.blocks[0].richText[1].href, "https://example.com/read");
+    const imageUrl = new URL(payload.blocks[1].url, "http://localhost");
+    assert.equal(imageUrl.searchParams.get("private"), "unlock");
+    const denied = await worker.fetch(new Request(imageUrl), env, context);
+    assert.equal(denied.status, 403, "private media must inherit the article unlock session");
+    const allowed = await worker.fetch(new Request(imageUrl, { headers: { cookie: response.headers.get("set-cookie") } }), env, context);
+    assert.equal(allowed.status, 200);
+    assert.equal(await allowed.text(), "jpeg");
   } finally { globalThis.fetch = originalFetch; }
 });
 

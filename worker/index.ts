@@ -12,10 +12,12 @@ import { createDefaultSiteConfig, type SiteConfig } from "../shared/site-config"
 import { decodeRouteSegment } from "../shared/url";
 import { externalLinkPreview, extractExternalUrls, fetchExternalFeed, isSafeExternalUrl, signPreviewUrl, type ExternalFeed } from "./external-content";
 import { CONFIG_IMAGE_KEYS, NOTION_FILE_HOSTS, configPageFileUrl, configPageKey, configPageValue, isConfigLinkPage, toPublicSiteConfig, type NotionConfigPage } from "./site-config";
-import { createChildAccessSignature, createUnlockCookie, hasUnlockSession, verifyChildAccessSignature } from "./unlock-session";
+import { createChildAccessSignature, createMediaAccessSignature, createUnlockCookie, hasUnlockSession, verifyChildAccessSignature, verifyMediaAccessSignature } from "./unlock-session";
+import { normalizeNotionCursor, normalizeNotionId, notionFetch, plain, richText, title } from "./notion-client";
+import { readNotionPageMetadata } from "./notion-metadata";
 
 interface Env {
-  ASSETS: { fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> };
+  ASSETS?: { fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> };
   DB?: PasswordRateLimitDatabase;
   NOTION_TOKEN?: string;
   NOTION_DATA_SOURCE_ID?: string;
@@ -30,8 +32,8 @@ interface ScheduledController { scheduledTime: number; cron: string; }
 
 const DEFAULT_DATA_SOURCE_ID = "";
 const DEFAULT_CONFIG_DATA_SOURCE_ID = "";
-const NOTION_VERSION = "2026-03-11";
 const MAX_CONFIG_IMAGE_BYTES = 12 * 1024 * 1024;
+const MAX_NOTION_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_BLOCKS = 10_000;
 const CONTENT_CHUNK_BLOCKS = 300;
 const MAX_BLOCK_DEPTH = 12;
@@ -63,11 +65,22 @@ type HeadingSummary = { id: string; label: string; level: number };
 type SiteConfigPayload = SiteConfig;
 
 const worker = {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env | undefined, ctx: ExecutionContext): Promise<Response> {
+    env ||= {};
     const url = new URL(request.url);
+    const allowedMethods = allowedMethodsForPath(url.pathname);
+    if (allowedMethods && !allowedMethods.includes(request.method)) {
+      return Response.json({ error: "Method not allowed" }, {
+        status: 405,
+        headers: { ...jsonHeaders, allow: allowedMethods.join(", "), "cache-control": "no-store" },
+      });
+    }
     if (url.pathname === "/sitemap.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedPublicDocument(request, env, ctx, () => notionSitemap(env, url)));
     if (url.pathname === "/rss.xml" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedPublicDocument(request, env, ctx, () => notionRss(env, url)));
-    if (url.pathname === "/favicon.ico" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedConfigAsset(request, env, ctx, () => notionSiteIcon(env, request)));
+    if (url.pathname === "/favicon.ico" && (request.method === "GET" || request.method === "HEAD")) {
+      if (!env.ASSETS && !env.NOTION_TOKEN) return withHead(request, await handler.fetch(requestWithSiteOrigin(request, env), env, ctx));
+      return withHead(request, await cachedConfigAsset(request, env, ctx, () => notionSiteIcon(env, request)));
+    }
     if (url.pathname.startsWith("/_notion/config-image/") && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedConfigAsset(request, env, ctx, () => notionConfigImage(env, url)));
     if (url.pathname === "/api/content/posts" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionPosts(env, request, ctx));
     if (url.pathname === "/api/content/navigation" && request.method === "GET") {
@@ -103,12 +116,16 @@ const worker = {
       const slug = decodeRouteSegment(url.pathname.slice("/api/content/page/".length));
       return notionSitePage(env, slug, request);
     }
-    if (url.pathname === "/api/health") return Response.json({ ok: true, notionConfigured: Boolean(env.NOTION_TOKEN) }, { headers: { "cache-control": "no-store" } });
+    if (url.pathname === "/api/health" && (request.method === "GET" || request.method === "HEAD")) {
+      return withHead(request, Response.json({ ok: true, notionConfigured: Boolean(env.NOTION_TOKEN) }, { headers: { ...jsonHeaders, "cache-control": "no-store" } }));
+    }
 
     if (url.pathname === "/_vinext/image") {
+      if (!env.ASSETS) return error(503, "Image optimization is unavailable");
+      const assets = env.ASSETS;
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
       return handleImageOptimization(request, {
-        fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
+        fetchAsset: (path) => assets.fetch(new Request(new URL(path, request.url))),
         transformImage: async (body, { width, format, quality }) => {
           if (!env.IMAGES) return new Response(body);
           const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
@@ -129,7 +146,7 @@ const worker = {
         const status = payload.status && payload.status >= 400 && rendered.status < 400 ? payload.status : rendered.status;
         const responseHeaders = new Headers(rendered.headers);
         responseHeaders.set("cache-control", renderedCacheControl(request, payload.status, Boolean(payload.post?.locked)));
-        return new Response(rendered.body, { status, headers: responseHeaders });
+        return secureDocumentResponse(new Response(rendered.body, { status, headers: responseHeaders }));
       }
       finally { clearArticlePayload(key); }
     }
@@ -146,7 +163,7 @@ const worker = {
         const status = payload.status && payload.status >= 400 && rendered.status < 400 ? payload.status : rendered.status;
         const responseHeaders = new Headers(rendered.headers);
         responseHeaders.set("cache-control", renderedCacheControl(request, payload.status));
-        return new Response(rendered.body, { status, headers: responseHeaders });
+        return secureDocumentResponse(new Response(rendered.body, { status, headers: responseHeaders }));
       }
       finally { clearArticlePayload(key); }
     }
@@ -159,13 +176,14 @@ const worker = {
       setSiteConfigHeader(headers, payload.config);
       try {
         const rendered = await handler.fetch(new Request(request, { headers }), env, ctx);
+        const status = payload.status && payload.status >= 400 && rendered.status < 400 ? payload.status : rendered.status;
         const responseHeaders = new Headers(rendered.headers);
-        responseHeaders.set("cache-control", renderedCacheControl(request));
-        return new Response(rendered.body, { status: rendered.status, headers: responseHeaders });
+        responseHeaders.set("cache-control", renderedCacheControl(request, payload.status));
+        return secureDocumentResponse(new Response(rendered.body, { status, headers: responseHeaders }));
       }
       finally { clearHomePayload(key); }
     }
-    return handler.fetch(requestWithSiteOrigin(request, env), env, ctx);
+    return secureDocumentResponse(await handler.fetch(requestWithSiteOrigin(request, env), env, ctx));
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(refreshContentIndex(env));
@@ -240,17 +258,22 @@ async function refreshExternalFeeds(env: Env): Promise<void> {
 }
 
 async function notionSiteIcon(env: Env, request: Request): Promise<Response> {
-  if (!env.NOTION_TOKEN) return env.ASSETS.fetch(new Request(new URL("/favicon.svg", request.url)));
+  if (!env.NOTION_TOKEN) return fetchStaticAsset(env, "/favicon.svg", request.url);
   try {
     const rows = await queryConfigRows(env);
     const fileResponse = await notionConfigImageByKey(env, "FAVICON_URL", rows);
     if (fileResponse?.ok) return fileResponse;
     const config = toPublicSiteConfig(rows);
-    if (!config.favicon || config.favicon === "/favicon.svg") return env.ASSETS.fetch(new Request(new URL("/favicon.svg", request.url)));
+    if (!config.favicon || config.favicon === "/favicon.svg") return fetchStaticAsset(env, "/favicon.svg", request.url);
     const target = new URL(config.favicon, request.url);
-    if (target.origin === new URL(request.url).origin) return env.ASSETS.fetch(new Request(target));
+    if (target.origin === new URL(request.url).origin) return fetchStaticAsset(env, `${target.pathname}${target.search}`, request.url);
     return new Response(null, { status: 302, headers: { location: target.href, "cache-control": "public, max-age=300", "x-content-type-options": "nosniff" } });
-  } catch { return env.ASSETS.fetch(new Request(new URL("/favicon.svg", request.url))); }
+  } catch { return fetchStaticAsset(env, "/favicon.svg", request.url); }
+}
+
+function fetchStaticAsset(env: Env, path: string, requestUrl: string): Promise<Response> {
+  const request = new Request(new URL(path, requestUrl));
+  return env.ASSETS ? env.ASSETS.fetch(request) : fetch(request);
 }
 
 async function notionConfigImage(env: Env, requestUrl: URL): Promise<Response> {
@@ -321,27 +344,45 @@ async function readLimitedBytes(body: ReadableStream<Uint8Array>, limit: number)
 }
 
 async function notionImage(request: Request, env: Env): Promise<Response> {
-  const rawUrl = new URL(request.url).searchParams.get("url");
-  let source: URL;
-  try { source = new URL(rawUrl || ""); }
-  catch { return error(400, "Invalid image URL"); }
-  if (source.protocol !== "https:" || !NOTION_FILE_HOSTS.has(source.hostname)) return error(400, "Image host is not allowed");
+  if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  const requestUrl = new URL(request.url);
+  const blockId = normalizeNotionId(requestUrl.searchParams.get("id"));
+  const rootPageId = normalizeNotionId(requestUrl.searchParams.get("root"));
+  const privateSlug = requestUrl.searchParams.get("private") || "";
+  const suppliedSignature = requestUrl.searchParams.get("signature") || "";
+  if (!blockId || !rootPageId || privateSlug.length > 180) return error(400, "Invalid image request");
+  if (!await verifyMediaAccessSignature(env.NOTION_TOKEN, rootPageId, blockId, privateSlug, suppliedSignature)) return error(403, "Image URL is not authorized");
+  if (privateSlug && !await hasUnlockSession(request, env.NOTION_TOKEN, privateSlug)) return error(403, "请先解锁父文章");
   try {
-    const response = await fetch(source, { redirect: "manual" });
-    if (!response.ok || !response.body) return error(response.status || 502, "Image is temporarily unavailable");
+    const block = await notionFetch(env, `/blocks/${blockId}`);
+    if (block?.object !== "block" || block.archived || block.in_trash || block.type !== "image") return error(404, "Image block not found");
+    const value = block.image || {};
+    const rawUrl = value.type === "external" ? value.external?.url : value.file?.url;
+    const sourceValue = safeResourceUrl(rawUrl, true);
+    if (!sourceValue) return error(404, "Image source not found");
+    const source = new URL(sourceValue);
+    if (!NOTION_FILE_HOSTS.has(source.hostname)) return error(400, "Image host is not allowed");
+    const response = await fetch(source, { method: request.method, redirect: "manual", signal: AbortSignal.timeout(8_000) });
+    if (!response.ok || (request.method === "GET" && !response.body)) return error(response.status || 502, "Image is temporarily unavailable");
     const contentType = response.headers.get("content-type")?.split(";", 1)[0].toLocaleLowerCase();
     if (!contentType?.startsWith("image/")) return error(415, "Unsupported image response");
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (Number.isFinite(contentLength) && contentLength > MAX_NOTION_IMAGE_BYTES) {
+      await response.body?.cancel();
+      return error(413, "Image is too large");
+    }
     let output = response;
-    if (/image\/(?:hei[cf])|\.(?:heic|heif)(?:$|\?)/i.test(`${contentType || ""} ${source.pathname}`) && env.IMAGES && request.method === "GET") {
+    if (/image\/(?:hei[cf])|\.(?:heic|heif)(?:$|\?)/i.test(`${contentType || ""} ${source.pathname}`) && env.IMAGES && request.method === "GET" && response.body) {
       try {
         output = await (await env.IMAGES.input(response.body).transform({}).output({ format: "image/jpeg", quality: 84 })).response();
       } catch (reason) { console.warn(reason instanceof Error ? reason.message : "HEIC conversion failed"); }
     }
     const headers = new Headers(output.headers);
-    // The source may belong to a password-protected article. Browser-private
-    // caching avoids placing that media in a shared edge cache.
-    headers.set("cache-control", "private, max-age=3600");
+    headers.set("cache-control", privateSlug
+      ? "private, max-age=3600"
+      : "public, max-age=300, stale-while-revalidate=86400");
     headers.set("x-content-type-options", "nosniff");
+    headers.delete("set-cookie");
     return request.method === "HEAD" ? new Response(null, { status: output.status, headers }) : new Response(output.body, { status: output.status, headers });
   } catch (reason) {
     console.error(reason instanceof Error ? reason.message : "Notion image fetch failed");
@@ -386,6 +427,7 @@ async function querySiteBootstrap(env: Env): Promise<HomePayload> {
     links: toSiteLinks([...contentPages, ...configLinkPages]).filter((link) => config.rssEnabled || link.kind !== "rss"),
     notice: noticePage ? toSiteNotice(noticePage) : undefined,
     config,
+    notionConfigured: true,
   };
 }
 
@@ -536,16 +578,17 @@ function siteBootstrapEdgeKey(env: Env, request: Request): Request {
 }
 
 async function homePayloadForRender(env: Env, request: Request, ctx: ExecutionContext): Promise<HomePayload> {
-  if (!env.NOTION_TOKEN) return { posts: [], links: [], config: createDefaultSiteConfig() };
+  if (!env.NOTION_TOKEN) return { posts: [], links: [], config: createDefaultSiteConfig(), notionConfigured: false };
   const endpoint = new URL("/api/content/posts", request.url);
   const response = await notionPosts(env, new Request(endpoint, { headers: request.headers }), ctx);
-  if (!response.ok) return { posts: [], links: [], config: createDefaultSiteConfig() };
+  if (!response.ok) return { posts: [], links: [], config: createDefaultSiteConfig(), status: response.status, notionConfigured: true };
   const payload = await response.json().catch(() => ({})) as Partial<HomePayload>;
   return {
     posts: Array.isArray(payload.posts) ? payload.posts : [],
     links: Array.isArray(payload.links) ? payload.links : [],
     notice: payload.notice?.id && payload.notice?.title ? payload.notice : undefined,
     config: payload.config?.author && payload.config?.since ? payload.config : createDefaultSiteConfig(),
+    notionConfigured: payload.notionConfigured !== false,
   };
 }
 
@@ -612,7 +655,7 @@ async function notionWordCloud(env: Env, ctx?: ExecutionContext): Promise<Respon
       partial: corpus.partial,
       source: corpus.source,
     };
-    wordCloudCache.set(cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, payload });
+    setBoundedMap(wordCloudCache, cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, payload }, 8);
     return Response.json(payload, { headers: { ...jsonHeaders, "cache-control": "public, max-age=900, stale-while-revalidate=86400" } });
   } catch (reason) { return notionError(reason); }
 }
@@ -673,7 +716,7 @@ async function getPublicCorpus(env: Env, ctx?: ExecutionContext): Promise<Public
   const indexed = await readContentIndex(env.DB, sourceKey);
   if (indexed.length || await hasContentIndex(env.DB, sourceKey)) {
     const corpus = { documents: indexed, partial: indexed.some((document) => document.partial), source: "d1" as const };
-    publicCorpusCache.set(cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, corpus });
+    setBoundedMap(publicCorpusCache, cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, corpus }, 8);
     return corpus;
   }
 
@@ -706,10 +749,10 @@ async function getPublicCorpus(env: Env, ctx?: ExecutionContext): Promise<Public
       if (ctx) ctx.waitUntil(persist);
       else await persist;
     }
-    publicCorpusCache.set(cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, corpus });
+    setBoundedMap(publicCorpusCache, cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, corpus }, 8);
     return corpus;
   })();
-  publicCorpusCache.set(cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, pending });
+  setBoundedMap(publicCorpusCache, cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, pending }, 8);
   if (staleCorpus) {
     void pending.catch((reason) => {
       if (publicCorpusCache.get(cacheKey)?.pending === pending) publicCorpusCache.delete(cacheKey);
@@ -758,16 +801,22 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
       if (env.DB) await clearPasswordAttempts(env.DB, attemptKey);
       const blockState = newBlockReadState();
       const { chunk, headings } = await readArticleChunk(env, page.id, blockState, cursor);
-      await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
-      await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id);
+      await Promise.all([
+        attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN),
+        attachChildAccessSignatures(chunk.blocks, env, page.id),
+        attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id, slug),
+      ]);
       const headers = new Headers({ ...jsonHeaders, "cache-control": "no-store" });
       if (!sessionUnlocked) headers.append("set-cookie", await createUnlockCookie(env.NOTION_TOKEN, slug, request.url));
       return Response.json({ post: { ...post, locked: true }, locked: false, blocks: chunk.blocks, headings, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers });
     }
     const blockState = newBlockReadState();
     const { chunk, headings } = await readArticleChunk(env, page.id, blockState, cursor);
-    await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
-    await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id);
+    await Promise.all([
+      attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN),
+      attachChildAccessSignatures(chunk.blocks, env, page.id),
+      attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id),
+    ]);
     return Response.json({ post: { ...post, locked: Boolean(expectedPassword) }, locked: false, blocks: chunk.blocks, headings, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
@@ -794,8 +843,11 @@ async function notionSitePage(env: Env, slug: string, request: Request): Promise
     if (!page) return error(404, "Page not found");
     const blockState = newBlockReadState();
     const { chunk, headings } = await readArticleChunk(env, page.id, blockState, cursor);
-    await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
-    await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id);
+    await Promise.all([
+      attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN),
+      attachChildAccessSignatures(chunk.blocks, env, page.id),
+      attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id),
+    ]);
     return Response.json({
       post: toSitePagePost(page),
       locked: false,
@@ -827,7 +879,7 @@ async function notionChildPage(env: Env, request: Request): Promise<Response> {
 
     const childPage = await resolveChildPage(env, parent, trail, pageId, accessSignature);
     if (!childPage) return error(404, "没有找到这个子页面，或它已从当前文章移除");
-    return childPageResponse(env, childPage, parent.id, cursor, urlBoolean(new URL(request.url), "headings"));
+    return childPageResponse(env, childPage, parent.id, cursor, urlBoolean(new URL(request.url), "headings"), expectedPassword ? slug : "");
   } catch (reason) { return notionError(reason); }
 }
 
@@ -849,7 +901,7 @@ async function notionSitePageChild(env: Env, request: Request): Promise<Response
   } catch (reason) { return notionError(reason); }
 }
 
-async function childPageResponse(env: Env, childPage: any, rootPageId: string, cursor = "", headingsOnly = false): Promise<Response> {
+async function childPageResponse(env: Env, childPage: any, rootPageId: string, cursor = "", headingsOnly = false, privateSlug = ""): Promise<Response> {
   if (headingsOnly) {
     // A table of contents is a page-level index, not a projection of whichever
     // body chunk happened to load first. Wait for every Notion cursor here so
@@ -863,8 +915,11 @@ async function childPageResponse(env: Env, childPage: any, rootPageId: string, c
   // Never expose a partial TOC derived from a body chunk. The dedicated
   // headings request below traverses the full Notion page independently.
   const headings = cursor ? undefined : [];
-  await attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN);
-  await attachChildAccessSignatures(chunk.blocks, env.NOTION_TOKEN, rootPageId);
+  await Promise.all([
+    attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN),
+    attachChildAccessSignatures(chunk.blocks, env, rootPageId),
+    attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, rootPageId, privateSlug),
+  ]);
   const accessSignature = await createChildAccessSignature(env.NOTION_TOKEN!, normalizeNotionId(rootPageId)!, normalizeNotionId(childPage.id)!);
   return Response.json({ child: {
     id: childPage.id,
@@ -884,7 +939,7 @@ async function advanceHeadingIndex(env: Env, pageId: string, version: string): P
   if (cached?.headings && cached.expiresAt > Date.now()) return { complete: true, headings: cached.headings };
   const persisted = env.DB ? await readHeadingCache(env.DB, pageId, version) : null;
   if (persisted) {
-    headingIndexCache.set(cacheKey, { headings: persisted, expiresAt: Date.now() + 10 * 60 * 1000 });
+    setBoundedMap(headingIndexCache, cacheKey, { headings: persisted, expiresAt: Date.now() + 10 * 60 * 1000 }, 256);
     return { complete: true, headings: persisted };
   }
 
@@ -922,14 +977,14 @@ async function advanceHeadingIndex(env: Env, pageId: string, version: string): P
 
   if (job.queue.length) {
     if (env.DB) await writeHeadingJob(env.DB, pageId, version, job);
-    else headingJobCache.set(cacheKey, job);
+    else setBoundedMap(headingJobCache, cacheKey, job, 256);
     return { complete: false, headings: [] };
   }
   if (env.DB) {
     await writeHeadingCache(env.DB, pageId, version, job.headings);
     await deleteHeadingJob(env.DB, pageId);
   } else headingJobCache.delete(cacheKey);
-  headingIndexCache.set(cacheKey, { headings: job.headings, expiresAt: Date.now() + 10 * 60 * 1000 });
+  setBoundedMap(headingIndexCache, cacheKey, { headings: job.headings, expiresAt: Date.now() + 10 * 60 * 1000 }, 256);
   return { complete: true, headings: job.headings };
 }
 
@@ -1002,8 +1057,8 @@ async function attachPreviewSignatures(blocks: any[], secret: string | undefined
   await Promise.all(bookmarks.map(async (block) => { block.previewSignature = await signPreviewUrl(secret, block.url); }));
 }
 
-async function attachChildAccessSignatures(blocks: any[], secret: string | undefined, rootPageId: string): Promise<void> {
-  if (!secret) return;
+async function attachChildAccessSignatures(blocks: any[], env: Env, rootPageId: string): Promise<void> {
+  if (!env.NOTION_TOKEN) return;
   const targets: Array<{ target: any; pageId: string }> = [];
   const visit = (items: any[]) => {
     for (const block of items || []) {
@@ -1016,24 +1071,43 @@ async function attachChildAccessSignatures(blocks: any[], secret: string | undef
     }
   };
   visit(blocks);
-  const pageMetadata = new Map<string, Promise<any>>();
-  const readPage = (pageId: string) => {
-    let pending = pageMetadata.get(pageId);
-    if (!pending) {
-      pending = fetch(`https://api.notion.com/v1/pages/${pageId}`, { headers: { authorization: `Bearer ${secret}`, "notion-version": NOTION_VERSION, "content-type": "application/json" } })
-        .then(async (response) => response.ok ? response.json() : null)
-        .catch(() => null);
-      pageMetadata.set(pageId, pending);
-    }
-    return pending;
-  };
+  const uniquePageIds = [...new Set(targets.filter(({ target }) => target.type === "child_page").map(({ pageId }) => pageId))];
+  const pageMetadata = await readNotionPageMetadata(env, uniquePageIds);
   await Promise.all(targets.map(async ({ target, pageId }) => {
-    target.accessSignature = await createChildAccessSignature(secret, normalizeNotionId(rootPageId), pageId);
+    target.accessSignature = await createChildAccessSignature(env.NOTION_TOKEN!, normalizeNotionId(rootPageId), pageId);
     if (target.type === "child_page") {
-      const page = await readPage(pageId);
+      const page = pageMetadata.get(pageId);
       if (page?.icon?.type === "emoji" && typeof page.icon.emoji === "string") target.icon = page.icon.emoji;
       else delete target.icon;
     }
+  }));
+}
+
+async function attachMediaAccessSignatures(blocks: any[], secret: string | undefined, rootPageId: string, privateSlug = ""): Promise<void> {
+  const rootId = normalizeNotionId(rootPageId);
+  if (!secret || !rootId) return;
+  const targets: any[] = [];
+  const visit = (items: any[]) => {
+    for (const block of items || []) {
+      if (block.type === "image" && typeof block.url === "string") {
+        try {
+          const source = new URL(block.url);
+          if (source.protocol === "https:" && NOTION_FILE_HOSTS.has(source.hostname) && normalizeNotionId(block.id)) targets.push(block);
+        } catch { /* Invalid resource URLs were already removed during normalization. */ }
+      }
+      if (Array.isArray(block.children)) visit(block.children);
+    }
+  };
+  visit(blocks);
+  await Promise.all(targets.map(async (block) => {
+    const blockId = normalizeNotionId(block.id);
+    const query = new URLSearchParams({
+      id: blockId,
+      root: rootId,
+      signature: await createMediaAccessSignature(secret, rootId, blockId, privateSlug),
+    });
+    if (privateSlug) query.set("private", privateSlug);
+    block.url = `/_notion/image?${query}`;
   }));
 }
 
@@ -1228,7 +1302,7 @@ async function resolveContentDataSourceId(env: Env): Promise<string> {
   if (cached && cached.expiresAt > Date.now()) return cached.id;
   const id = configuredContentDataSourceId(env, await queryConfigRows(env).catch(() => []));
   if (!id) throw new Error("Notion content Data Source ID is not configured");
-  contentSourceCache.set(cacheKey, { id, expiresAt: Date.now() + 5 * 60 * 1000 });
+  setBoundedMap(contentSourceCache, cacheKey, { id, expiresAt: Date.now() + 5 * 60 * 1000 }, 8);
   return id;
 }
 
@@ -1350,6 +1424,16 @@ async function mapWithConcurrency<T, U>(items: T[], concurrency: number, mapper:
   return results;
 }
 
+function setBoundedMap<K, V>(map: Map<K, V>, key: K, value: V, limit: number): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > limit) {
+    const oldest = map.keys().next().value as K | undefined;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
+
 function blockText(blocks: any[], includeCode = false, maxChars = MAX_INDEX_CHARS_PER_POST): string {
   const fragments: string[] = [];
   let length = 0;
@@ -1365,21 +1449,6 @@ function blockText(blocks: any[], includeCode = false, maxChars = MAX_INDEX_CHAR
   };
   visit(blocks);
   return fragments.join("\n").slice(0, maxChars);
-}
-
-async function notionFetch(env: Env, path: string, init: RequestInit = {}): Promise<any> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const response = await fetch(`https://api.notion.com/v1${path}`, { ...init, headers: { authorization: `Bearer ${env.NOTION_TOKEN}`, "notion-version": NOTION_VERSION, "content-type": "application/json", ...init.headers } });
-    const payload = await response.json().catch(() => ({}));
-    if (response.ok) return payload;
-    if (response.status !== 429 || attempt === 2) throw new Error(`Notion ${response.status}: ${payload.message || "request failed"}`);
-    const retryHeader = response.headers.get("retry-after");
-    const retryAfter = retryHeader === null ? Number.NaN : Number(retryHeader);
-    const jitter = Math.floor(Math.random() * 120);
-    const delay = Number.isFinite(retryAfter) ? Math.max(0, retryAfter * 1000) : 350 * (2 ** attempt) + jitter;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(delay, 3_000)));
-  }
-  throw new Error("Notion request failed after retries");
 }
 
 function toPost(page: any) {
@@ -1604,32 +1673,15 @@ async function descendantPage(env: Env, childId: string, ancestorId: string): Pr
   return null;
 }
 
-function normalizeNotionId(value: unknown): string {
-  if (typeof value !== "string") return "";
-  const compact = value.replaceAll("-", "").toLocaleLowerCase();
-  if (!/^[a-f0-9]{32}$/.test(compact)) return "";
-  return `${compact.slice(0, 8)}-${compact.slice(8, 12)}-${compact.slice(12, 16)}-${compact.slice(16, 20)}-${compact.slice(20)}`;
-}
-
-function normalizeNotionCursor(value: unknown): string {
-  if (value == null || value === "") return "";
-  if (typeof value !== "string" || value.length > 256 || !/^[A-Za-z0-9_-]+$/.test(value)) return "";
-  return value;
-}
-
 function notionPageTitle(page: any): string {
   const property = Object.values(page.properties || {}).find((value: any) => value?.type === "title" || Array.isArray(value?.title));
   return title(property);
 }
 
-function title(property: any): string { return richText(property?.title); }
-function plain(property: any): string { return richText(property?.rich_text || property?.title || property); }
-function richText(value: any): string { return Array.isArray(value) ? value.map((item) => item.plain_text || item.text?.content || "").join("") : typeof value === "string" ? value : ""; }
-
 function normalizeRichText(value: any[] = []) {
   return value.map((item) => ({
     text: item.plain_text || item.text?.content || "",
-    href: item.href || undefined,
+    href: safeRichTextHref(item.href),
     bold: item.annotations?.bold || undefined,
     italic: item.annotations?.italic || undefined,
     code: item.annotations?.code || undefined,
@@ -1663,11 +1715,11 @@ function normalizeBlock(raw: any): any | null {
     case "code": return { ...base, language: value.language || "plain text", caption: richText(value.caption) };
     case "divider": return base;
     case "image": {
-      const url = value.type === "external" ? value.external?.url : value.file?.url;
-      return { ...base, url: needsBrowserImageConversion(url) ? `/_notion/image?id=${encodeURIComponent(raw.id)}&url=${encodeURIComponent(url)}` : url, caption: richText(value.caption) };
+      const url = safeResourceUrl(value.type === "external" ? value.external?.url : value.file?.url);
+      return { ...base, url, caption: richText(value.caption) };
     }
     case "bookmark": case "embed": case "video": case "file": case "pdf": case "audio": case "link_preview": {
-      const url = value.url || value.external?.url || value.file?.url;
+      const url = safeResourceUrl(value.url || value.external?.url || value.file?.url, type === "embed");
       const normalizedType = type === "link_preview" ? "bookmark" : type;
       const caption = richText(value.caption) || (normalizedType === "bookmark" ? bookmarkTitle(url) : "");
       return { ...base, type: normalizedType, url, caption };
@@ -1686,13 +1738,25 @@ function normalizeBlock(raw: any): any | null {
   }
 }
 
-function needsBrowserImageConversion(url: unknown): url is string {
-  if (typeof url !== "string") return false;
+function safeRichTextHref(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const target = value.trim();
+  if (!target || target.length > 2_048) return undefined;
+  if (/^(?:#|\/(?!\/))/.test(target)) return target;
   try {
-    const source = new URL(url);
-    return NOTION_FILE_HOSTS.has(source.hostname) && /\.(?:heic|heif)$/i.test(decodeURIComponent(source.pathname));
-  }
-  catch { return false; }
+    const url = new URL(target);
+    return ["http:", "https:", "mailto:", "tel:"].includes(url.protocol) ? url.href : undefined;
+  } catch { return undefined; }
+}
+
+function safeResourceUrl(value: unknown, httpsOnly = false): string | undefined {
+  if (typeof value !== "string" || value.length > 2_048) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) return undefined;
+    if (httpsOnly) return url.protocol === "https:" ? url.href : undefined;
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : undefined;
+  } catch { return undefined; }
 }
 
 function escapeXml(value: string) { return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[char] || char)); }
@@ -1724,6 +1788,42 @@ function requestWithSiteOrigin(request: Request, env: Env): Request {
 
 function withHead(request: Request, response: Response) {
   return request.method === "HEAD" ? new Response(null, { status: response.status, headers: response.headers }) : response;
+}
+
+function allowedMethodsForPath(pathname: string): string[] | undefined {
+  if (["/sitemap.xml", "/rss.xml", "/favicon.ico", "/api/content/posts", "/_notion/image", "/api/health"].includes(pathname)) return ["GET", "HEAD"];
+  if (pathname.startsWith("/_notion/config-image/")) return ["GET", "HEAD"];
+  if (["/api/content/navigation", "/api/content/config", "/api/content/search", "/api/content/rss-feeds", "/api/content/link-preview", "/api/content/word-cloud", "/api/content/unlock-session"].includes(pathname)) return ["GET"];
+  if (["/api/content/child", "/api/content/page-child", "/api/content/database"].includes(pathname)) return ["POST"];
+  if (pathname.startsWith("/api/content/post/")) return ["GET", "POST"];
+  if (pathname.startsWith("/api/content/page/")) return ["GET"];
+  return undefined;
+}
+
+function secureDocumentResponse(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("x-content-type-options", "nosniff");
+  headers.set("referrer-policy", "strict-origin-when-cross-origin");
+  headers.set("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
+  if ((headers.get("content-type") || "").toLocaleLowerCase().includes("text/html")) {
+    headers.set("x-frame-options", "SAMEORIGIN");
+    headers.set("cross-origin-opener-policy", "same-origin");
+    headers.set("content-security-policy", [
+      "default-src 'self'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "frame-ancestors 'self'",
+      "object-src 'none'",
+      "script-src 'self' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' https: data: blob:",
+      "font-src 'self' data:",
+      "media-src 'self' https: blob:",
+      "frame-src https:",
+      "connect-src 'self' https:",
+    ].join("; "));
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 function error(status: number, message: string) { return Response.json({ error: message }, { status, headers: { ...jsonHeaders, "cache-control": "no-store" } }); }

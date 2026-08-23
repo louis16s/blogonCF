@@ -38,7 +38,7 @@ type SidebarProps = {
   headings?: SidebarHeading[];
 };
 
-export function SiteSidebar({ siteLinks = [], postCount, syncState, categories = [], activeCategory, onCategoryChange, siteConfig, headings = [] }: SidebarProps) {
+export function SiteSidebar({ siteLinks, postCount, syncState, categories = [], activeCategory, onCategoryChange, siteConfig, headings = [] }: SidebarProps) {
   const articleToc = useArticleToc();
   const resolvedHeadings = articleToc?.headings ?? headings;
   const pendingHeadingId = articleToc?.pendingHeadingId || "";

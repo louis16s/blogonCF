@@ -22,12 +22,12 @@ const WordCloudDialog = dynamic(() => import("./WordCloudDialog").then((module) 
   loading: () => null,
   ssr: false,
 });
-export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNotice, initialConfig = DEFAULT_SITE_CONFIG }: { initialPosts?: Post[]; initialLinks?: SiteLink[]; initialNotice?: SiteNotice; initialConfig?: SiteConfig }) {
+export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNotice, initialConfig = DEFAULT_SITE_CONFIG, initialNotionConfigured = true }: { initialPosts?: Post[]; initialLinks?: SiteLink[]; initialNotice?: SiteNotice; initialConfig?: SiteConfig; initialNotionConfigured?: boolean }) {
   const [posts, setPosts] = useState<Post[]>(initialPosts);
   const [siteLinks, setSiteLinks] = useState<SiteLink[]>(initialLinks);
   const [notice, setNotice] = useState<SiteNotice | undefined>(initialNotice);
   const [siteConfig, setSiteConfig] = useState<SiteConfig>(() => ({ ...DEFAULT_SITE_CONFIG, ...initialConfig }));
-  const [syncState, setSyncState] = useState<"loading" | "live" | "unavailable">(initialPosts.length ? "live" : "loading");
+  const [syncState, setSyncState] = useState<"loading" | "live" | "unavailable">(initialPosts.length ? "live" : initialNotionConfigured ? "loading" : "unavailable");
   const [category, setCategory] = useState(ALL);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
@@ -112,7 +112,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
     // The server-rendered bootstrap and the hourly Worker sync are the source
     // of truth. Avoid making every open tab poll Notion; retrySync remains the
     // explicit recovery path for a failed initial request.
-    if (initialPosts.length > 0) return;
+    if (initialPosts.length > 0 || !initialNotionConfigured) return;
     const controller = new AbortController();
     fetch("/api/content/posts", { signal: controller.signal })
       .then(async (response) => {
@@ -127,7 +127,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
       })
       .catch(() => { if (!controller.signal.aborted) setSyncState("unavailable"); });
     return () => controller.abort();
-  }, [initialPosts.length, refreshKey]);
+  }, [initialNotionConfigured, initialPosts.length, refreshKey]);
 
   useEffect(() => {
     const needle = normalizeSearchText(deferredQuery);
@@ -227,8 +227,8 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
           {!visible.length && !searching && (
             <div className="empty">
               <FileText aria-hidden size={30} />
-              <p>{syncState === "loading" ? "正在从 Notion 读取文章…" : syncState === "unavailable" ? "内容源暂时不可用。" : "没有找到匹配的文章。"}</p>
-              {syncState === "unavailable" && <button type="button" onClick={retrySync}>重新连接</button>}
+              <p>{!initialNotionConfigured ? "请先配置 Notion 内容源。" : syncState === "loading" ? "正在从 Notion 读取文章…" : syncState === "unavailable" ? "内容源暂时不可用。" : "没有找到匹配的文章。"}</p>
+              {initialNotionConfigured && syncState === "unavailable" && <button type="button" onClick={retrySync}>重新连接</button>}
             </div>
           )}
         </section>

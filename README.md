@@ -245,8 +245,10 @@ pnpm dev
 - 密码文章在校验成功前不会读取或返回正文块；成功后使用按文章隔离、短期有效的 HttpOnly 会话，密码不会在子页面请求中反复传输
 - D1 对失败尝试做时间窗限流
 - Notion 图片代理限制上游域名和响应类型
+- Notion 文件图片使用绑定页面与块 ID 的签名站内地址；每次读取重新解析临时源地址，密码文章图片继续验证解锁会话
 - 外部 RSS 只从已发布资讯页中的 `http(s)` 链接读取，并拒绝本机与私网地址
 - 导航只接受 `http(s)` 或站内绝对路径，拒绝 `javascript:` 等危险协议
+- 富文本和媒体地址在 Worker 规范化层过滤危险协议；HTML 响应附带 CSP、权限策略和防嗅探响应头
 - 公共站点配置采用显式字段白名单
 - 所有 Notion 查询只返回 `Published` 内容
 
@@ -256,12 +258,13 @@ pnpm dev
 
 ```text
 app/        页面、组件与样式
-worker/     Cloudflare Worker 路由、Notion 网关，以及隔离的外部抓取和 Config 规范化模块
+worker/     Cloudflare Worker 路由、带超时重试的 Notion 客户端、元数据聚合、外部抓取和 Config 规范化模块
 shared/     浏览器与 Worker 共用的纯逻辑
 db/         D1 数据结构、公开内容索引、预览缓存与限流逻辑
 drizzle/    D1 迁移
 tests/      渲染、接口、密码和边界测试
 public/     站点图标、开屏素材和分享图
+.github/    持续集成与依赖更新配置
 ```
 
 ## 参与贡献

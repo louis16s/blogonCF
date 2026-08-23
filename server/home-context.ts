@@ -6,6 +6,8 @@ export type HomePayload = {
   links: SiteLink[];
   notice?: SiteNotice;
   config: SiteConfig;
+  status?: number;
+  notionConfigured?: boolean;
 };
 
 const homeContext = createRequestContext<HomePayload>("louis16s.blog.home-context");
