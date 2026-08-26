@@ -1,8 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import Link from "next/link";
-import { useCallback, useDeferredValue, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import {
   FileText,
   LockSimple,
@@ -14,6 +13,7 @@ import {
 import { DEFAULT_SITE_CONFIG, type Post, type SiteConfig, type SiteLink, type SiteNotice } from "../data/types";
 import { ContentFooter } from "./ContentFooter";
 import { SiteSidebar } from "./SiteSidebar";
+import { ArticleOpenTransition, type ArticleOpening } from "./ArticleOpenTransition";
 import { normalizeSearchText } from "../../shared/wordCloud.js";
 import { siteThemeVariables } from "../../shared/site-config";
 
@@ -36,6 +36,33 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
   const [themeReady, setThemeReady] = useState(false);
   const [wordCloudOpen, setWordCloudOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [articleOpening, setArticleOpening] = useState<ArticleOpening | null>(null);
+  const articleOpeningRef = useRef(false);
+  const transitionTimersRef = useRef<number[]>([]);
+
+  useEffect(() => () => {
+    transitionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    document.body.classList.remove("article-transition-playing");
+  }, []);
+
+  const openArticle = useCallback((post: Post, bounds: DOMRect) => {
+    if (articleOpeningRef.current || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return false;
+    articleOpeningRef.current = true;
+    const href = `/blog/${encodeURIComponent(post.slug)}`;
+    // Warm the full HTML document during the visual transition. Article RSC
+    // requests do not carry the Worker's render context reliably on every
+    // Vinext/browser combination, while document navigation does.
+    void fetch(href, { credentials: "same-origin", headers: { accept: "text/html" } }).catch(() => {});
+    document.body.classList.add("article-transition-playing");
+    setArticleOpening({
+      bounds: { top: bounds.top, right: bounds.right, bottom: bounds.bottom, left: bounds.left, width: bounds.width, height: bounds.height },
+      date: formatDate(post.date),
+      icon: post.icon,
+      title: post.title,
+    });
+    transitionTimersRef.current.push(window.setTimeout(() => window.location.assign(href), 840));
+    return true;
+  }, []);
 
   useEffect(() => {
     if (!siteConfig.wordCloudEnabled) return;
@@ -177,6 +204,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
   };
   return (
     <div className="blog-frame">
+      <ArticleOpenTransition opening={articleOpening} />
       <SiteSidebar
         siteLinks={siteLinks}
         siteConfig={siteConfig}
@@ -218,7 +246,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
             <section className="category-section" key={name} aria-labelledby={`category-${slugify(name)}`}>
               {siteConfig.categoriesEnabled ? <h2 id={`category-${slugify(name)}`}>#&nbsp; {name}</h2> : null}
               <div className="post-grid">
-                {items.map((post, index) => <PostCard post={post} index={index} key={post.id} />)}
+                {items.map((post, index) => <PostCard post={post} index={index} onOpen={openArticle} key={post.id} />)}
               </div>
             </section>
           ))}
@@ -239,18 +267,24 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
   );
 }
 
-function PostCard({ post, index }: { post: Post; index: number }) {
+function PostCard({ post, index, onOpen }: { post: Post; index: number; onOpen: (post: Post, bounds: DOMRect) => boolean }) {
+  const open = (event: ReactMouseEvent<HTMLAnchorElement>) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const card = event.currentTarget.closest<HTMLElement>(".post-card");
+    if (card && onOpen(post, card.getBoundingClientRect())) event.preventDefault();
+  };
+  const href = `/blog/${encodeURIComponent(post.slug)}`;
   return (
     <article className="post-card" title={post.summary || undefined} style={{ "--card-order": Math.min(index, 8) } as CSSProperties}>
       {post.icon ? <span className="post-emoji" aria-label={`Notion 图标 ${post.icon}`}>{post.icon}</span> : null}
       <div className="post-card-body">
         <div className="post-card-title">
-          <h3><Link href={`/blog/${encodeURIComponent(post.slug)}`}>{post.title}</Link></h3>
+          <h3><a href={href} onClick={open}>{post.title}</a></h3>
           {post.locked && <span className="lock-badge" title="这篇文章需要密码"><LockSimple aria-label="需密码" size={15} weight="fill" /></span>}
         </div>
         <time dateTime={post.date}>{formatDate(post.date)}</time>
       </div>
-      <Link className="card-link" href={`/blog/${encodeURIComponent(post.slug)}`} aria-label={`阅读 ${post.title}`} />
+      <a className="card-link" href={href} onClick={open} aria-label={`阅读 ${post.title}`} />
     </article>
   );
 }

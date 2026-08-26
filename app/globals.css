@@ -78,7 +78,7 @@
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; background: var(--bg); }
 body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-ui); -webkit-font-smoothing: auto; -moz-osx-font-smoothing: auto; text-rendering: auto; transition: background-color .35s var(--ease-soft), color .35s var(--ease-soft); }
-body.intro-playing { overflow: hidden; }
+body.intro-playing, body.article-transition-playing { overflow: hidden; }
 a { color: inherit; text-decoration: none; }
 button, input, select { font: inherit; }
 button, select { color: inherit; }
@@ -305,6 +305,29 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .post-card time { margin-top: auto; color: var(--muted); font-size: 12px; letter-spacing: .01em; }
 .lock-badge { display: inline-flex; color: var(--muted); }
 .card-link { position: absolute; inset: 0; border-radius: inherit; }
+
+.article-flight { position: fixed; inset: 0; z-index: 900; overflow: hidden; color: var(--ink); background: color-mix(in srgb, var(--surface) 96%, var(--accent-soft)); clip-path: inset(var(--flight-top) var(--flight-right) var(--flight-bottom) var(--flight-left) round 12px); isolation: isolate; pointer-events: all; will-change: clip-path; animation: article-flight-open .82s var(--ease-out) forwards; }
+.article-flight::before { content: ""; position: absolute; inset: -12%; z-index: -2; background: radial-gradient(circle at 50% 48%, color-mix(in srgb, var(--accent-soft) 62%, transparent) 0 12%, transparent 42%), linear-gradient(135deg, var(--surface), color-mix(in srgb, var(--surface) 90%, var(--accent-soft))); animation: article-flight-light .82s var(--ease-out) both; }
+.article-flight::after { content: ""; position: absolute; inset: 0; z-index: 2; background: linear-gradient(112deg, transparent 39%, color-mix(in srgb, var(--ink) 8%, transparent) 49%, color-mix(in srgb, var(--surface) 46%, transparent) 51%, transparent 61%); transform: translateX(-120%); animation: article-flight-sweep .82s .06s var(--ease-out) both; pointer-events: none; }
+.article-flight-grain { position: absolute; inset: 0; z-index: -1; opacity: .22; background-image: radial-gradient(circle at 20% 30%, color-mix(in srgb, var(--ink) 9%, transparent) 0 .6px, transparent .8px), radial-gradient(circle at 70% 65%, color-mix(in srgb, var(--ink) 7%, transparent) 0 .6px, transparent .8px); background-size: 7px 7px, 9px 9px; mix-blend-mode: multiply; animation: article-flight-grain-in .5s ease both; }
+.article-flight-focus { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 9px; padding: 28px; text-align: center; transform: translate3d(var(--flight-x), var(--flight-y), 0) scale(.46); transform-origin: center; animation: article-flight-focus .82s var(--ease-out) both; }
+.article-flight-aperture { position: absolute; top: 50%; left: 50%; width: clamp(230px, 34vw, 480px); aspect-ratio: 1; border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: 50%; transform: translate(-50%, -50%) scale(.34) rotate(-36deg); opacity: 0; animation: article-flight-aperture .76s .03s var(--ease-out) both; }
+.article-flight-aperture::before, .article-flight-aperture::after { content: ""; position: absolute; border-radius: inherit; }
+.article-flight-aperture::before { inset: 10%; background: repeating-conic-gradient(from 22.5deg, color-mix(in srgb, var(--ink) 24%, transparent) 0 1deg, transparent 1deg 45deg); -webkit-mask: radial-gradient(circle, transparent 0 52%, #000 53% 55%, transparent 56%); mask: radial-gradient(circle, transparent 0 52%, #000 53% 55%, transparent 56%); }
+.article-flight-aperture::after { inset: 26%; border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent); box-shadow: 0 0 0 10px color-mix(in srgb, var(--accent-soft) 18%, transparent), inset 0 0 28px color-mix(in srgb, var(--accent) 9%, transparent); }
+.article-flight-icon { min-height: 1em; font-size: clamp(30px, 5vw, 52px); line-height: 1; filter: saturate(.9); animation: article-flight-detail .55s .14s var(--ease-out) both; }
+.article-flight-focus strong { max-width: min(760px, 84vw); overflow-wrap: anywhere; font-family: var(--font-reading); font-size: clamp(30px, 5.4vw, 66px); font-synthesis: none; font-weight: 600; line-height: 1.08; letter-spacing: -.035em; text-wrap: balance; animation: article-flight-detail .55s .1s var(--ease-out) both; }
+.article-flight-focus time { color: var(--muted); font-size: 11px; letter-spacing: .12em; animation: article-flight-detail .5s .18s var(--ease-out) both; }
+.article-flight-meter { width: min(180px, 42vw); height: 1px; margin-top: 11px; overflow: hidden; background: color-mix(in srgb, var(--ink) 14%, transparent); }
+.article-flight-meter::after { content: ""; display: block; width: 100%; height: 100%; background: var(--accent); transform-origin: left; animation: article-flight-meter .64s .08s var(--ease-soft) both; }
+@keyframes article-flight-open { 0% { clip-path: inset(var(--flight-top) var(--flight-right) var(--flight-bottom) var(--flight-left) round 12px); } 100% { clip-path: inset(0 round 0); } }
+@keyframes article-flight-focus { 0% { opacity: .66; transform: translate3d(var(--flight-x), var(--flight-y), 0) scale(.46); } 56% { opacity: 1; } 100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); } }
+@keyframes article-flight-aperture { 0% { opacity: 0; transform: translate(-50%, -50%) scale(.34) rotate(-36deg); } 34% { opacity: .7; } 100% { opacity: .18; transform: translate(-50%, -50%) scale(1.24) rotate(0); } }
+@keyframes article-flight-light { from { opacity: .4; transform: scale(.94); } to { opacity: 1; transform: scale(1); } }
+@keyframes article-flight-sweep { 0% { opacity: 0; transform: translateX(-120%); } 28% { opacity: 1; } 100% { opacity: 0; transform: translateX(120%); } }
+@keyframes article-flight-grain-in { from { opacity: 0; } to { opacity: .22; } }
+@keyframes article-flight-detail { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes article-flight-meter { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 .empty { min-height: 240px; display: grid; place-items: center; align-content: center; gap: 10px; color: var(--muted); border: 1px dashed var(--line-strong); border-radius: 13px; }
 .empty p { margin: 0; }
 .empty button { min-height: 36px; padding: 0 12px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; cursor: pointer; font-size: 12px; }

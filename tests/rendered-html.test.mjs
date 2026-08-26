@@ -385,6 +385,25 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   assert.match(css, /\.footer-signature \{ align-self: flex-end; margin-left: auto; \}/);
 });
 
+test("homepage article cards use a motion-safe, preloaded photographic transition", async () => {
+  const [explorer, transition, css] = await Promise.all([
+    readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/ArticleOpenTransition.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(explorer, /fetch\(href, \{ credentials: "same-origin", headers: \{ accept: "text\/html" \} \}\)/, "the article document should warm while the transition is playing");
+  assert.match(explorer, /window\.location\.assign\(href\)/, "article transitions must finish with a context-safe document navigation");
+  assert.match(explorer, /prefers-reduced-motion: reduce/);
+  assert.doesNotMatch(explorer, /from "next\/navigation"|router\.prefetch/, "the homepage must not eagerly prefetch RSC article routes");
+  assert.match(explorer, /<ArticleOpenTransition opening=\{articleOpening\}/);
+  assert.match(transition, /aria-label=\{`正在打开《\$\{opening\.title\}》`\}/);
+  assert.match(transition, /--flight-top/);
+  assert.match(css, /@keyframes article-flight-open/);
+  assert.match(css, /@keyframes article-flight-focus/);
+  assert.match(css, /@keyframes article-flight-aperture/);
+  assert.match(css, /body\.intro-playing, body\.article-transition-playing \{ overflow: hidden; \}/);
+});
+
 test("intro bootstrap plays on reload and respects reduced motion", () => {
   const runBootstrap = (reducedMotion = false) => {
     const document = { documentElement: { dataset: {} } };
