@@ -1806,6 +1806,17 @@ function secureDocumentResponse(response: Response): Response {
   headers.set("referrer-policy", "strict-origin-when-cross-origin");
   headers.set("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
   if ((headers.get("content-type") || "").toLocaleLowerCase().includes("text/html")) {
+    // Regular document fetches and browser navigations advertise different
+    // Accept strings even though they receive identical HTML. Keeping Accept
+    // in Vary prevents an interaction-time warmup from being reused and also
+    // fragments Cloudflare's document cache. RSC remains isolated by its own
+    // URL/headers and is never emitted as text/html.
+    const vary = (headers.get("vary") || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value && value.toLocaleLowerCase() !== "accept");
+    if (vary.length) headers.set("vary", vary.join(", "));
+    else headers.delete("vary");
     headers.set("x-frame-options", "SAMEORIGIN");
     headers.set("cross-origin-opener-policy", "same-origin");
     headers.set("content-security-policy", [

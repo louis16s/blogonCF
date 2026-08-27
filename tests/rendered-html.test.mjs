@@ -391,7 +391,10 @@ test("homepage article cards use a motion-safe, preloaded photographic transitio
     readFile(new URL("../app/components/ArticleOpenTransition.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
-  assert.match(explorer, /fetch\(href, \{ credentials: "same-origin", headers: \{ accept: "text\/html" \} \}\)/, "the article document should warm while the transition is playing");
+  assert.match(explorer, /await response\.arrayBuffer\(\)/, "the article warmup must finish consuming the document before navigation");
+  assert.match(explorer, /onPointerEnter=\{\(\) => onPreload\(href\)\}/, "likely article intent should start warming before the click");
+  assert.match(explorer, /Promise\.race\(\[documentReady, wait\(ARTICLE_PRELOAD_DEADLINE_MS\)\]\)/, "navigation must wait for a reusable document with a bounded deadline");
+  assert.match(explorer, /cache: "force-cache"/, "the warmed document should be reusable by the browser cache");
   assert.match(explorer, /window\.location\.assign\(href\)/, "article transitions must finish with a context-safe document navigation");
   assert.match(explorer, /prefers-reduced-motion: reduce/);
   assert.doesNotMatch(explorer, /from "next\/navigation"|router\.prefetch/, "the homepage must not eagerly prefetch RSC article routes");
@@ -402,6 +405,14 @@ test("homepage article cards use a motion-safe, preloaded photographic transitio
   assert.match(css, /@keyframes article-flight-focus/);
   assert.match(css, /@keyframes article-flight-aperture/);
   assert.match(css, /body\.intro-playing, body\.article-transition-playing \{ overflow: hidden; \}/);
+});
+
+test("HTML document responses share one cache variant across warmup and navigation Accept headers", async () => {
+  const worker = await loadWorker();
+  const response = await worker.fetch(new Request("http://localhost/", { headers: { accept: "text/html" } }), { ASSETS: assets }, context);
+  const vary = response.headers.get("vary") || "";
+  assert.doesNotMatch(vary, /(?:^|,)\s*Accept\s*(?:,|$)/i);
+  assert.match(response.headers.get("content-type") || "", /text\/html/);
 });
 
 test("intro bootstrap plays on reload and respects reduced motion", () => {

@@ -18,6 +18,39 @@ import { normalizeSearchText } from "../../shared/wordCloud.js";
 import { siteThemeVariables } from "../../shared/site-config";
 
 const ALL = "全部";
+const ARTICLE_TRANSITION_MS = 840;
+const ARTICLE_PRELOAD_DEADLINE_MS = 8_000;
+const ARTICLE_NAVIGATION_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8";
+const articleDocumentPreloads = new Map<string, Promise<void>>();
+
+function warmArticleDocument(href: string): Promise<void> {
+  const existing = articleDocumentPreloads.get(href);
+  if (existing) return existing;
+
+  while (articleDocumentPreloads.size >= 8) {
+    const oldest = articleDocumentPreloads.keys().next().value;
+    if (typeof oldest !== "string") break;
+    articleDocumentPreloads.delete(oldest);
+  }
+
+  const request: Promise<void> = fetch(href, {
+    cache: "force-cache",
+    credentials: "same-origin",
+    headers: { accept: ARTICLE_NAVIGATION_ACCEPT },
+  }).then(async (response) => {
+    if (!response.ok) throw new Error(`Article preload failed with ${response.status}`);
+    // A response is not reusable until its body has been consumed. Finishing
+    // this read before navigation prevents the browser from cancelling the
+    // warm request and starting the same Worker/Notion work again.
+    await response.arrayBuffer();
+  }).catch((reason) => {
+    if (articleDocumentPreloads.get(href) === request) articleDocumentPreloads.delete(href);
+    throw reason;
+  });
+  articleDocumentPreloads.set(href, request);
+  return request;
+}
+
 const WordCloudDialog = dynamic(() => import("./WordCloudDialog").then((module) => module.WordCloudDialog), {
   loading: () => null,
   ssr: false,
@@ -39,20 +72,34 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
   const [articleOpening, setArticleOpening] = useState<ArticleOpening | null>(null);
   const articleOpeningRef = useRef(false);
   const transitionTimersRef = useRef<number[]>([]);
+  const hoverPreloadTimerRef = useRef<number | null>(null);
 
   useEffect(() => () => {
     transitionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    if (hoverPreloadTimerRef.current !== null) window.clearTimeout(hoverPreloadTimerRef.current);
     document.body.classList.remove("article-transition-playing");
+  }, []);
+
+  const preloadArticle = useCallback((href: string, immediate = false) => {
+    if (hoverPreloadTimerRef.current !== null) window.clearTimeout(hoverPreloadTimerRef.current);
+    hoverPreloadTimerRef.current = window.setTimeout(() => {
+      hoverPreloadTimerRef.current = null;
+      void warmArticleDocument(href).catch(() => undefined);
+    }, immediate ? 0 : 120);
+  }, []);
+
+  const cancelArticlePreload = useCallback(() => {
+    if (hoverPreloadTimerRef.current === null) return;
+    window.clearTimeout(hoverPreloadTimerRef.current);
+    hoverPreloadTimerRef.current = null;
   }, []);
 
   const openArticle = useCallback((post: Post, bounds: DOMRect) => {
     if (articleOpeningRef.current || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return false;
     articleOpeningRef.current = true;
     const href = `/blog/${encodeURIComponent(post.slug)}`;
-    // Warm the full HTML document during the visual transition. Article RSC
-    // requests do not carry the Worker's render context reliably on every
-    // Vinext/browser combination, while document navigation does.
-    void fetch(href, { credentials: "same-origin", headers: { accept: "text/html" } }).catch(() => {});
+    cancelArticlePreload();
+    const documentReady = warmArticleDocument(href).catch(() => undefined);
     document.body.classList.add("article-transition-playing");
     setArticleOpening({
       bounds: { top: bounds.top, right: bounds.right, bottom: bounds.bottom, left: bounds.left, width: bounds.width, height: bounds.height },
@@ -60,9 +107,18 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
       icon: post.icon,
       title: post.title,
     });
-    transitionTimersRef.current.push(window.setTimeout(() => window.location.assign(href), 840));
+    const wait = (delay: number) => new Promise<void>((resolve) => {
+      transitionTimersRef.current.push(window.setTimeout(resolve, delay));
+    });
+    // Keep the existing visual timing, but leave its completed full-screen
+    // frame in place until the warmed document is reusable. The deadline
+    // avoids trapping navigation when the network is genuinely unavailable.
+    void Promise.all([
+      wait(ARTICLE_TRANSITION_MS),
+      Promise.race([documentReady, wait(ARTICLE_PRELOAD_DEADLINE_MS)]),
+    ]).then(() => window.location.assign(href));
     return true;
-  }, []);
+  }, [cancelArticlePreload]);
 
   useEffect(() => {
     if (!siteConfig.wordCloudEnabled) return;
@@ -246,7 +302,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
             <section className="category-section" key={name} aria-labelledby={`category-${slugify(name)}`}>
               {siteConfig.categoriesEnabled ? <h2 id={`category-${slugify(name)}`}>#&nbsp; {name}</h2> : null}
               <div className="post-grid">
-                {items.map((post, index) => <PostCard post={post} index={index} onOpen={openArticle} key={post.id} />)}
+                {items.map((post, index) => <PostCard post={post} index={index} onOpen={openArticle} onPreload={preloadArticle} onCancelPreload={cancelArticlePreload} key={post.id} />)}
               </div>
             </section>
           ))}
@@ -267,7 +323,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
   );
 }
 
-function PostCard({ post, index, onOpen }: { post: Post; index: number; onOpen: (post: Post, bounds: DOMRect) => boolean }) {
+function PostCard({ post, index, onOpen, onPreload, onCancelPreload }: { post: Post; index: number; onOpen: (post: Post, bounds: DOMRect) => boolean; onPreload: (href: string, immediate?: boolean) => void; onCancelPreload: () => void }) {
   const open = (event: ReactMouseEvent<HTMLAnchorElement>) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const card = event.currentTarget.closest<HTMLElement>(".post-card");
@@ -275,7 +331,15 @@ function PostCard({ post, index, onOpen }: { post: Post; index: number; onOpen: 
   };
   const href = `/blog/${encodeURIComponent(post.slug)}`;
   return (
-    <article className="post-card" title={post.summary || undefined} style={{ "--card-order": Math.min(index, 8) } as CSSProperties}>
+    <article
+      className="post-card"
+      title={post.summary || undefined}
+      style={{ "--card-order": Math.min(index, 8) } as CSSProperties}
+      onPointerEnter={() => onPreload(href)}
+      onPointerLeave={onCancelPreload}
+      onPointerDown={() => onPreload(href, true)}
+      onFocusCapture={() => onPreload(href, true)}
+    >
       {post.icon ? <span className="post-emoji" aria-label={`Notion 图标 ${post.icon}`}>{post.icon}</span> : null}
       <div className="post-card-body">
         <div className="post-card-title">
