@@ -43,7 +43,7 @@ export type RichText = {
   accessSignature?: string;
 };
 
-export type ContentBlockType =
+type ContentBlockType =
   | "paragraph" | "heading_1" | "heading_2" | "heading_3"
   | "bulleted_list_item" | "numbered_list_item" | "to_do" | "quote" | "callout" | "toggle"
   | "code" | "divider" | "image" | "bookmark" | "embed" | "video" | "file" | "pdf" | "audio"

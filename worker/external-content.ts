@@ -16,7 +16,7 @@ const PREVIEW_RATE_WINDOW_MS = 60_000;
 const PREVIEW_RATE_LIMIT = 24;
 const MAX_PREVIEW_CLIENTS = 2_000;
 
-export type ExternalFeedItem = { id: string; title: string; url: string; published: string; summary: string };
+type ExternalFeedItem = { id: string; title: string; url: string; published: string; summary: string };
 export type ExternalFeed = { url: string; title: string; source: string; items: ExternalFeedItem[] };
 type LinkPreview = { title: string; subtitle: string; source: string };
 

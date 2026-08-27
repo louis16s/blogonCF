@@ -37,6 +37,21 @@ type ArticleClientProps = {
 
 type ExternalFeed = { url: string; title: string; source: string; items: Array<{ id: string; title: string; url: string; published: string; summary: string }> };
 
+function abortableDelay(delay: number, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delay);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 async function requestChildPage(endpoint: string, payload: Record<string, unknown>, signal: AbortSignal): Promise<ChildPage> {
   const send = (body: Record<string, unknown>) => fetch(endpoint, {
     method: "POST",
@@ -67,10 +82,7 @@ async function requestChildHeadings(endpoint: string, payload: Record<string, un
       const delay = Number.isFinite(retryAfter) && retryAfter > 0
         ? Math.min(4000, retryAfter * 1000)
         : Math.min(4000, 250 * 2 ** attempt);
-      await new Promise<void>((resolve, reject) => {
-        const timer = window.setTimeout(resolve, delay);
-        signal.addEventListener("abort", () => { window.clearTimeout(timer); reject(signal.reason); }, { once: true });
-      });
+      await abortableDelay(delay, signal);
       continue;
     }
     if (!response.ok) throw new Error(data.error || "目录暂时无法读取");
@@ -447,7 +459,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       </div>
       {post.tags.length ? <div className="tags">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
     </header> : null}
-    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} continuationLoading={childContinuationLoading} error={childError} databaseContext={{ slug, contentKind, trail: childTrail.map((item) => item.id) }} breadcrumb={[post.title, ...childTrail.map((item) => item.title)]} /> : blocks.length ? <div className="notion-content"><Blocks blocks={visibleBlocks} toc={headings.length ? headings : undefined} onOpenChild={loadChild} databaseContext={{ slug, contentKind, trail: [] }} breadcrumb={[post.title]} />{isNewsPage && siteConfig?.rssEnabled !== false ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}<ContentPrefetchSentinel pending={Boolean(nextCursor)} loading={continuationLoading} onLoad={loadMoreContent} /></div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
+    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} continuationLoading={childContinuationLoading} error={childError} databaseContext={{ slug, contentKind, trail: childTrail.map((item) => item.id) }} breadcrumb={[post.title, ...childTrail.map((item) => item.title)]} /> : blocks.length ? <div className="notion-content"><Blocks blocks={visibleBlocks} onOpenChild={loadChild} databaseContext={{ slug, contentKind, trail: [] }} breadcrumb={[post.title]} />{isNewsPage && siteConfig?.rssEnabled !== false ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}<ContentPrefetchSentinel pending={Boolean(nextCursor)} loading={continuationLoading} onLoad={loadMoreContent} /></div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
   </>;
 }
 
@@ -489,7 +501,7 @@ function ChildDocument({ child, parentTitle, onBack, onOpenChild, onLoadMore, co
       <h2 id={`child-${child.id}`}>{child.title}</h2>
     </header>
     <div className="child-document-body">
-      <div className="notion-content"><Blocks blocks={child.blocks} toc={child.headings?.length ? child.headings : undefined} onOpenChild={onOpenChild} databaseContext={databaseContext} breadcrumb={breadcrumb} /></div>
+      <div className="notion-content"><Blocks blocks={child.blocks} onOpenChild={onOpenChild} databaseContext={databaseContext} breadcrumb={breadcrumb} /></div>
     </div>
     {child.truncated ? <ContentLimitNotice /> : null}
     <ContentPrefetchSentinel pending={Boolean(child.nextCursor)} loading={continuationLoading} onLoad={onLoadMore} />
@@ -539,31 +551,22 @@ function PasswordForm({ onSubmit, error, loading }: { onSubmit: (value: string) 
   </form>;
 }
 
-export type TocItem = { id: string; label: string; level: number };
+type TocItem = { id: string; label: string; level: number };
 
-function collectHeadings(blocks: ContentBlock[]): TocItem[] {
-  return blocks.flatMap((block) => {
-    const own = /^heading_[123]$/.test(block.type)
-      ? [{ id: block.id, label: block.richText?.map((item) => item.text).join("") || "未命名章节", level: Number(block.type.at(-1)) }]
-      : [];
-    return [...own, ...(block.children?.length ? collectHeadings(block.children) : [])];
-  });
-}
-
-function Blocks({ blocks, onOpenChild, toc = collectHeadings(blocks), databaseContext, breadcrumb = [] }: { blocks: ContentBlock[]; onOpenChild: (pageId: string, accessSignature?: string) => void; toc?: TocItem[]; databaseContext?: DatabaseContext; breadcrumb?: string[] }) {
+function Blocks({ blocks, onOpenChild, databaseContext, breadcrumb = [] }: { blocks: ContentBlock[]; onOpenChild: (pageId: string, accessSignature?: string) => void; databaseContext?: DatabaseContext; breadcrumb?: string[] }) {
   const output: ReactNode[] = [];
   for (let index = 0; index < blocks.length;) {
     const block = blocks[index];
     const listType = block.type === "bulleted_list_item" ? "ul" : block.type === "numbered_list_item" ? "ol" : "";
     if (!listType) {
-      output.push(<Block key={block.id} block={block} onOpenChild={onOpenChild} toc={toc} databaseContext={databaseContext} breadcrumb={breadcrumb} />);
+      output.push(<Block key={block.id} block={block} onOpenChild={onOpenChild} databaseContext={databaseContext} breadcrumb={breadcrumb} />);
       index += 1;
       continue;
     }
     const items: ContentBlock[] = [];
     while (index < blocks.length && blocks[index].type === block.type) items.push(blocks[index++]);
     const List = listType;
-    output.push(<List key={`${block.id}-list`} className="notion-list">{items.map((item) => <li key={item.id}><Rich value={item.richText} onOpenChild={onOpenChild} />{item.children?.length ? <Blocks blocks={item.children} onOpenChild={onOpenChild} toc={toc} databaseContext={databaseContext} breadcrumb={breadcrumb} /> : null}</li>)}</List>);
+    output.push(<List key={`${block.id}-list`} className="notion-list">{items.map((item) => <li key={item.id}><Rich value={item.richText} onOpenChild={onOpenChild} />{item.children?.length ? <Blocks blocks={item.children} onOpenChild={onOpenChild} databaseContext={databaseContext} breadcrumb={breadcrumb} /> : null}</li>)}</List>);
   }
   return <>{output}</>;
 }
@@ -739,8 +742,8 @@ function ChildDatabaseBlock({ block, context }: { block: ContentBlock; context: 
   return <section className="notion-child-database is-open"><header><small>NOTION DATABASE</small><h3>{database.title}</h3></header><div className="notion-database-grid">{database.rows.map((row) => <article key={row.id}><h4>{row.icon ? <span aria-hidden>{row.icon}</span> : null}{row.title}</h4>{row.fields.map((field) => <p key={field.name}><small>{field.name}</small><span>{field.value}</span></p>)}</article>)}</div>{error ? <p role="alert">{error}</p> : null}</section>;
 }
 
-function Block({ block, onOpenChild, toc, databaseContext, breadcrumb }: { block: ContentBlock; onOpenChild: (pageId: string, accessSignature?: string) => void; toc: TocItem[]; databaseContext?: DatabaseContext; breadcrumb: string[] }) {
-  const children = block.children?.length ? <Blocks blocks={block.children} onOpenChild={onOpenChild} toc={toc} databaseContext={databaseContext} breadcrumb={breadcrumb} /> : null;
+function Block({ block, onOpenChild, databaseContext, breadcrumb }: { block: ContentBlock; onOpenChild: (pageId: string, accessSignature?: string) => void; databaseContext?: DatabaseContext; breadcrumb: string[] }) {
+  const children = block.children?.length ? <Blocks blocks={block.children} onOpenChild={onOpenChild} databaseContext={databaseContext} breadcrumb={breadcrumb} /> : null;
   const className = block.color ? `notion-block notion-color-${block.color}` : "notion-block";
   switch (block.type) {
     case "paragraph": return <div className={className}><p><Rich value={block.richText} onOpenChild={onOpenChild} /></p>{children}</div>;

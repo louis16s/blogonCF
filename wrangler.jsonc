@@ -8,7 +8,6 @@
   // Cloudflare Vite/Miniflare runtime so `pnpm dev` and production agree.
   "compatibility_date": "2026-05-15",
   "compatibility_flags": ["nodejs_compat"],
-  "no_bundle": true,
   "assets": {
     "directory": "dist/client",
     "binding": "ASSETS"
@@ -33,11 +32,5 @@
   },
   "observability": {
     "enabled": true
-  },
-  "rules": [
-    {
-      "type": "ESModule",
-      "globs": ["**/*.js", "**/*.mjs"]
-    }
-  ]
+  }
 }

@@ -2,7 +2,7 @@
 /* eslint-disable @next/next/no-img-element -- Notion-configured avatars may come from arbitrary HTTPS hosts. */
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { CSSProperties } from "react";
 import {
   CaretDown,
@@ -19,13 +19,11 @@ import {
 } from "@phosphor-icons/react";
 import { SITE_LABELS, type SiteConfig, type SiteLink } from "../data/types";
 import { usePersistedDisclosure } from "./usePersistedDisclosure";
-import { loadSiteBootstrap } from "./siteBootstrap";
-import { useSiteConfig } from "./useSiteConfig";
-import { useSiteNavigation } from "./useSiteNavigation";
+import { useSiteBootstrap } from "./siteBootstrap";
 import { useArticleToc, type ArticleHeading } from "./ArticleTocContext";
 
-export type ContentSyncState = "loading" | "live" | "unavailable";
-export type SidebarHeading = ArticleHeading;
+type ContentSyncState = "loading" | "live" | "unavailable";
+type SidebarHeading = ArticleHeading;
 
 type SidebarProps = {
   siteLinks?: SiteLink[];
@@ -42,14 +40,15 @@ export function SiteSidebar({ siteLinks, postCount, syncState, categories = [], 
   const articleToc = useArticleToc();
   const resolvedHeadings = articleToc?.headings ?? headings;
   const pendingHeadingId = articleToc?.pendingHeadingId || "";
-  const resolvedLinks = useSiteNavigation(siteLinks);
-  const config = useSiteConfig(siteConfig);
+  const needsPostStats = typeof postCount !== "number";
+  const bootstrap = useSiteBootstrap({ initialConfig: siteConfig, initialLinks: siteLinks, includePosts: needsPostStats });
+  const resolvedLinks = bootstrap.links;
+  const config = bootstrap.config;
   const tocDefaultOpen = config.tocDefaultState === "open"
     || (config.tocDefaultState === "auto" && resolvedHeadings.length > 1 && resolvedHeadings.length <= 8);
   const toolsDisclosure = usePersistedDisclosure({ key: "blog.sidebar.tools.v1", defaultOpen: config.toolsDefaultOpen });
   const categoriesDisclosure = usePersistedDisclosure({ key: "blog.sidebar.categories.v2", defaultOpen: config.categoriesDefaultOpen });
   const tocDisclosure = usePersistedDisclosure({ key: "blog.sidebar.toc.v1", defaultOpen: tocDefaultOpen });
-  const [articlePageSync, setArticlePageSync] = useState<{ count?: number; state: ContentSyncState }>({ state: "loading" });
   const toolLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "tool"), [resolvedLinks]);
   const navLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "nav"), [resolvedLinks]);
   const rssLink = resolvedLinks.find((link) => link.kind === "rss");
@@ -58,8 +57,9 @@ export function SiteSidebar({ siteLinks, postCount, syncState, categories = [], 
   const sitemapLink = navLinks.find((link) => link.href.includes("sitemap") || link.title.includes("地图"));
   const assignedNavIds = new Set([aboutLink?.id, newsLink?.id, sitemapLink?.id].filter(Boolean));
   const extraNavLinks = navLinks.filter((link) => !assignedNavIds.has(link.id));
-  const resolvedSyncState = syncState || articlePageSync.state;
-  const resolvedPostCount = typeof postCount === "number" ? postCount : articlePageSync.count;
+  const resolvedSyncState = syncState
+    || (typeof postCount === "number" ? "live" : bootstrap.failed ? "unavailable" : bootstrap.loaded ? "live" : "loading");
+  const resolvedPostCount = typeof postCount === "number" ? postCount : bootstrap.loaded ? bootstrap.posts.length : undefined;
   const countLabel = resolvedSyncState === "live" && typeof resolvedPostCount === "number"
     ? `${resolvedPostCount} 篇公开文章`
     : resolvedSyncState === "loading" ? "正在读取公开文章" : "内容源暂时不可用";
@@ -68,23 +68,6 @@ export function SiteSidebar({ siteLinks, postCount, syncState, categories = [], 
     event.preventDefault();
     window.dispatchEvent(new CustomEvent("article-toc:navigate", { detail: { id } }));
   };
-
-  useEffect(() => {
-    if (typeof postCount === "number" || syncState) return;
-    let active = true;
-    loadSiteBootstrap()
-      .then(({ posts }) => {
-        if (!active) return;
-        setArticlePageSync({
-        count: posts.length,
-        state: "live",
-        });
-      })
-      .catch(() => {
-        if (active) setArticlePageSync({ state: "unavailable" });
-      });
-    return () => { active = false; };
-  }, [postCount, syncState]);
 
   return (
     <aside className="site-sidebar" aria-label="站点导航">

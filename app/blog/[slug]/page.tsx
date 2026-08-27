@@ -2,12 +2,9 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { cache } from "react";
-import { ArticleClient } from "../../components/ArticleClient";
-import { SiteSidebar } from "../../components/SiteSidebar";
-import { ContentFooter } from "../../components/ContentFooter";
+import { NotionContentPage } from "../../components/NotionContentPage";
 import { readArticlePayload, type ArticlePayload } from "../../../server/article-context";
 import { decodeRouteSegment } from "../../../shared/url";
-import { ArticleTocProvider } from "../../components/ArticleTocContext";
 
 const getArticle = cache(async (slug: string): Promise<{ payload?: ArticlePayload; fetched: boolean }> => {
   void slug;
@@ -36,5 +33,5 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
   const decoded = decodeRouteSegment(slug);
   const { payload, fetched } = await getArticle(decoded);
   if (payload?.status === 404) notFound();
-  return <ArticleTocProvider initialHeadings={payload?.headings || []}><div className="blog-frame article-frame"><SiteSidebar siteConfig={payload?.config} /><main className="article-shell"><article><ArticleClient slug={decoded} initialPost={payload?.post} initialBlocks={payload?.locked ? [] : payload?.blocks || []} initialHeadings={payload?.headings || []} initialNextCursor={payload?.locked ? undefined : payload?.nextCursor} initialLocked={Boolean(payload?.locked)} initialFetched={fetched} initialError={payload?.error || ""} initialTruncated={Boolean(payload?.truncated)} siteConfig={payload?.config} /></article><ContentFooter siteConfig={payload?.config} /></main></div></ArticleTocProvider>;
+  return <NotionContentPage slug={decoded} payload={payload} fetched={fetched} contentKind="post" />;
 }

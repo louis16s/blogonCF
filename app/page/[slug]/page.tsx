@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { cache } from "react";
-import { SiteContentPage } from "../../components/SiteContentPage";
+import { NotionContentPage } from "../../components/NotionContentPage";
 import { readArticlePayload, type ArticlePayload } from "../../../server/article-context";
 import { decodeRouteSegment } from "../../../shared/url";
 
@@ -33,5 +33,5 @@ export default async function NotionPage({ params }: { params: Promise<{ slug: s
   const decoded = decodeRouteSegment(slug);
   const { payload, fetched } = await getSitePage(decoded);
   if (payload?.status === 404) notFound();
-  return <SiteContentPage slug={decoded} payload={payload} fetched={fetched} />;
+  return <NotionContentPage slug={decoded} payload={payload} fetched={fetched} contentKind="page" />;
 }

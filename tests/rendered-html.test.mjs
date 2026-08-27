@@ -199,16 +199,17 @@ test("overview renders every article immediately while retaining search and cate
   assert.match(blog, /placeholder="搜索标题、正文…"/);
   assert.doesNotMatch(blog, /resource-strip|工具与订阅/);
   assert.match(blog, /siteLinks=\{siteLinks\}/);
-  const [sidebar, navigationHook] = await Promise.all([
+  const [sidebar, bootstrapHook] = await Promise.all([
     readFile(new URL("../app/components/SiteSidebar.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/components/useSiteNavigation.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/siteBootstrap.ts", import.meta.url), "utf8"),
   ]);
   assert.match(sidebar, /SITE_LABELS\.tools/);
   assert.match(sidebar, /link\.kind === "tool"/);
   assert.doesNotMatch(sidebar, /快速访问|blog-sidebar-quick-open|quick-links/);
-  assert.match(navigationHook, /loadSiteBootstrap/);
-  assert.match(navigationHook, /initialLinks !== undefined/);
-  assert.match(navigationHook, /return initialLinks \?\? fetchedLinks/);
+  assert.match(bootstrapHook, /export function useSiteBootstrap/);
+  assert.match(bootstrapHook, /initialLinks \?\? remote\?\.links \?\? \[\]/);
+  assert.match(sidebar, /const bootstrap = useSiteBootstrap/);
+  assert.doesNotMatch(sidebar, /loadSiteBootstrap\(\)/, "sidebar config, navigation, and counts must share one hook");
   assert.doesNotMatch(sidebar, /categories\.slice/);
   assert.match(sidebar, /className="mobile-menu"/);
   assert.match(sidebar, />菜单</);
@@ -535,11 +536,11 @@ test("Vinext RSC data routes resolve the underlying article slug", async () => {
 });
 
 test("article header stays compact and the password form supports keyboard submission", async () => {
-  const [article, linkPreviewClient, articlePage, sitePage, css] = await Promise.all([
+  const [article, linkPreviewClient, articlePage, contentPage, css] = await Promise.all([
     readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/linkPreviewClient.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/blog/[slug]/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/components/SiteContentPage.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/NotionContentPage.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
   assert.match(article, /className="article-title-row"/);
@@ -551,12 +552,12 @@ test("article header stays compact and the password form supports keyboard submi
   assert.match(article, /autoFocus/);
   assert.match(css, /\.article-title-row \{ display: grid;/);
   assert.match(css, /\.article-shell article \{[^}]*padding: 8px 0 70px;/);
-  assert.match(articlePage, /<SiteSidebar siteConfig=\{payload\?\.config\} \/>/);
+  assert.match(articlePage, /<NotionContentPage slug=\{decoded\}/);
   assert.doesNotMatch(articlePage, /showHomeLink/);
-  assert.match(sitePage, /<SiteSidebar siteConfig=\{payload\?\.config\} \/>/);
-  assert.doesNotMatch(sitePage, /showHomeLink|返回主页/);
+  assert.match(contentPage, /<SiteSidebar siteConfig=\{payload\?\.config\} \/>/);
+  assert.doesNotMatch(contentPage, /showHomeLink|返回主页/);
   assert.doesNotMatch(articlePage, /返回全部文章|article-return/);
-  assert.doesNotMatch(sitePage, /返回全部文章|article-return/);
+  assert.doesNotMatch(contentPage, /返回全部文章|article-return/);
   assert.doesNotMatch(css, /\.sidebar-home-link/);
   assert.match(article, /className="bookmark-preview"/);
   assert.match(article, /className="bookmark-copy"/);
@@ -625,7 +626,7 @@ test("about navigation uses a document link to avoid Safari soft-router URL erro
 test("site page routing keeps all Published Page content internal while tools remain external", async () => {
   const [workerSource, pageScreen, articleRoute, aboutRoute, genericRoute] = await Promise.all([
     readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/components/SiteContentPage.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/NotionContentPage.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/blog/[slug]/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/about/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/page/[slug]/page.tsx", import.meta.url), "utf8"),
@@ -633,9 +634,10 @@ test("site page routing keeps all Published Page content internal while tools re
   assert.match(workerSource, /const isInternalPage = contentType === "Page"/);
   assert.doesNotMatch(workerSource, /"Menu"|"SubMenu"/);
   assert.match(workerSource, /isInternalPage \? "nav" as const : "tool"/);
-  assert.match(pageScreen, /contentKind="page"/);
-  assert.match(aboutRoute, /SiteContentPage slug="about"/);
-  assert.match(genericRoute, /SiteContentPage slug=\{decoded\}/);
+  assert.match(pageScreen, /contentKind: "post" \| "page"/);
+  assert.match(aboutRoute, /NotionContentPage slug="about"/);
+  assert.match(genericRoute, /NotionContentPage slug=\{decoded\}/);
+  assert.match(articleRoute, /contentKind="post"/);
   assert.doesNotMatch(pageScreen, /Notion · Cloudflare/);
   assert.doesNotMatch(articleRoute, /Notion · Cloudflare/);
 });
@@ -1698,6 +1700,8 @@ test("article renderer opens child pages internally instead of linking to Notion
   assert.match(article, /ContentPrefetchSentinel/);
   assert.match(article, /rootMargin: "2400px 0px"/);
   assert.match(article, /case "table_of_contents": return null/, "Notion TOC blocks must not be duplicated inside the article body");
+  assert.doesNotMatch(article, /collectHeadings|\btoc=\{/, "removed inline TOC data must not keep flowing through the block renderer");
+  assert.doesNotMatch(css, /\.notion-toc/, "the removed inline TOC must not leave dead styles behind");
   assert.match(article, /article-toc:navigate/, "sidebar headings must be able to request unloaded article chunks before scrolling");
   assert.doesNotMatch(article, /block\.icon \?[^\n]+: <FileText/, "child pages without a Notion emoji must not receive a made-up icon");
   assert.doesNotMatch(explorer, /post\.icon \|\| "📝"/, "article cards must only show icons supplied by Notion");

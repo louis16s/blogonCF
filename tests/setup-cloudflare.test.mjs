@@ -5,10 +5,11 @@ import { access, readFile } from "node:fs/promises";
 const root = new URL("../", import.meta.url);
 
 test("replication uses one package manager and exposes a guided Cloudflare setup", async () => {
-  const [packageSource, readme, setupSource] = await Promise.all([
+  const [packageSource, readme, setupSource, wranglerSource] = await Promise.all([
     readFile(new URL("package.json", root), "utf8"),
     readFile(new URL("README.md", root), "utf8"),
     readFile(new URL("scripts/setup-cloudflare.mjs", root), "utf8"),
+    readFile(new URL("wrangler.jsonc", root), "utf8"),
   ]);
   const manifest = JSON.parse(packageSource);
 
@@ -25,4 +26,5 @@ test("replication uses one package manager and exposes a guided Cloudflare setup
   assert.match(setupSource, /"d1", "create", databaseName/);
   assert.match(setupSource, /replaceJsonString\(config, "SITE_URL", siteUrl\)/);
   assert.match(setupSource, /"secret", "put", "NOTION_TOKEN"/);
+  assert.doesNotMatch(wranglerSource, /"no_bundle"|"rules"/, "Vinext/Vite-ignored Wrangler options should not be shipped");
 });

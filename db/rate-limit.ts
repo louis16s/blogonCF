@@ -1,7 +1,7 @@
 const PASSWORD_LIMIT = 5;
 const PASSWORD_WINDOW_MS = 10 * 60 * 1000;
 
-export type RateLimitResult = { allowed: boolean; retryAfter: number };
+type RateLimitResult = { allowed: boolean; retryAfter: number };
 
 type D1Statement = {
   bind(...values: unknown[]): D1Statement;

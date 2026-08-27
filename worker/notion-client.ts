@@ -1,7 +1,7 @@
 /** Typed, bounded access to the Notion API. */
 /* eslint-disable @typescript-eslint/no-explicit-any -- Notion responses are normalized at the gateway boundary. */
 
-export const NOTION_VERSION = "2026-03-11";
+const NOTION_VERSION = "2026-03-11";
 
 const NOTION_REQUEST_TIMEOUT_MS = 8_000;
 const NOTION_MAX_ATTEMPTS = 2;

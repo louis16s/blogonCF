@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { SiteConfig } from "../data/types";
 import { DEFAULT_FOOTER_QUOTES } from "../data/types";
-import { useSiteConfig } from "./useSiteConfig";
+import { useSiteBootstrap } from "./siteBootstrap";
 
 type ContentFooterProps = {
   id?: string;
@@ -12,7 +12,7 @@ type ContentFooterProps = {
 };
 
 export function ContentFooter({ id, siteConfig, postCount }: ContentFooterProps) {
-  const config = useSiteConfig(siteConfig);
+  const { config } = useSiteBootstrap({ initialConfig: siteConfig, initialLinks: [] });
   const currentYear = new Date().getFullYear();
   const years = config.since === String(currentYear) ? config.since : `${config.since}–${currentYear}`;
   const quotes = config.footerQuotes?.length ? config.footerQuotes : DEFAULT_FOOTER_QUOTES;

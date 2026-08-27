@@ -1,6 +1,6 @@
 import type { PasswordRateLimitDatabase } from "./rate-limit";
 
-export type LinkPreviewCacheEntry = { payload: string; updated_at: number; expires_at: number };
+type LinkPreviewCacheEntry = { payload: string; updated_at: number; expires_at: number };
 
 export async function readLinkPreviewCache(db: PasswordRateLimitDatabase | undefined, url: string): Promise<LinkPreviewCacheEntry | null> {
   if (!db) return null;
@@ -22,4 +22,3 @@ export async function writeLinkPreviewCache(db: PasswordRateLimitDatabase | unde
     `).bind(url, payload, now, expiresAt).run();
   } catch { /* Preview caching is best effort. */ }
 }
-

@@ -20,7 +20,7 @@ export type IndexedContentDocument = {
   partial: boolean;
 };
 
-export type ContentIndexVersion = { page_id: string; last_edited_time: string; locked: number };
+type ContentIndexVersion = { page_id: string; last_edited_time: string; locked: number };
 
 type AllCapableStatement = { all<T>(): Promise<{ results?: T[] }> };
 

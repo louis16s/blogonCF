@@ -1,6 +1,6 @@
 import type { PasswordRateLimitDatabase } from "./rate-limit";
 
-export type FeedCacheEntry = { payload: string; updated_at: number; expires_at: number };
+type FeedCacheEntry = { payload: string; updated_at: number; expires_at: number };
 
 export async function readFeedCache(db: PasswordRateLimitDatabase | undefined, url: string): Promise<FeedCacheEntry | null> {
   if (!db) return null;
