@@ -397,6 +397,10 @@ test("homepage article cards use a motion-safe, preloaded photographic transitio
   assert.match(explorer, /Promise\.race\(\[documentReady, wait\(ARTICLE_PRELOAD_DEADLINE_MS\)\]\)/, "navigation must wait for a reusable document with a bounded deadline");
   assert.match(explorer, /cache: "force-cache"/, "the warmed document should be reusable by the browser cache");
   assert.match(explorer, /window\.location\.assign\(href\)/, "article transitions must finish with a context-safe document navigation");
+  assert.match(explorer, /window\.addEventListener\("pageshow", resetArticleTransition\)/, "bfcache restores must clear the completed transition layer");
+  assert.match(explorer, /articleNavigationAttemptRef\.current !== navigationAttempt/, "a restored page must invalidate suspended navigation work");
+  assert.match(explorer, /articleOpeningRef\.current = false/);
+  assert.match(explorer, /setArticleOpening\(null\)/);
   assert.match(explorer, /prefers-reduced-motion: reduce/);
   assert.doesNotMatch(explorer, /from "next\/navigation"|router\.prefetch/, "the homepage must not eagerly prefetch RSC article routes");
   assert.match(explorer, /<ArticleOpenTransition opening=\{articleOpening\}/);
@@ -405,6 +409,8 @@ test("homepage article cards use a motion-safe, preloaded photographic transitio
   assert.match(css, /@keyframes article-flight-open/);
   assert.match(css, /@keyframes article-flight-focus/);
   assert.match(css, /@keyframes article-flight-aperture/);
+  assert.match(css, /\.article-flight-grain::before/);
+  assert.match(css, /backdrop-filter: blur\(12px\)/);
   assert.match(css, /body\.intro-playing, body\.article-transition-playing \{ overflow: hidden; \}/);
 });
 

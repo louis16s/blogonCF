@@ -71,14 +71,39 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
   const [refreshKey, setRefreshKey] = useState(0);
   const [articleOpening, setArticleOpening] = useState<ArticleOpening | null>(null);
   const articleOpeningRef = useRef(false);
+  const articleNavigationAttemptRef = useRef(0);
   const transitionTimersRef = useRef<number[]>([]);
   const hoverPreloadTimerRef = useRef<number | null>(null);
 
-  useEffect(() => () => {
+  const clearArticleTransitionResources = useCallback(() => {
     transitionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-    if (hoverPreloadTimerRef.current !== null) window.clearTimeout(hoverPreloadTimerRef.current);
+    transitionTimersRef.current = [];
+    if (hoverPreloadTimerRef.current !== null) {
+      window.clearTimeout(hoverPreloadTimerRef.current);
+      hoverPreloadTimerRef.current = null;
+    }
     document.body.classList.remove("article-transition-playing");
   }, []);
+
+  const resetArticleTransition = useCallback(() => {
+    // A page restored from the browser's back-forward cache keeps React state
+    // and refs exactly as they were before navigation. Invalidate the pending
+    // attempt as well as the visible layer so a suspended timer cannot send the
+    // visitor back to the article after they have returned to the homepage.
+    articleNavigationAttemptRef.current += 1;
+    articleOpeningRef.current = false;
+    clearArticleTransitionResources();
+    setArticleOpening(null);
+  }, [clearArticleTransitionResources]);
+
+  useEffect(() => {
+    window.addEventListener("pageshow", resetArticleTransition);
+    return () => {
+      window.removeEventListener("pageshow", resetArticleTransition);
+      articleNavigationAttemptRef.current += 1;
+      clearArticleTransitionResources();
+    };
+  }, [clearArticleTransitionResources, resetArticleTransition]);
 
   const preloadArticle = useCallback((href: string, immediate = false) => {
     if (hoverPreloadTimerRef.current !== null) window.clearTimeout(hoverPreloadTimerRef.current);
@@ -97,6 +122,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
   const openArticle = useCallback((post: Post, bounds: DOMRect) => {
     if (articleOpeningRef.current || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return false;
     articleOpeningRef.current = true;
+    const navigationAttempt = ++articleNavigationAttemptRef.current;
     const href = `/blog/${encodeURIComponent(post.slug)}`;
     cancelArticlePreload();
     const documentReady = warmArticleDocument(href).catch(() => undefined);
@@ -116,7 +142,10 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
     void Promise.all([
       wait(ARTICLE_TRANSITION_MS),
       Promise.race([documentReady, wait(ARTICLE_PRELOAD_DEADLINE_MS)]),
-    ]).then(() => window.location.assign(href));
+    ]).then(() => {
+      if (articleNavigationAttemptRef.current !== navigationAttempt) return;
+      window.location.assign(href);
+    });
     return true;
   }, [cancelArticlePreload]);
 
