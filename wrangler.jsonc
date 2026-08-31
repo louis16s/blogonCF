@@ -21,14 +21,13 @@
     {
       "binding": "DB",
       "database_name": "blogincf-rate-limit",
-      "database_id": "3d6065d5-35ca-47ec-a121-f3d9d9b0293c",
       "migrations_dir": "drizzle"
     }
   ],
   "vars": {
-    "SITE_URL": "https://530555.xyz",
-    "NOTION_DATA_SOURCE_ID": "fffad771-48f4-81f5-be17-000b319f85ad",
-    "NOTION_CONFIG_DATA_SOURCE_ID": "fffad771-48f4-8181-b48e-000b8cf60e1b"
+    "SITE_URL": "",
+    "NOTION_DATA_SOURCE_ID": "",
+    "NOTION_CONFIG_DATA_SOURCE_ID": ""
   },
   "observability": {
     "enabled": true

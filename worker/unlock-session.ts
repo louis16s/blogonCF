@@ -45,15 +45,34 @@ export async function verifyChildAccessSignature(secret: string, rootPageId: str
   } catch { return false; }
 }
 
-export async function createMediaAccessSignature(secret: string, rootPageId: string, blockId: string, privateSlug = ""): Promise<string> {
-  return signature(secret, `media:${rootPageId}:${blockId}:${normalizedSlug(privateSlug)}`);
+export async function createMediaAccessSignature(
+  secret: string,
+  rootPageId: string,
+  ownerPageId: string,
+  blockId: string,
+  rootVersion: string,
+  ownerVersion: string,
+  expiresAt: number,
+  privateSlug = "",
+): Promise<string> {
+  return signature(secret, `media:v2:${rootPageId}:${ownerPageId}:${blockId}:${rootVersion}:${ownerVersion}:${expiresAt}:${normalizedSlug(privateSlug)}`);
 }
 
-export async function verifyMediaAccessSignature(secret: string, rootPageId: string, blockId: string, privateSlug: string, supplied: string): Promise<boolean> {
-  if (!/^[A-Za-z0-9_-]{43}$/.test(supplied)) return false;
+export async function verifyMediaAccessSignature(
+  secret: string,
+  rootPageId: string,
+  ownerPageId: string,
+  blockId: string,
+  rootVersion: string,
+  ownerVersion: string,
+  expiresAt: number,
+  privateSlug: string,
+  supplied: string,
+): Promise<boolean> {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(supplied) || !Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) return false;
   try {
     const left = decodeBase64Url(supplied);
-    const right = decodeBase64Url(await createMediaAccessSignature(secret, rootPageId, blockId, privateSlug));
+    const right = decodeBase64Url(await createMediaAccessSignature(secret, rootPageId, ownerPageId, blockId, rootVersion, ownerVersion, expiresAt, privateSlug));
     if (left.byteLength !== right.byteLength) return false;
     let mismatch = 0;
     for (let index = 0; index < left.byteLength; index++) mismatch |= left[index] ^ right[index];

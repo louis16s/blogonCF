@@ -43,7 +43,7 @@ cd my-blog && pnpm setup:cloudflare
 | 名称 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `NOTION_TOKEN` | Secret | 是 | Notion Integration 的内部集成密钥 |
-| `NOTION_DATA_SOURCE_ID` | Variable | 建议 | 博客数据库的 Data Source ID；省略时使用项目默认示例值 |
+| `NOTION_DATA_SOURCE_ID` | Variable | 是 | 博客数据库的 Data Source ID；缺失时站点会显示配置错误，不会尝试作者或示例数据库 |
 | `NOTION_CONFIG_DATA_SOURCE_ID` | Variable | 可选 | 站点公共配置数据库的 Data Source ID |
 | `SITE_URL` | Variable | 可选 | RSS 与站点地图使用的规范站点地址；未设置时使用当前请求域名 |
 
@@ -51,7 +51,7 @@ cd my-blog && pnpm setup:cloudflare
 
 > 不要把 Notion Token、Cloudflare Token 或 GitHub Token 写进 `wrangler.jsonc`、`.env.example`、提交记录或 Issue。
 
-Cloudflare 的一键部署会从公开仓库创建副本并配置 Workers Builds；D1 等受支持资源可根据 Wrangler 配置自动创建并替换示例资源 ID。详见 [Deploy to Cloudflare 官方文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/) 和 [C3 远程模板文档](https://developers.cloudflare.com/workers/get-started/guide/)。若是把仓库连接到已有 Worker，Worker 名称需与 `wrangler.jsonc` 中的 `blogincf` 一致，构建目录应为仓库根目录。
+Cloudflare 的一键部署会从公开仓库创建副本并配置 Workers Builds；仓库只声明 D1 绑定和资源名，不包含作者的资源 ID，Wrangler 会为新账号自动创建并回填 D1。详见 [Deploy to Cloudflare 官方文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/) 和 [C3 远程模板文档](https://developers.cloudflare.com/workers/get-started/guide/)。若是把仓库连接到已有 Worker，Worker 名称需与 `wrangler.jsonc` 中的 `blogincf` 一致，构建目录应为仓库根目录。
 
 ## 手动部署
 
@@ -180,6 +180,7 @@ Notion 自动转换出的 `———[hide]———` 也会被识别。标记和
 | 03 · 内容功能 | `WORD_CLOUD_ENABLED`、`CATEGORIES_ENABLED`、`RSS_ENABLED`、`SEARCH_ENABLED` | 词云、分类、RSS 与全文搜索开关 |
 | 03 · 内容功能 | `TOOLS_DEFAULT_OPEN`、`CATEGORIES_DEFAULT_OPEN` | 访客没有保存过偏好时，侧栏分组是否默认展开 |
 | 03 · 内容功能 | `TOC_DEFAULT_STATE` | 目录默认状态：`auto`、`open` 或 `closed`；长目录在 `auto` 下默认折叠 |
+| 03 · 内容功能 | `DATABASE_PUBLIC_FIELDS` | 子数据库允许公开的字段名，以逗号或换行分隔；未配置时只公开标题，避免泄露 Notion 视图中隐藏的底层属性 |
 | 04 · 主题配色 | `THEME_MODE` | 默认主题：`system`、`light` 或 `dark` |
 | 04 · 主题配色 | `THEME_PRESET` | 配色预设：`warm`、`neutral`、`forest` 或 `ocean` |
 | 04 · 主题配色 | `THEME_TOGGLE_ENABLED` | 是否允许访客切换明暗主题 |
@@ -217,6 +218,7 @@ pnpm dev
 | `pnpm build` | 生成 `dist/server` 与 `dist/client` |
 | `pnpm test` | 完整构建并运行接口、渲染和安全测试 |
 | `pnpm lint` | 运行 ESLint |
+| `pnpm audit:ci` | 完整依赖审计；仅接受带到期日的构建期 advisory 例外 |
 | `pnpm deploy` | 迁移 D1 并部署已经构建的产物（供 Workers Builds 使用） |
 | `pnpm release` | 本地完整构建并部署 |
 | `pnpm cloudflare:auth` | 只检查 Wrangler 登录状态，不执行迁移或发布 |
@@ -230,8 +232,8 @@ pnpm dev
 ## 数据与性能架构
 
 - 首页由 Worker 并行读取文章、菜单和公共配置后直接 SSR，不等待浏览器二次拼装。
-- 公共 SSR 响应启用 Workers Cache；命中边缘缓存时不会运行 Worker，密码、解锁会话和私密媒体始终 `private/no-store`。
-- 公共 Config、导航、搜索和词云接口也使用带版本化键的 Workers Cache，缓存时长分别为 5 分钟、5 分钟、2 分钟和 15 分钟；功能关闭、限流和错误响应不会进入缓存。
+- 公共 SSR 与 JSON 接口使用 Workers Cache；命中时仍会进入轻量路由，但不会重复读取 Notion。密码、解锁会话和私密媒体始终 `private/no-store`。
+- 公共 Config、导航、文章清单、资讯 RSS、搜索和词云接口使用带版本化键的 Workers Cache；功能关闭、限流和错误响应不会进入缓存。
 - D1 的 `content_index` 保存公开文章的规范化标题、正文搜索文本和词云正文。搜索与词云优先读取 D1，用户请求不再递归遍历 Notion 块。
 - 每小时 Cron 只比较 Notion 的 `last_edited_time`，只同步新增或修改的文章；外部 RSS 和网页预览也持久化到 D1，冷启动和跨数据中心访问可复用。
 - 浏览器端不再对首页和文章做固定间隔轮询；文章刷新、搜索和目录加载只由用户操作触发，长文章续载仍会在接近末尾时预取。
@@ -244,8 +246,7 @@ pnpm dev
 
 - 密码文章在校验成功前不会读取或返回正文块；成功后使用按文章隔离、短期有效的 HttpOnly 会话，密码不会在子页面请求中反复传输
 - D1 对失败尝试做时间窗限流
-- Notion 图片代理限制上游域名和响应类型
-- Notion 文件图片使用绑定页面与块 ID 的签名站内地址；每次读取重新解析临时源地址，密码文章图片继续验证解锁会话
+- Notion 图片、视频、音频、PDF 与附件统一使用短期、版本绑定的站内地址；每次读取重新验证根页面、所属页面、块父链、发布状态和密码会话，再解析临时源地址
 - 外部 RSS 只从已发布资讯页中的 `http(s)` 链接读取，并拒绝本机与私网地址
 - 导航只接受 `http(s)` 或站内绝对路径，拒绝 `javascript:` 等危险协议
 - 富文本和媒体地址在 Worker 规范化层过滤危险协议；HTML 响应附带 CSP、权限策略和防嗅探响应头
@@ -273,4 +274,4 @@ public/     站点图标、开屏素材和分享图
 
 ## License
 
-[MIT](LICENSE) © 2020–present louis16s
+[MIT](LICENSE) © 2020–present louis16s。

@@ -34,6 +34,11 @@ const DEFAULT_DATA_SOURCE_ID = "";
 const DEFAULT_CONFIG_DATA_SOURCE_ID = "";
 const MAX_CONFIG_IMAGE_BYTES = 12 * 1024 * 1024;
 const MAX_NOTION_IMAGE_BYTES = 25 * 1024 * 1024;
+const MAX_NOTION_MEDIA_BYTES = 100 * 1024 * 1024;
+// Public documents can remain stale for 24 hours. Keep their signed media
+// references usable beyond that window; page/owner versions still revoke a
+// URL immediately when Notion content changes.
+const MEDIA_SIGNATURE_TTL_SECONDS = 7 * 24 * 60 * 60;
 const MAX_BLOCKS = 10_000;
 const CONTENT_CHUNK_BLOCKS = 300;
 const MAX_BLOCK_DEPTH = 12;
@@ -46,7 +51,7 @@ const SITE_BOOTSTRAP_STALE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_RSS_FEEDS = 8;
 const LEGACY_EMOJI_PATTERN = /^(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*)$/u;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
-const publicContentHeaders = { ...jsonHeaders, "cache-control": "no-cache, max-age=0, must-revalidate" };
+const publicContentHeaders = { ...jsonHeaders, "cache-control": "public, max-age=300, stale-while-revalidate=86400" };
 const edgeBootstrapHeaders = { ...jsonHeaders, "cache-control": "public, max-age=300, stale-while-revalidate=86400" };
 const wordCloudCache = new Map<string, { expiresAt: number; payload: WordCloudPayload }>();
 const publicCorpusCache = new Map<string, { expiresAt: number; corpus?: PublicCorpus; pending?: Promise<PublicCorpus> }>();
@@ -95,7 +100,9 @@ const worker = {
         return limited || notionSearch(env, url, ctx);
       });
     }
-    if (url.pathname === "/api/content/rss-feeds" && request.method === "GET") return notionExternalRss(env, url);
+    if (url.pathname === "/api/content/rss-feeds" && request.method === "GET") {
+      return cachedPublicApi(request, env, ctx, `rss-feeds:${url.searchParams.get("slug") || ""}`, 300, () => notionExternalRss(env, url));
+    }
     if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url, request, env.NOTION_TOKEN, env.DB);
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") {
       return cachedPublicApi(request, env, ctx, "word-cloud", 900, async () => {
@@ -107,14 +114,16 @@ const worker = {
     if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
     if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request);
     if (url.pathname === "/api/content/database" && request.method === "POST") return notionChildDatabase(env, request);
-    if (url.pathname === "/_notion/image" && (request.method === "GET" || request.method === "HEAD")) return notionImage(request, env);
+    if (["/_notion/image", "/_notion/media"].includes(url.pathname) && (request.method === "GET" || request.method === "HEAD")) return notionMedia(request, env);
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
       const slug = decodeRouteSegment(url.pathname.slice("/api/content/post/".length));
-      return notionPost(env, slug, request);
+      return request.method === "GET"
+        ? cachedPublicContent(request, env, ctx, "post", slug, () => notionPost(env, slug, request))
+        : notionPost(env, slug, request);
     }
     if (url.pathname.startsWith("/api/content/page/") && request.method === "GET") {
       const slug = decodeRouteSegment(url.pathname.slice("/api/content/page/".length));
-      return notionSitePage(env, slug, request);
+      return cachedPublicContent(request, env, ctx, "page", slug, () => notionSitePage(env, slug, request));
     }
     if (url.pathname === "/api/health" && (request.method === "GET" || request.method === "HEAD")) {
       return withHead(request, Response.json({ ok: true, notionConfigured: Boolean(env.NOTION_TOKEN) }, { headers: { ...jsonHeaders, "cache-control": "no-store" } }));
@@ -135,7 +144,7 @@ const worker = {
     }
     if (request.method === "GET" && url.pathname.startsWith("/blog/")) {
       const slug = renderRouteSlug(url.pathname.slice("/blog/".length));
-      const payload = await articlePayloadForRender(env, slug, request);
+      const payload = await articlePayloadForRender(env, slug, request, ctx);
       const key = storeArticlePayload(payload);
       const headers = new Headers(request.headers);
       headers.set("x-blog-article-context", key);
@@ -152,7 +161,7 @@ const worker = {
     }
     if (request.method === "GET" && (url.pathname === "/about" || url.pathname.startsWith("/page/"))) {
       const slug = url.pathname === "/about" ? "about" : renderRouteSlug(url.pathname.slice("/page/".length));
-      const payload = await sitePagePayloadForRender(env, slug);
+      const payload = await sitePagePayloadForRender(env, slug, request, ctx);
       const key = storeArticlePayload(payload);
       const headers = new Headers(request.headers);
       headers.set("x-blog-article-context", key);
@@ -191,8 +200,9 @@ const worker = {
   },
 };
 
-function contentIndexSourceKey(env: Env): string {
-  return `${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID}:${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}`;
+async function contentIndexSourceKey(env: Env): Promise<string> {
+  const resolvedSourceId = await resolveContentDataSourceId(env);
+  return `${resolvedSourceId}:${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}`;
 }
 
 function renderedCacheControl(request: Request, status?: number, privateContent = false): string {
@@ -215,7 +225,7 @@ function isClientNavigationRequest(request: Request): boolean {
 async function refreshContentIndex(env: Env): Promise<void> {
   if (!env.NOTION_TOKEN || !env.DB) return;
   try {
-    const sourceKey = contentIndexSourceKey(env);
+    const sourceKey = await contentIndexSourceKey(env);
     const pages = await queryPosts(env, undefined, 100);
     const versions = new Map((await readContentIndexVersions(env.DB, sourceKey)).map((row) => [row.page_id, row]));
     const currentIds = new Set<string>();
@@ -226,8 +236,12 @@ async function refreshContentIndex(env: Env): Promise<void> {
       const locked = Boolean(plain(page.properties?.password));
       const existing = versions.get(pageId);
       if (existing && existing.last_edited_time === lastEdited && Boolean(existing.locked) === locked) continue;
-      const document = await buildIndexedDocument(env, page);
-      await writeContentIndex(env.DB, sourceKey, pageId, lastEdited, document);
+      try {
+        const document = await buildIndexedDocument(env, page);
+        await writeContentIndex(env.DB, sourceKey, pageId, lastEdited, document);
+      } catch (reason) {
+        console.warn(JSON.stringify({ event: "content-index-page-failed", pageId, message: reason instanceof Error ? reason.message : String(reason) }));
+      }
     }
     for (const pageId of versions.keys()) if (!currentIds.has(pageId)) await deleteContentIndexPage(env.DB, pageId);
   } catch (reason) {
@@ -251,9 +265,13 @@ async function refreshExternalFeeds(env: Env): Promise<void> {
   const pages = await querySitePages(env, undefined, 100);
   const candidates = pages.filter((page) => /资讯|news|links/i.test(`${plain(page.properties?.slug)} ${title(page.properties?.title)}`));
   for (const page of candidates.slice(0, 4)) {
-    const state = newBlockReadState();
-    const urls = extractExternalUrls(await getBlockChildren(env, page.id, state, 0)).slice(0, MAX_RSS_FEEDS);
-    await mapWithConcurrency(urls, 2, (feedUrl) => fetchExternalFeed(feedUrl, env.DB));
+    try {
+      const state = newBlockReadState();
+      const urls = extractExternalUrls(await getBlockChildren(env, page.id, state, 0)).slice(0, MAX_RSS_FEEDS);
+      await mapWithConcurrency(urls, 2, (feedUrl) => fetchExternalFeed(feedUrl, env.DB));
+    } catch (reason) {
+      console.warn(JSON.stringify({ event: "external-feed-page-failed", pageId: page.id, message: reason instanceof Error ? reason.message : String(reason) }));
+    }
   }
 }
 
@@ -343,73 +361,150 @@ async function readLimitedBytes(body: ReadableStream<Uint8Array>, limit: number)
   return output.buffer as ArrayBuffer;
 }
 
-async function notionImage(request: Request, env: Env): Promise<Response> {
+async function blockBelongsToPage(env: Env, block: any, ownerPageId: string): Promise<boolean> {
+  let parent = block?.parent;
+  for (let depth = 0; depth < 24; depth++) {
+    const pageParentId = normalizeNotionId(parent?.page_id);
+    if (pageParentId) return pageParentId === ownerPageId;
+    const blockParentId = normalizeNotionId(parent?.block_id);
+    if (!blockParentId) return false;
+    const parentBlock = await notionFetch(env, `/blocks/${blockParentId}`);
+    if (parentBlock?.archived || parentBlock?.in_trash) return false;
+    parent = parentBlock.parent;
+  }
+  return false;
+}
+
+function isPublishedContentPage(page: any): boolean {
+  const type = page?.properties?.type?.select?.name;
+  const status = page?.properties?.status?.select?.name;
+  return ["Post", "Page"].includes(type) && status === "Published";
+}
+
+function notionMediaValue(block: any): any {
+  const value = block?.[block?.type] || {};
+  return value.type === "external" ? value.external : value.file;
+}
+
+function validMediaContentType(type: string, contentType: string): boolean {
+  if (type === "image") return contentType.startsWith("image/");
+  if (type === "video") return contentType.startsWith("video/");
+  if (type === "audio") return contentType.startsWith("audio/");
+  if (type === "pdf") return contentType === "application/pdf";
+  return type === "file" && Boolean(contentType) && !/^(?:text\/html|application\/(?:xhtml\+xml|javascript))$/.test(contentType);
+}
+
+function limitMediaStream(body: ReadableStream<Uint8Array>, maximumBytes: number): ReadableStream<Uint8Array> {
+  let received = 0;
+  return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      received += chunk.byteLength;
+      if (received > maximumBytes) controller.error(new Error("Media stream exceeded the configured size limit"));
+      else controller.enqueue(chunk);
+    },
+  }));
+}
+
+async function notionMedia(request: Request, env: Env): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   const requestUrl = new URL(request.url);
   const blockId = normalizeNotionId(requestUrl.searchParams.get("id"));
   const rootPageId = normalizeNotionId(requestUrl.searchParams.get("root"));
+  const ownerPageId = normalizeNotionId(requestUrl.searchParams.get("owner"));
+  const rootVersion = requestUrl.searchParams.get("rootVersion") || "";
+  const ownerVersion = requestUrl.searchParams.get("ownerVersion") || "";
+  const expiresAt = Number(requestUrl.searchParams.get("expires"));
   const privateSlug = requestUrl.searchParams.get("private") || "";
   const suppliedSignature = requestUrl.searchParams.get("signature") || "";
-  if (!blockId || !rootPageId || privateSlug.length > 180) return error(400, "Invalid image request");
-  if (!await verifyMediaAccessSignature(env.NOTION_TOKEN, rootPageId, blockId, privateSlug, suppliedSignature)) return error(403, "Image URL is not authorized");
+  if (!blockId || !rootPageId || !ownerPageId || privateSlug.length > 180 || rootVersion.length > 80 || ownerVersion.length > 80) return error(400, "Invalid media request");
+  if (!await verifyMediaAccessSignature(env.NOTION_TOKEN, rootPageId, ownerPageId, blockId, rootVersion, ownerVersion, expiresAt, privateSlug, suppliedSignature)) return error(403, "Media URL is not authorized");
   if (privateSlug && !await hasUnlockSession(request, env.NOTION_TOKEN, privateSlug)) return error(403, "请先解锁父文章");
   try {
-    const block = await notionFetch(env, `/blocks/${blockId}`);
-    if (block?.object !== "block" || block.archived || block.in_trash || block.type !== "image") return error(404, "Image block not found");
-    const value = block.image || {};
-    const rawUrl = value.type === "external" ? value.external?.url : value.file?.url;
-    const sourceValue = safeResourceUrl(rawUrl, true);
-    if (!sourceValue) return error(404, "Image source not found");
-    const source = new URL(sourceValue);
-    if (!NOTION_FILE_HOSTS.has(source.hostname)) return error(400, "Image host is not allowed");
-    const response = await fetch(source, { method: request.method, redirect: "manual", signal: AbortSignal.timeout(8_000) });
-    if (!response.ok || (request.method === "GET" && !response.body)) return error(response.status || 502, "Image is temporarily unavailable");
-    const contentType = response.headers.get("content-type")?.split(";", 1)[0].toLocaleLowerCase();
-    if (!contentType?.startsWith("image/")) return error(415, "Unsupported image response");
-    const contentLength = Number(response.headers.get("content-length") || 0);
-    if (Number.isFinite(contentLength) && contentLength > MAX_NOTION_IMAGE_BYTES) {
-      await response.body?.cancel();
-      return error(413, "Image is too large");
+    const [rootPage, ownerPage, block] = await Promise.all([
+      notionFetch(env, `/pages/${rootPageId}`),
+      ownerPageId === rootPageId ? Promise.resolve(null) : notionFetch(env, `/pages/${ownerPageId}`),
+      notionFetch(env, `/blocks/${blockId}`),
+    ]);
+    const resolvedOwner = ownerPage || rootPage;
+    if (rootPage?.object !== "page" || rootPage.archived || rootPage.in_trash || rootPage.last_edited_time !== rootVersion) return error(404, "Media parent is no longer available");
+    if (!isPublishedContentPage(rootPage)) return error(403, "Media parent is not published");
+    if (privateSlug) {
+      if (plain(rootPage.properties?.slug) !== privateSlug || !plain(rootPage.properties?.password)) return error(403, "Media parent does not match the unlock session");
+    } else if (plain(rootPage.properties?.password)) return error(403, "Media parent requires an unlock session");
+    if (resolvedOwner?.object !== "page" || resolvedOwner.archived || resolvedOwner.in_trash || resolvedOwner.last_edited_time !== ownerVersion) return error(404, "Media owner is no longer available");
+    if (ownerPageId !== rootPageId) {
+      const descendant = await descendantPage(env, ownerPageId, rootPageId);
+      if (!descendant && !isPublishedContentPage(resolvedOwner)) return error(403, "Media owner is not authorized");
     }
-    let output = response;
-    if (/image\/(?:hei[cf])|\.(?:heic|heif)(?:$|\?)/i.test(`${contentType || ""} ${source.pathname}`) && env.IMAGES && request.method === "GET" && response.body) {
+    if (block?.object !== "block" || block.archived || block.in_trash || !["image", "video", "audio", "pdf", "file"].includes(block.type)) return error(404, "Media block not found");
+    if (!await blockBelongsToPage(env, block, ownerPageId)) return error(403, "Media block is no longer attached to this page");
+    const rawUrl = notionMediaValue(block)?.url;
+    const sourceValue = safeResourceUrl(rawUrl, true);
+    if (!sourceValue) return error(404, "Media source not found");
+    const source = new URL(sourceValue);
+    if (!NOTION_FILE_HOSTS.has(source.hostname)) return error(400, "Media host is not allowed");
+    const upstreamHeaders = new Headers();
+    const range = request.headers.get("range");
+    if (range && /^bytes=\d*-\d*(?:,\d*-\d*)*$/.test(range)) upstreamHeaders.set("range", range);
+    const response = await fetch(source, { method: request.method, headers: upstreamHeaders, redirect: "manual", signal: AbortSignal.timeout(10_000) });
+    if (!response.ok || (request.method === "GET" && !response.body)) return error(response.status || 502, "Media is temporarily unavailable");
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0].toLocaleLowerCase();
+    if (!contentType || !validMediaContentType(block.type, contentType)) return error(415, "Unsupported media response");
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    const maximumBytes = block.type === "image" ? MAX_NOTION_IMAGE_BYTES : MAX_NOTION_MEDIA_BYTES;
+    if (Number.isFinite(contentLength) && contentLength > maximumBytes) {
+      await response.body?.cancel();
+      return error(413, "Media is too large");
+    }
+    let output = response.body
+      ? new Response(limitMediaStream(response.body, maximumBytes), { status: response.status, statusText: response.statusText, headers: response.headers })
+      : response;
+    if (block.type === "image" && /image\/(?:hei[cf])|\.(?:heic|heif)(?:$|\?)/i.test(`${contentType} ${source.pathname}`) && env.IMAGES && request.method === "GET" && response.body && !range) {
       try {
-        output = await (await env.IMAGES.input(response.body).transform({}).output({ format: "image/jpeg", quality: 84 })).response();
-      } catch (reason) { console.warn(reason instanceof Error ? reason.message : "HEIC conversion failed"); }
+        output = await (await env.IMAGES.input(output.body!).transform({}).output({ format: "image/jpeg", quality: 84 })).response();
+      } catch (reason) {
+        console.warn(reason instanceof Error ? reason.message : "HEIC conversion failed");
+        return error(502, "Media conversion is temporarily unavailable");
+      }
     }
     const headers = new Headers(output.headers);
     headers.set("cache-control", privateSlug
-      ? "private, max-age=3600"
+      ? "private, no-store"
       : "public, max-age=300, stale-while-revalidate=86400");
     headers.set("x-content-type-options", "nosniff");
+    if (block.type === "file") {
+      const filename = decodeURIComponent(source.pathname.split("/").pop() || "attachment").replace(/[\r\n"\\]/g, "_").slice(0, 160) || "attachment";
+      headers.set("content-disposition", `attachment; filename="${filename}"`);
+    }
     headers.delete("set-cookie");
     return request.method === "HEAD" ? new Response(null, { status: output.status, headers }) : new Response(output.body, { status: output.status, headers });
   } catch (reason) {
-    console.error(reason instanceof Error ? reason.message : "Notion image fetch failed");
-    return error(502, "Image is temporarily unavailable");
+    console.error(reason instanceof Error ? reason.message : "Notion media fetch failed");
+    return error(502, "Media is temporarily unavailable");
   }
 }
 
-async function articlePayloadForRender(env: Env, slug: string, request: Request): Promise<ArticlePayload> {
+async function articlePayloadForRender(env: Env, slug: string, request: Request, ctx: ExecutionContext): Promise<ArticlePayload> {
   const [response, config] = await Promise.all([
-    notionPost(env, slug, new Request(request.url, { headers: request.headers })),
+    cachedPublicContent(request, env, ctx, "post", slug, () => notionPost(env, slug, new Request(request.url, { headers: request.headers }))),
     queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig()),
   ]);
   const payload = await response.json().catch(() => ({ error: "文章暂时无法读取" })) as ArticlePayload;
   return { ...payload, config, status: response.status };
 }
 
-async function sitePagePayloadForRender(env: Env, slug: string): Promise<ArticlePayload> {
+async function sitePagePayloadForRender(env: Env, slug: string, request: Request, ctx: ExecutionContext): Promise<ArticlePayload> {
   const [response, config] = await Promise.all([
-    notionSitePage(env, slug, new Request(`https://internal.invalid/api/content/page/${encodeURIComponent(slug)}`)),
+    cachedPublicContent(request, env, ctx, "page", slug, () => notionSitePage(env, slug, new Request(`https://internal.invalid/api/content/page/${encodeURIComponent(slug)}`))),
     queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig()),
   ]);
   const payload = await response.json().catch(() => ({ error: "页面暂时无法读取" })) as ArticlePayload;
   return { ...payload, config, status: response.status };
 }
 
-function siteBootstrapCacheKey(env: Env): string {
-  return `${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID}:${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}`;
+async function siteBootstrapCacheKey(env: Env): Promise<string> {
+  const rows = await queryConfigRows(env).catch(() => []);
+  return `${configuredContentDataSourceId(env, rows)}:${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}`;
 }
 
 async function querySiteBootstrap(env: Env): Promise<HomePayload> {
@@ -433,7 +528,7 @@ async function querySiteBootstrap(env: Env): Promise<HomePayload> {
 
 async function getSiteBootstrap(env: Env): Promise<HomePayload> {
   if (!env.NOTION_TOKEN) throw new Error("Notion connection is not configured");
-  const key = siteBootstrapCacheKey(env);
+  const key = await siteBootstrapCacheKey(env);
   const now = Date.now();
   const cached = siteBootstrapCache.get(key);
   if (cached?.payload && cached.freshUntil > now) return cached.payload;
@@ -486,7 +581,10 @@ async function cachedPublicDocument(request: Request, env: Env, ctx: ExecutionCo
   keyUrl.host = canonical.host;
   keyUrl.search = "";
   keyUrl.searchParams.set("schema", "5");
-  keyUrl.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
+  const resolvedDataSourceId = env.NOTION_TOKEN
+    ? await resolveContentDataSourceId(env).catch(() => env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID)
+    : env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID;
+  keyUrl.searchParams.set("data", resolvedDataSourceId);
   keyUrl.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
   const key = new Request(keyUrl.toString(), { method: "GET" });
   const cached = await cache?.match(key);
@@ -523,7 +621,10 @@ async function cachedPublicApi(
   keyUrl.search = new URLSearchParams(sortedParams).toString();
   keyUrl.searchParams.set("schema", "1");
   keyUrl.searchParams.set("cache", namespace);
-  keyUrl.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
+  const resolvedDataSourceId = env.NOTION_TOKEN
+    ? await resolveContentDataSourceId(env).catch(() => env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID)
+    : env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID;
+  keyUrl.searchParams.set("data", resolvedDataSourceId);
   keyUrl.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
   const key = new Request(keyUrl.toString(), { method: "GET" });
   const cached = await cache.match(key).catch(() => undefined);
@@ -541,6 +642,52 @@ async function cachedPublicApi(
   const cacheable = new Response(response.body, { status: response.status, headers });
   ctx.waitUntil(cache.put(key, cacheable.clone()).catch((reason) => {
     console.warn(reason instanceof Error ? reason.message : "Public API cache write failed");
+  }));
+  return cacheable;
+}
+
+async function cachedPublicContent(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  kind: "post" | "page",
+  slug: string,
+  load: () => Promise<Response>,
+): Promise<Response> {
+  const cache = defaultWorkerCache();
+  if (!cache || request.method !== "GET") return load();
+  const requestUrl = new URL(request.url);
+  const canonical = publicSiteOrigin(env, requestUrl);
+  const keyUrl = new URL(`/__blog-cache/content/${kind}/${encodeURIComponent(slug)}`, canonical);
+  const cursor = normalizeNotionCursor(requestUrl.searchParams.get("cursor"));
+  if (cursor) keyUrl.searchParams.set("cursor", cursor);
+  keyUrl.searchParams.set("schema", "2");
+  const resolvedDataSourceId = env.NOTION_TOKEN
+    ? await resolveContentDataSourceId(env).catch(() => env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID)
+    : env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID;
+  keyUrl.searchParams.set("data", resolvedDataSourceId);
+  keyUrl.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
+  const key = new Request(keyUrl, { method: "GET" });
+  const cached = await cache.match(key).catch(() => undefined);
+  if (cached) {
+    const headers = new Headers(cached.headers);
+    headers.set("x-blog-cache", "hit");
+    return new Response(cached.body, { status: cached.status, headers });
+  }
+
+  const response = await load();
+  if (!response.ok) return response;
+  const payload = await response.clone().json().catch(() => null) as ArticlePayload | null;
+  // An unlocked private response still carries post.locked=true. Neither it
+  // nor the locked gate may ever enter a shared cache.
+  if (!payload || payload.locked !== false || payload.post?.locked) return response;
+  const headers = new Headers(response.headers);
+  headers.delete("set-cookie");
+  headers.set("cache-control", "public, max-age=300, stale-while-revalidate=86400");
+  headers.set("x-blog-cache", "miss");
+  const cacheable = new Response(response.body, { status: response.status, headers });
+  ctx.waitUntil(cache.put(key, cacheable.clone()).catch((reason) => {
+    console.warn(reason instanceof Error ? reason.message : "Public content cache write failed");
   }));
   return cacheable;
 }
@@ -564,7 +711,7 @@ async function cachedConfigAsset(request: Request, env: Env, ctx: ExecutionConte
   return response;
 }
 
-function siteBootstrapEdgeKey(env: Env, request: Request): Request {
+async function siteBootstrapEdgeKey(env: Env, request: Request): Promise<Request> {
   const url = new URL(request.url);
   url.protocol = "https:";
   const canonical = publicSiteOrigin(env, url);
@@ -572,7 +719,10 @@ function siteBootstrapEdgeKey(env: Env, request: Request): Request {
   url.pathname = "/__blog-cache/site-bootstrap";
   url.search = "";
   url.searchParams.set("schema", "6");
-  url.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
+  const resolvedDataSourceId = env.NOTION_TOKEN
+    ? await resolveContentDataSourceId(env).catch(() => env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID)
+    : env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID;
+  url.searchParams.set("data", resolvedDataSourceId);
   url.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
   return new Request(url.toString(), { method: "GET" });
 }
@@ -596,7 +746,7 @@ async function notionPosts(env: Env, request?: Request, ctx?: ExecutionContext):
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   try {
     const cache = request ? defaultWorkerCache() : undefined;
-    const cacheKey = request && cache ? siteBootstrapEdgeKey(env, request) : undefined;
+    const cacheKey = request && cache ? await siteBootstrapEdgeKey(env, request) : undefined;
     if (cache && cacheKey) {
       const cached = await cache.match(cacheKey).catch(() => undefined);
       if (cached) {
@@ -641,7 +791,7 @@ async function notionWordCloud(env: Env, ctx?: ExecutionContext): Promise<Respon
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   const config = await queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig());
   if (!config.wordCloudEnabled) return error(404, "Word cloud is disabled");
-  const cacheKey = `${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}:${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID || "configured"}`;
+  const cacheKey = await contentIndexSourceKey(env);
   const cached = wordCloudCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return Response.json(cached.payload, { headers: { ...jsonHeaders, "cache-control": "public, max-age=900, stale-while-revalidate=86400" } });
@@ -698,12 +848,13 @@ async function notionExternalRss(env: Env, url: URL): Promise<Response> {
     const urls = extractExternalUrls(blocks).slice(0, MAX_RSS_FEEDS);
     const feeds = (await mapWithConcurrency(urls, 3, (feedUrl) => fetchExternalFeed(feedUrl, env.DB)))
       .filter((feed): feed is ExternalFeed => Boolean(feed));
-    return Response.json({ feeds, partial: state.truncated, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
+    return Response.json({ feeds, partial: state.truncated, source: "notion" }, { headers: edgeBootstrapHeaders });
   } catch (reason) { return notionError(reason); }
 }
 
 async function getPublicCorpus(env: Env, ctx?: ExecutionContext): Promise<PublicCorpus> {
-  const cacheKey = `${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}:${env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID || "configured"}`;
+  const sourceKey = await contentIndexSourceKey(env);
+  const cacheKey = sourceKey;
   const cached = publicCorpusCache.get(cacheKey);
   if (cached?.corpus && cached.expiresAt > Date.now()) return cached.corpus;
   if (cached?.pending) return cached.pending;
@@ -712,7 +863,6 @@ async function getPublicCorpus(env: Env, ctx?: ExecutionContext): Promise<Public
   // D1 is the cross-isolate fallback. It contains only public normalized text,
   // so search and word-cloud requests do not need to traverse Notion after the
   // hourly sync (or the first cold rebuild).
-  const sourceKey = contentIndexSourceKey(env);
   const indexed = await readContentIndex(env.DB, sourceKey);
   if (indexed.length || await hasContentIndex(env.DB, sourceKey)) {
     const corpus = { documents: indexed, partial: indexed.some((document) => document.partial), source: "d1" as const };
@@ -741,7 +891,7 @@ async function getPublicCorpus(env: Env, ctx?: ExecutionContext): Promise<Public
     if (env.DB) {
       const persist = Promise.all(indexedDocuments.map(({ document, lastEditedTime }) => writeContentIndex(
         env.DB,
-        contentIndexSourceKey(env),
+        sourceKey,
         document.id,
         lastEditedTime,
         document,
@@ -774,7 +924,13 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
   const cursor = normalizeNotionCursor(requestedCursor);
   if (requestedCursor && !cursor) return error(400, "Invalid content cursor");
   const attemptKey = `${request.headers.get("cf-connecting-ip") || "unknown"}:${slug.toLocaleLowerCase()}`;
+  let suppliedPassword = "";
   if (request.method === "POST") {
+    const parsed = await readJsonRequest(request, 4 * 1024);
+    if ("response" in parsed) return parsed.response;
+    suppliedPassword = typeof parsed.body.password === "string" ? parsed.body.password : "";
+    if (!suppliedPassword) return error(400, "Password is required");
+    if (suppliedPassword.length > 256) return error(400, "Password is too long");
     if (!env.DB) return error(503, "Password protection is temporarily unavailable");
     const attempt = await getPasswordAttemptStatus(env.DB, attemptKey);
     if (!attempt.allowed) return Response.json({ error: "尝试次数过多，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(attempt.retryAfter) } });
@@ -788,8 +944,7 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
       const sessionUnlocked = await hasUnlockSession(request, env.NOTION_TOKEN, slug);
       let supplied = "";
       if (!sessionUnlocked && request.method === "POST") {
-        const body = await request.json().catch(() => ({})) as { password?: unknown };
-        supplied = typeof body.password === "string" ? body.password : "";
+        supplied = suppliedPassword;
       }
       if (!sessionUnlocked && supplied !== expectedPassword) {
         if (supplied && env.DB) {
@@ -804,7 +959,7 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
       await Promise.all([
         attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN),
         attachChildAccessSignatures(chunk.blocks, env, page.id),
-        attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id, slug),
+        attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page, page, slug),
       ]);
       const headers = new Headers({ ...jsonHeaders, "cache-control": "no-store" });
       if (!sessionUnlocked) headers.append("set-cookie", await createUnlockCookie(env.NOTION_TOKEN, slug, request.url));
@@ -815,7 +970,7 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
     await Promise.all([
       attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN),
       attachChildAccessSignatures(chunk.blocks, env, page.id),
-      attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id),
+      attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page, page),
     ]);
     return Response.json({ post: { ...post, locked: Boolean(expectedPassword) }, locked: false, blocks: chunk.blocks, headings, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
@@ -846,7 +1001,7 @@ async function notionSitePage(env: Env, slug: string, request: Request): Promise
     await Promise.all([
       attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN),
       attachChildAccessSignatures(chunk.blocks, env, page.id),
-      attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page.id),
+      attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page, page),
     ]);
     return Response.json({
       post: toSitePagePost(page),
@@ -861,7 +1016,9 @@ async function notionSitePage(env: Env, slug: string, request: Request): Promise
 
 async function notionChildPage(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown; accessSignature?: unknown };
+  const parsed = await readJsonRequest(request);
+  if ("response" in parsed) return parsed.response;
+  const body = parsed.body as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown; accessSignature?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
   const pageId = normalizeNotionId(body.pageId);
   const trail = Array.isArray(body.trail) ? body.trail.map(normalizeNotionId).filter(Boolean).slice(0, 8) : [];
@@ -879,13 +1036,15 @@ async function notionChildPage(env: Env, request: Request): Promise<Response> {
 
     const childPage = await resolveChildPage(env, parent, trail, pageId, accessSignature);
     if (!childPage) return error(404, "没有找到这个子页面，或它已从当前文章移除");
-    return childPageResponse(env, childPage, parent.id, cursor, urlBoolean(new URL(request.url), "headings"), expectedPassword ? slug : "");
+    return childPageResponse(env, childPage, parent, cursor, urlBoolean(new URL(request.url), "headings"), expectedPassword ? slug : "");
   } catch (reason) { return notionError(reason); }
 }
 
 async function notionSitePageChild(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const body = await request.json().catch(() => ({})) as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown; accessSignature?: unknown };
+  const parsed = await readJsonRequest(request);
+  if ("response" in parsed) return parsed.response;
+  const body = parsed.body as { slug?: unknown; pageId?: unknown; trail?: unknown; cursor?: unknown; accessSignature?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
   const pageId = normalizeNotionId(body.pageId);
   const trail = Array.isArray(body.trail) ? body.trail.map(normalizeNotionId).filter(Boolean).slice(0, 8) : [];
@@ -897,11 +1056,11 @@ async function notionSitePageChild(env: Env, request: Request): Promise<Response
     if (!parent) return error(404, "Page not found");
     const childPage = await resolveChildPage(env, parent, trail, pageId, accessSignature);
     if (!childPage) return error(404, "没有找到这个子页面，或它已从当前页面移除");
-    return childPageResponse(env, childPage, parent.id, cursor, urlBoolean(new URL(request.url), "headings"));
+    return childPageResponse(env, childPage, parent, cursor, urlBoolean(new URL(request.url), "headings"));
   } catch (reason) { return notionError(reason); }
 }
 
-async function childPageResponse(env: Env, childPage: any, rootPageId: string, cursor = "", headingsOnly = false, privateSlug = ""): Promise<Response> {
+async function childPageResponse(env: Env, childPage: any, rootPage: any, cursor = "", headingsOnly = false, privateSlug = ""): Promise<Response> {
   if (headingsOnly) {
     // A table of contents is a page-level index, not a projection of whichever
     // body chunk happened to load first. Wait for every Notion cursor here so
@@ -917,10 +1076,10 @@ async function childPageResponse(env: Env, childPage: any, rootPageId: string, c
   const headings = cursor ? undefined : [];
   await Promise.all([
     attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN),
-    attachChildAccessSignatures(chunk.blocks, env, rootPageId),
-    attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, rootPageId, privateSlug),
+    attachChildAccessSignatures(chunk.blocks, env, rootPage.id),
+    attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, rootPage, childPage, privateSlug),
   ]);
-  const accessSignature = await createChildAccessSignature(env.NOTION_TOKEN!, normalizeNotionId(rootPageId)!, normalizeNotionId(childPage.id)!);
+  const accessSignature = await createChildAccessSignature(env.NOTION_TOKEN!, normalizeNotionId(rootPage.id)!, normalizeNotionId(childPage.id)!);
   return Response.json({ child: {
     id: childPage.id,
     title: notionPageTitle(childPage) || "未命名子页面",
@@ -990,6 +1149,35 @@ async function advanceHeadingIndex(env: Env, pageId: string, version: string): P
 
 function urlBoolean(url: URL, key: string): boolean { return /^(?:1|true|yes)$/i.test(url.searchParams.get(key) || ""); }
 
+async function readJsonRequest(request: Request, maximumBytes = 16 * 1024): Promise<{ body: Record<string, unknown> } | { response: Response }> {
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0].trim().toLocaleLowerCase();
+  if (contentType !== "application/json") return { response: error(415, "Content-Type must be application/json") };
+  const declaredLength = Number(request.headers.get("content-length") || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) return { response: error(413, "Request body is too large") };
+  const reader = request.body?.getReader();
+  if (!reader) return { response: error(400, "Invalid JSON body") };
+  const decoder = new TextDecoder();
+  let text = "";
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maximumBytes) {
+        await reader.cancel("request body exceeds configured limit");
+        return { response: error(413, "Request body is too large") };
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+  } finally { reader.releaseLock(); }
+  try {
+    const body = JSON.parse(text);
+    return body && typeof body === "object" && !Array.isArray(body) ? { body } : { response: error(400, "Invalid JSON body") };
+  } catch { return { response: error(400, "Invalid JSON body") }; }
+}
+
 function checkExpensiveRequest(request: Request, route: string, limit: number, windowMs: number): Response | null {
   const ip = request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim() || "unknown";
   const key = `${route}:${ip}`;
@@ -1011,7 +1199,9 @@ function checkExpensiveRequest(request: Request, route: string, limit: number, w
 
 async function notionChildDatabase(env: Env, request: Request): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const body = await request.json().catch(() => ({})) as { slug?: unknown; databaseId?: unknown; trail?: unknown; contentKind?: unknown };
+  const parsed = await readJsonRequest(request);
+  if ("response" in parsed) return parsed.response;
+  const body = parsed.body as { slug?: unknown; databaseId?: unknown; trail?: unknown; contentKind?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
   const databaseId = normalizeNotionId(body.databaseId);
   const trail = Array.isArray(body.trail) ? body.trail.map(normalizeNotionId).filter(Boolean).slice(0, 8) : [];
@@ -1027,18 +1217,24 @@ async function notionChildDatabase(env: Env, request: Request): Promise<Response
     if (!referencesDatabase(blocks, databaseId)) return error(404, "Child database not found");
     const database = await notionFetch(env, `/databases/${databaseId}`);
     const dataSourceId = normalizeNotionId(database.data_sources?.[0]?.id) || databaseId;
-    const pages: any[] = [];
-    let cursor: string | undefined;
-    do {
-      const result = await notionFetch(env, `/data_sources/${dataSourceId}/query`, { method: "POST", body: JSON.stringify({ page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) }) });
-      if (Array.isArray(result.results)) pages.push(...result.results);
-      cursor = result.has_more && typeof result.next_cursor === "string" ? normalizeNotionCursor(result.next_cursor) || undefined : undefined;
-    } while (cursor && pages.length < MAX_BLOCKS);
-    const rows = pages.slice(0, MAX_BLOCKS).map((page: any) => ({
+    const result = await notionFetch(env, `/data_sources/${dataSourceId}/query`, { method: "POST", body: JSON.stringify({ page_size: 100 }) });
+    const pages: any[] = Array.isArray(result.results) ? result.results : [];
+    const configRows = await queryConfigRows(env).catch(() => []);
+    const publicFields = new Set(configRows
+      .filter((row) => configPageKey(row) === "DATABASE_PUBLIC_FIELDS" && row.properties?.["启用"]?.checkbox === true)
+      .flatMap((row) => configPageValue(row).split(/[\n,，|｜]+/))
+      .map((name) => name.trim())
+      .filter(Boolean));
+    const safePropertyTypes = new Set(["rich_text", "number", "select", "multi_select", "date", "checkbox", "url", "email", "phone_number"]);
+    const rows = pages.map((page: any) => ({
       id: page.id,
       title: notionPageTitle(page) || "未命名条目",
       icon: page.icon?.type === "emoji" ? page.icon.emoji : undefined,
-      fields: Object.entries(page.properties || {}).filter(([name, property]: [string, any]) => !/password|secret|token|密码|密钥/i.test(name) && property?.type !== "title").slice(0, 6).map(([name, property]) => ({ name, value: notionPropertyText(property) })).filter((field) => field.value),
+      fields: Object.entries(page.properties || {})
+        .filter(([name, property]: [string, any]) => publicFields.has(name) && safePropertyTypes.has(property?.type))
+        .slice(0, 6)
+        .map(([name, property]) => ({ name, value: notionPropertyText(property) }))
+        .filter((field) => field.value),
     }));
     return Response.json({ database: { id: databaseId, title: richText(database.title) || "子数据库", rows } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
@@ -1083,13 +1279,14 @@ async function attachChildAccessSignatures(blocks: any[], env: Env, rootPageId: 
   }));
 }
 
-async function attachMediaAccessSignatures(blocks: any[], secret: string | undefined, rootPageId: string, privateSlug = ""): Promise<void> {
-  const rootId = normalizeNotionId(rootPageId);
-  if (!secret || !rootId) return;
+async function attachMediaAccessSignatures(blocks: any[], secret: string | undefined, rootPage: any, ownerPage: any, privateSlug = ""): Promise<void> {
+  const rootId = normalizeNotionId(rootPage?.id);
+  const ownerId = normalizeNotionId(ownerPage?.id);
+  if (!secret || !rootId || !ownerId) return;
   const targets: any[] = [];
   const visit = (items: any[]) => {
     for (const block of items || []) {
-      if (block.type === "image" && typeof block.url === "string") {
+      if (["image", "video", "audio", "pdf", "file"].includes(block.type) && typeof block.url === "string") {
         try {
           const source = new URL(block.url);
           if (source.protocol === "https:" && NOTION_FILE_HOSTS.has(source.hostname) && normalizeNotionId(block.id)) targets.push(block);
@@ -1099,15 +1296,22 @@ async function attachMediaAccessSignatures(blocks: any[], secret: string | undef
     }
   };
   visit(blocks);
+  const rootVersion = typeof rootPage.last_edited_time === "string" ? rootPage.last_edited_time : "";
+  const ownerVersion = typeof ownerPage.last_edited_time === "string" ? ownerPage.last_edited_time : "";
+  const expiresAt = Math.floor(Date.now() / 1000) + MEDIA_SIGNATURE_TTL_SECONDS;
   await Promise.all(targets.map(async (block) => {
     const blockId = normalizeNotionId(block.id);
     const query = new URLSearchParams({
       id: blockId,
       root: rootId,
-      signature: await createMediaAccessSignature(secret, rootId, blockId, privateSlug),
+      owner: ownerId,
+      rootVersion,
+      ownerVersion,
+      expires: String(expiresAt),
+      signature: await createMediaAccessSignature(secret, rootId, ownerId, blockId, rootVersion, ownerVersion, expiresAt, privateSlug),
     });
     if (privateSlug) query.set("private", privateSlug);
-    block.url = `/_notion/image?${query}`;
+    block.url = `/_notion/media?${query}`;
   }));
 }
 
@@ -1606,10 +1810,10 @@ async function resolveAuthorizedChildPage(env: Env, rootPage: any, trail: string
 
 async function resolveChildPage(env: Env, rootPage: any, trail: string[], pageId: string, accessSignature: string): Promise<any | null> {
   const rootId = normalizeNotionId(rootPage.id);
-  if (rootId && await verifyChildAccessSignature(env.NOTION_TOKEN || "", rootId, pageId, accessSignature)) {
-    const page = await notionFetch(env, `/pages/${pageId}`);
-    return page?.object === "page" && !page.archived && !page.in_trash ? page : null;
-  }
+  // A signature proves that the UI previously saw a link; it never grants
+  // access by itself. Notion ancestry/reference policy is revalidated on every
+  // request so unpublished rich-text targets and removed links stay closed.
+  if (rootId && accessSignature) await verifyChildAccessSignature(env.NOTION_TOKEN || "", rootId, pageId, accessSignature);
   return resolveAuthorizedChildPage(env, rootPage, trail, pageId);
 }
 
@@ -1791,7 +1995,7 @@ function withHead(request: Request, response: Response) {
 }
 
 function allowedMethodsForPath(pathname: string): string[] | undefined {
-  if (["/sitemap.xml", "/rss.xml", "/favicon.ico", "/api/content/posts", "/_notion/image", "/api/health"].includes(pathname)) return ["GET", "HEAD"];
+  if (["/sitemap.xml", "/rss.xml", "/favicon.ico", "/api/content/posts", "/_notion/image", "/_notion/media", "/api/health"].includes(pathname)) return ["GET", "HEAD"];
   if (pathname.startsWith("/_notion/config-image/")) return ["GET", "HEAD"];
   if (["/api/content/navigation", "/api/content/config", "/api/content/search", "/api/content/rss-feeds", "/api/content/link-preview", "/api/content/word-cloud", "/api/content/unlock-session"].includes(pathname)) return ["GET"];
   if (["/api/content/child", "/api/content/page-child", "/api/content/database"].includes(pathname)) return ["POST"];

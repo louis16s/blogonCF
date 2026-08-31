@@ -2,10 +2,11 @@ import { readFile, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
+import { pathToFileURL } from "node:url";
 
 const wranglerConfigPath = new URL("../wrangler.jsonc", import.meta.url);
 const packageRunner = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-const prompt = createInterface({ input: stdin, output: stdout });
+let prompt;
 
 function run(args, { capture = false, allowFailure = false } = {}) {
   const result = spawnSync(packageRunner, args, {
@@ -29,6 +30,23 @@ function replaceJsonString(source, key, value) {
   return source.replace(pattern, `$1${JSON.stringify(value)}`);
 }
 
+function upsertD1Id(source, value) {
+  if (/"database_id"\s*:/.test(source)) return replaceJsonString(source, "database_id", value);
+  const anchor = /(\"database_name\"\s*:\s*\"[^\"]*\",)/;
+  if (!anchor.test(source)) throw new Error("wrangler.jsonc 中缺少 database_name");
+  return source.replace(anchor, `$1\n      "database_id": ${JSON.stringify(value)},`);
+}
+
+export function configureWranglerTemplate(source, { workerName, databaseName, databaseId, siteUrl, dataSourceId, configDataSourceId }) {
+  if (!dataSourceId?.trim()) throw new Error("文章数据库 Data Source ID 不能为空");
+  let configured = replaceJsonString(source, "name", workerName);
+  configured = replaceJsonString(configured, "database_name", databaseName);
+  configured = upsertD1Id(configured, databaseId);
+  configured = replaceJsonString(configured, "SITE_URL", siteUrl);
+  configured = replaceJsonString(configured, "NOTION_DATA_SOURCE_ID", dataSourceId);
+  return replaceJsonString(configured, "NOTION_CONFIG_DATA_SOURCE_ID", configDataSourceId);
+}
+
 async function question(label, fallback = "") {
   const suffix = fallback ? `（默认 ${fallback}）` : "";
   const value = (await prompt.question(`${label}${suffix}：`)).trim();
@@ -37,6 +55,7 @@ async function question(label, fallback = "") {
 
 async function main() {
   if (!stdin.isTTY) throw new Error("请在交互式终端中运行 pnpm setup:cloudflare");
+  prompt = createInterface({ input: stdin, output: stdout });
 
   console.log("\nblogonCF 初始化：填写站点地址与 Notion 数据源，其他步骤会自动完成。\n");
   const workerName = await question("Worker 名称", "blogincf");
@@ -67,13 +86,9 @@ async function main() {
     database = { uuid: id, name: databaseName };
   }
 
-  let config = await readFile(wranglerConfigPath, "utf8");
-  config = replaceJsonString(config, "name", workerName);
-  config = replaceJsonString(config, "database_name", databaseName);
-  config = replaceJsonString(config, "database_id", database.uuid);
-  config = replaceJsonString(config, "SITE_URL", siteUrl);
-  config = replaceJsonString(config, "NOTION_DATA_SOURCE_ID", dataSourceId);
-  config = replaceJsonString(config, "NOTION_CONFIG_DATA_SOURCE_ID", configDataSourceId);
+  const config = configureWranglerTemplate(await readFile(wranglerConfigPath, "utf8"), {
+    workerName, databaseName, databaseId: database.uuid, siteUrl, dataSourceId, configDataSourceId,
+  });
   await writeFile(wranglerConfigPath, config);
 
   run(["run", "build"]);
@@ -85,8 +100,10 @@ async function main() {
   console.log(`\n完成。Worker ${workerName} 已部署；请确保两个 Notion 数据库都已共享给同一个 Integration。\n`);
 }
 
-main().catch((error) => {
-  prompt.close();
-  console.error(`\n初始化失败：${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    prompt?.close();
+    console.error(`\n初始化失败：${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

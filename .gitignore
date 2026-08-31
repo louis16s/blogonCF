@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+/playwright-report/
+/test-results/
 
 # next.js
 /.next/
@@ -39,6 +41,7 @@ yarn-error.log*
 next-env.d.ts
 /dist/
 /.wrangler/
+/wrangler.production.jsonc
 /outputs/
 /work/
 *.tsbuildinfo

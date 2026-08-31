@@ -25,11 +25,9 @@ type ContentIndexVersion = { page_id: string; last_edited_time: string; locked: 
 type AllCapableStatement = { all<T>(): Promise<{ results?: T[] }> };
 
 function all<T>(db: PasswordRateLimitDatabase, sql: string, ...values: unknown[]): Promise<T[]> {
-  try {
-    const statement = db.prepare(sql).bind(...values) as unknown as Partial<AllCapableStatement>;
-    if (typeof statement.all !== "function") return Promise.resolve([]);
-    return statement.all<T>().then((result) => Array.isArray(result?.results) ? result.results : []).catch(() => []);
-  } catch { return Promise.resolve([]); }
+  const statement = db.prepare(sql).bind(...values) as unknown as Partial<AllCapableStatement>;
+  if (typeof statement.all !== "function") throw new Error("D1 statement does not support all()");
+  return statement.all<T>().then((result) => Array.isArray(result?.results) ? result.results : []);
 }
 
 export async function readContentIndex(db: PasswordRateLimitDatabase | undefined, sourceKey: string): Promise<IndexedContentDocument[]> {
@@ -49,10 +47,8 @@ export async function readContentIndex(db: PasswordRateLimitDatabase | undefined
 
 export async function hasContentIndex(db: PasswordRateLimitDatabase | undefined, sourceKey: string): Promise<boolean> {
   if (!db) return false;
-  try {
-    const row = await db.prepare("SELECT page_id FROM content_index WHERE source_key = ?1 LIMIT 1").bind(sourceKey).first<{ page_id?: string }>();
-    return typeof row?.page_id === "string" && row.page_id.length > 0;
-  } catch { return false; }
+  const row = await db.prepare("SELECT page_id FROM content_index WHERE source_key = ?1 LIMIT 1").bind(sourceKey).first<{ page_id?: string }>();
+  return typeof row?.page_id === "string" && row.page_id.length > 0;
 }
 
 export async function readContentIndexVersions(db: PasswordRateLimitDatabase | undefined, sourceKey: string): Promise<ContentIndexVersion[]> {
@@ -75,8 +71,7 @@ export async function writeContentIndex(
   delete (post as Partial<IndexedContentDocument>).body;
   delete (post as Partial<IndexedContentDocument>).searchBody;
   delete (post as Partial<IndexedContentDocument>).partial;
-  try {
-    await db.prepare(`
+  await db.prepare(`
       INSERT INTO content_index
         (page_id, source_key, last_edited_time, is_public, locked, post_json, body, search_body, partial, updated_at)
       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
@@ -102,13 +97,9 @@ export async function writeContentIndex(
       document.locked ? 0 : (document.partial ? 1 : 0),
       Date.now(),
     ).run();
-  } catch {
-    // A missing migration or a temporary D1 failure must not break Notion.
-  }
 }
 
 export async function deleteContentIndexPage(db: PasswordRateLimitDatabase | undefined, pageId: string): Promise<void> {
   if (!db) return;
-  try { await db.prepare("DELETE FROM content_index WHERE page_id = ?1").bind(pageId).run(); }
-  catch { /* Best-effort cleanup. */ }
+  await db.prepare("DELETE FROM content_index WHERE page_id = ?1").bind(pageId).run();
 }

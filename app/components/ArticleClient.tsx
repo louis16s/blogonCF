@@ -7,20 +7,6 @@ import { withoutHiddenNotionBlocks } from "../../shared/contentVisibility.js";
 import { useArticleToc } from "./ArticleTocContext";
 import { loadLinkPreview, type LinkPreview } from "./linkPreviewClient";
 
-const HEIC_DECODE_CONCURRENCY = 3;
-let activeHeicDecodes = 0;
-const pendingHeicDecodes: Array<() => void> = [];
-
-async function withHeicDecodeSlot<T>(task: () => Promise<T>): Promise<T> {
-  if (activeHeicDecodes >= HEIC_DECODE_CONCURRENCY) await new Promise<void>((resolve) => pendingHeicDecodes.push(resolve));
-  activeHeicDecodes += 1;
-  try { return await task(); }
-  finally {
-    activeHeicDecodes -= 1;
-    pendingHeicDecodes.shift()?.();
-  }
-}
-
 type ArticleClientProps = {
   slug: string;
   contentKind?: "post" | "page";
@@ -245,7 +231,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     return () => window.removeEventListener("article-toc:navigate", onNavigate);
   }, [navigateToHeading]);
 
-  const loadChild = useCallback((pageId: string, accessSignature?: string, updateHistory = true) => {
+  const loadChild = useCallback((pageId: string, accessSignature?: string, updateHistory = true, authorizedTrail?: string[]) => {
     pendingHeadingIdRef.current = "";
     setPendingHeadingId?.("");
     childRequestRef.current?.abort();
@@ -254,7 +240,8 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     childRequestRef.current = controller;
     setChildOpening(true); setChildContinuationLoading(false); setChildError("");
     scrollToArticleStart();
-    requestChildPage(childEndpoint, { slug, pageId, accessSignature, trail: childTrailRef.current.map((item) => item.id) }, controller.signal)
+    const requestTrail = authorizedTrail || childTrailRef.current.map((item) => item.id);
+    requestChildPage(childEndpoint, { slug, pageId, accessSignature, trail: requestTrail }, controller.signal)
       .then((child) => {
         childIdRef.current = child.id;
         setChildTrail((current) => {
@@ -265,8 +252,9 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
         });
         if (updateHistory) {
           const url = new URL(window.location.href);
-          url.searchParams.set("child", child.id);
-          window.history.pushState({ child: child.id }, "", url);
+          url.searchParams.delete("child");
+          for (const id of [...requestTrail, child.id]) url.searchParams.append("child", id);
+          window.history.pushState({ children: [...requestTrail, child.id] }, "", url);
         }
         // The TOC is always fetched independently. A page can be truncated by
         // deeply nested blocks even when its top-level nextCursor is empty.
@@ -294,6 +282,41 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
         }
       });
   }, [childEndpoint, setPendingHeadingId, slug]);
+
+  const restoreChildPath = useCallback((pageIds: string[]) => {
+    childRequestRef.current?.abort();
+    childHeadingRequestRef.current?.abort();
+    const controller = new AbortController();
+    childRequestRef.current = controller;
+    setChildOpening(true);
+    setChildError("");
+    void (async () => {
+      try {
+        const restored: ChildPage[] = [];
+        for (let index = 0; index < pageIds.length; index++) {
+          const pageId = pageIds[index];
+          const child = await requestChildPage(childEndpoint, { slug, pageId, trail: pageIds.slice(0, index) }, controller.signal);
+          restored.push(child);
+        }
+        const active = restored.at(-1);
+        if (!active) return;
+        childIdRef.current = active.id;
+        childTrailRef.current = restored;
+        setChildTrail(restored);
+        const fullHeadings = await requestChildHeadings(childEndpoint, { slug, pageId: active.id, accessSignature: active.accessSignature, trail: pageIds.slice(0, -1) }, controller.signal);
+        const completed = restored.map((item, index) => index === restored.length - 1 ? { ...item, headings: fullHeadings } : item);
+        childTrailRef.current = completed;
+        setChildTrail(completed);
+      } catch (reason) {
+        if (reason instanceof Error && reason.name !== "AbortError") setChildError(reason.message || "子页面暂时无法读取");
+      } finally {
+        if (childRequestRef.current === controller) {
+          childRequestRef.current = null;
+          setChildOpening(false);
+        }
+      }
+    })();
+  }, [childEndpoint, slug]);
 
   const loadMoreChild = useCallback(() => {
     const currentChild = childTrailRef.current.at(-1);
@@ -385,7 +408,8 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
 
   useEffect(() => {
     const syncChildFromUrl = () => {
-      const pageId = new URL(window.location.href).searchParams.get("child");
+      const childIds = new URL(window.location.href).searchParams.getAll("child").filter(Boolean).slice(0, 8);
+      const pageId = childIds.at(-1) || "";
       if (!pageId) { childIdRef.current = ""; childTrailRef.current = []; setChildTrail([]); setChildError(""); return; }
       if (!locked && post && childIdRef.current !== pageId) {
         const previous = childTrailRef.current.findIndex((item) => item.id === pageId);
@@ -394,13 +418,14 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
           childTrailRef.current = next;
           childIdRef.current = pageId;
           setChildTrail(next);
-        } else loadChild(pageId, undefined, false);
+        } else if (childIds.length > 1) restoreChildPath(childIds);
+        else loadChild(pageId, undefined, false);
       }
     };
     syncChildFromUrl();
     window.addEventListener("popstate", syncChildFromUrl);
     return () => window.removeEventListener("popstate", syncChildFromUrl);
-  }, [locked, post, loadChild]);
+  }, [locked, post, loadChild, restoreChildPath]);
 
   useEffect(() => () => {
     childRequestRef.current?.abort();
@@ -413,7 +438,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     if (!isNewsPage || siteConfig?.rssEnabled === false) return;
     const controller = new AbortController();
     const loadingTimer = window.setTimeout(() => setFeedsLoading(true), 80);
-    fetch(`/api/content/rss-feeds?slug=${encodeURIComponent(slug)}`, { signal: controller.signal, cache: "no-store" })
+    fetch(`/api/content/rss-feeds?slug=${encodeURIComponent(slug)}`, { signal: controller.signal })
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((data) => { if (!controller.signal.aborted) setFeeds(Array.isArray(data.feeds) ? data.feeds : []); })
       .catch(() => { if (!controller.signal.aborted) setFeeds([]); })
@@ -435,9 +460,9 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       const previous = next.at(-1);
       childIdRef.current = previous?.id || "";
       childTrailRef.current = next;
-      if (previous) url.searchParams.set("child", previous.id);
-      else url.searchParams.delete("child");
-      window.history.replaceState(previous ? { child: previous.id } : {}, "", url);
+      url.searchParams.delete("child");
+      for (const item of next) url.searchParams.append("child", item.id);
+      window.history.replaceState(previous ? { children: next.map((item) => item.id) } : {}, "", url);
       return next;
     });
     setChildError("");
@@ -647,68 +672,10 @@ function BookmarkCard({ block, className }: { block: ContentBlock; className: st
   </a>;
 }
 
-function notionImageIdentity(block: ContentBlock): string {
-  try {
-    const gateway = new URL(block.url || "", "https://notion-image.local");
-    const source = new URL(gateway.searchParams.get("url") || "");
-    return `${block.id}:${source.hostname}${source.pathname}`;
-  } catch { return block.id; }
-}
-
-function NotionHeicImage({ src, identity, alt, caption }: { src: string; identity: string; alt: string; caption?: string }) {
-  const figureRef = useRef<HTMLElement>(null);
-  const sourceRef = useRef(src);
-  const [renderedUrl, setRenderedUrl] = useState("");
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => { sourceRef.current = src; }, [src]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let active = true;
-    let objectUrl = "";
-    let observer: IntersectionObserver | undefined;
-    const load = async () => {
-      try {
-        const jpeg = await withHeicDecodeSlot(async () => {
-          controller.signal.throwIfAborted();
-          const response = await fetch(sourceRef.current, { signal: controller.signal });
-          if (!response.ok) throw new Error("Image fetch failed");
-          const blob = await response.blob();
-          if (!/image\/(?:hei[cf])/i.test(response.headers.get("content-type") || blob.type)) return blob;
-          const { heicTo } = await import("heic-to/csp");
-          return heicTo({ blob, type: "image/jpeg", quality: 0.86 });
-        });
-        if (!active) return;
-        objectUrl = URL.createObjectURL(jpeg);
-        setRenderedUrl(objectUrl);
-      } catch (reason) {
-        if (active && !(reason instanceof DOMException && reason.name === "AbortError")) setFailed(true);
-      }
-    };
-    const target = figureRef.current;
-    if (target && "IntersectionObserver" in window) {
-      observer = new IntersectionObserver(([entry]) => {
-        if (entry.isIntersecting) { observer?.disconnect(); void load(); }
-      }, { rootMargin: "800px 0px" });
-      observer.observe(target);
-    } else void load();
-    return () => { active = false; controller.abort(); observer?.disconnect(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [identity]);
-
-  return <figure ref={figureRef} className="notion-heic-image">
-    {renderedUrl
-      // eslint-disable-next-line @next/next/no-img-element
-      ? <img src={renderedUrl} alt={alt} />
-      : <div className="notion-image-state" role={failed ? "alert" : "status"}>{failed ? "这张图片暂时无法显示" : "正在加载图片…"}</div>}
-    {caption ? <figcaption>{caption}</figcaption> : null}
-  </figure>;
-}
-
 function NotionImage({ src, alt, caption }: { src: string; alt: string; caption?: string }) {
   // Signed Notion URLs do not provide dimensions required by next/image.
   // eslint-disable-next-line @next/next/no-img-element
-  return <figure><img src={src} alt={alt} loading="lazy" />{caption ? <figcaption>{caption}</figcaption> : null}</figure>;
+  return <figure><img src={src} alt={alt} loading="lazy" decoding="async" />{caption ? <figcaption>{caption}</figcaption> : null}</figure>;
 }
 
 function EquationBlock({ expression }: { expression: string }) {
@@ -756,9 +723,7 @@ function Block({ block, onOpenChild, databaseContext, breadcrumb }: { block: Con
     case "toggle": return <details className={`${className} notion-toggle`} open><summary><Rich value={block.richText} onOpenChild={onOpenChild} /></summary><div>{children}</div></details>;
     case "code": return <figure className={`${className} notion-code`}><pre><code data-language={block.language}><Rich value={block.richText} onOpenChild={onOpenChild} /></code></pre>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure>;
     case "divider": return <hr />;
-    case "image": return block.url ? block.url.startsWith("/_notion/image?")
-      ? <NotionHeicImage src={block.url} identity={notionImageIdentity(block)} alt={block.caption || "文章图片"} caption={block.caption} />
-      : <NotionImage src={block.url} alt={block.caption || "文章图片"} caption={block.caption} /> : null;
+    case "image": return block.url ? <NotionImage src={block.url} alt={block.caption || "文章图片"} caption={block.caption} /> : null;
     case "bookmark": return <BookmarkCard block={block} className={className} />;
     case "embed": return block.url ? <figure className={`${className} notion-embed`}><iframe src={block.url} title={block.caption || "Notion 嵌入内容"} loading="lazy" allowFullScreen sandbox="allow-forms allow-popups allow-same-origin allow-scripts" />{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
     case "video": return block.url ? <figure className={`${className} notion-media`}><video src={block.url} controls preload="metadata">浏览器无法播放这个视频。</video>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;

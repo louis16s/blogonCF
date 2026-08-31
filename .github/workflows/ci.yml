@@ -29,4 +29,8 @@ jobs:
       - run: pnpm run lint
       - run: pnpm run build
       - run: node --test tests/*.test.mjs
-      - run: pnpm audit --prod --audit-level high
+      - run: pnpm wrangler d1 migrations apply DB --local --config wrangler.jsonc
+      - run: pnpm wrangler d1 execute DB --local --command "SELECT name FROM sqlite_master WHERE type='table' AND name='content_index'" --config wrangler.jsonc
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm run test:e2e
+      - run: pnpm run audit:ci

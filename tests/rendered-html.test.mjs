@@ -177,12 +177,10 @@ test("client refresh failures preserve the last verified homepage and article co
   assert.doesNotMatch(article, /setPost\(undefined\)|setBlocks\(\[\]\)|setLocked\(false\)/);
 });
 
-test("HEIC decoding survives signed URL refreshes without repeated work", async () => {
+test("Notion images use native lazy loading after Worker-side HEIC conversion", async () => {
   const article = await readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8");
-  assert.match(article, /HEIC_DECODE_CONCURRENCY = 3/);
-  assert.match(article, /sourceRef\.current = src/);
-  assert.match(article, /return `\$\{block\.id\}:\$\{source\.hostname\}\$\{source\.pathname\}`/);
-  assert.match(article, /\}, \[identity\]\)/);
+  assert.match(article, /loading="lazy" decoding="async"/);
+  assert.doesNotMatch(article, /heic-to|NotionHeicImage|URL\.createObjectURL/);
   assert.doesNotMatch(article, /CONTENT_REFRESH_INTERVAL_MS|setInterval\(refresh/);
 });
 
@@ -577,7 +575,7 @@ test("article header stays compact and the password form supports keyboard submi
 test("about and other Published Notion pages render inside the site shell", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
-  const pageId = "118ad771-48f4-8006-8e05-f46d51bd244c";
+  const pageId = "99999999-9999-4999-8999-999999999994";
   globalThis.fetch = async (input, init = {}) => {
     const url = String(input);
     if (url.includes(`/blocks/${pageId}/children`)) return Response.json({ results: [
@@ -607,7 +605,7 @@ test("about and other Published Notion pages render inside the site shell", asyn
     assert.match(html, /ifanr\.com/);
     assert.doesNotMatch(html, /sidebar-home-link|返回主页/);
     assert.doesNotMatch(html, /返回全部文章/);
-    assert.doesNotMatch(html, /href="https:\/\/www\.notion\.so\/118ad771/);
+    assert.doesNotMatch(html, /href="https:\/\/www\.notion\.so\/99999999/);
     assert.doesNotMatch(html, /fas fa-info/);
     assert.doesNotMatch(html, /site-intro|网站开场动画|rangefinder-intro/, "about and page routes must not render the homepage intro");
 
@@ -705,7 +703,7 @@ test("content endpoint follows Notion pagination cursors", async () => {
     title: { title: [{ plain_text: slug }] }, slug: { rich_text: [{ plain_text: slug }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
   } });
   globalThis.fetch = async (input, init) => {
-    if (String(input).includes("fffad771-48f4-8181-b48e-000b8cf60e1b")) return Response.json({ results: [], has_more: false });
+    if (String(input).includes("99999999-9999-4999-8999-999999999991")) return Response.json({ results: [], has_more: false });
     const body = JSON.parse(init.body);
     if (body.filter.and.some((item) => item.or?.some((entry) => entry.select?.equals === "Link"))) return Response.json({ results: [], has_more: false });
     bodies.push(body);
@@ -921,27 +919,150 @@ test("health endpoint reports missing Notion configuration without leaking secre
   assert.equal(rejected.headers.get("allow"), "GET, HEAD");
 });
 
+test("JSON gateways reject oversized or malformed bodies before calling Notion", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  let upstreamCalls = 0;
+  globalThis.fetch = async () => { upstreamCalls += 1; return Response.json({ results: [] }); };
+  try {
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" };
+    const oversized = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "index", pageId: "11111111-1111-4111-8111-111111111111", padding: "x".repeat(20_000) }) }), env, context);
+    assert.equal(oversized.status, 413);
+    const wrongType = await worker.fetch(new Request("http://localhost/api/content/page-child", { method: "POST", headers: { "content-type": "text/plain" }, body: "{}" }), env, context);
+    assert.equal(wrongType.status, 415);
+    let pulls = 0;
+    let cancelled = false;
+    const stream = new ReadableStream({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(new Uint8Array(9_000));
+      },
+      cancel() { cancelled = true; },
+    });
+    const streamed = await worker.fetch(new Request("http://localhost/api/content/child", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: stream,
+      duplex: "half",
+    }), env, context);
+    assert.equal(streamed.status, 413);
+    assert.equal(cancelled, true, "the request stream must be cancelled as soon as it crosses the limit");
+    assert.ok(pulls <= 3, `oversized request should stop reading promptly, observed ${pulls} pulls`);
+    assert.equal(upstreamCalls, 0, "invalid request bodies must not consume Notion quota");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("D1 failures do not masquerade as an empty index and trigger a Notion rebuild", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  let notionCalls = 0;
+  globalThis.fetch = async () => { notionCalls += 1; return Response.json({ results: [] }); };
+  const brokenDb = { prepare() { throw new Error("D1 unavailable"); } };
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/search?q=test"), { ASSETS: assets, DB: brokenDb, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
+    assert.equal(response.status, 502);
+    assert.equal(notionCalls, 0, "a D1 outage must not fan out into a full Notion corpus traversal");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("scheduled RSS refresh isolates one broken Notion page and continues with the rest", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  let goodPageReads = 0;
+  const pending = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/data_sources/cron-resilience/query")) return Response.json({ results: [
+      { id: "broken-news", properties: { type: { select: { name: "Page" } }, status: { select: { name: "Published" } }, title: { title: [{ plain_text: "资讯一" }] }, slug: { rich_text: [{ plain_text: "news-one" }] } } },
+      { id: "healthy-news", properties: { type: { select: { name: "Page" } }, status: { select: { name: "Published" } }, title: { title: [{ plain_text: "资讯二" }] }, slug: { rich_text: [{ plain_text: "news-two" }] } } },
+    ], has_more: false });
+    if (url.includes("/blocks/broken-news/children")) return Response.json({ message: "broken page" }, { status: 403 });
+    if (url.includes("/blocks/healthy-news/children")) { goodPageReads += 1; return Response.json({ results: [], has_more: false }); }
+    throw new Error(`unexpected scheduled request: ${url}`);
+  };
+  try {
+    await worker.scheduled({ scheduledTime: Date.now(), cron: "0 * * * *" }, { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "cron-resilience" }, {
+      waitUntil(promise) { pending.push(promise); },
+      passThroughOnException() {},
+    });
+    await Promise.all(pending);
+    assert.equal(goodPageReads, 1, "a later feed page must still refresh after an earlier page fails");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("child databases expose only explicitly allowlisted safe properties", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const rootId = "11111111-1111-4111-8111-111111111119";
+  const databaseId = "22222222-2222-4222-8222-222222222229";
+  const databaseSourceId = "33333333-3333-4333-8333-333333333339";
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/data_sources/config-db-fields/query")) return Response.json({ results: [{ properties: {
+      "启用": { checkbox: true },
+      "配置名": { title: [{ plain_text: "DATABASE_PUBLIC_FIELDS" }] },
+      "配置值": { rich_text: [{ plain_text: "公开字段,密码字段,计算字段" }] },
+    } }] });
+    if (url.includes("/data_sources/content-db-fields/query")) return Response.json({ results: [{ id: rootId, properties: {
+      title: { title: [{ plain_text: "数据库文章" }] }, slug: { rich_text: [{ plain_text: "database-test" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
+      type: { select: { name: "Post" } }, status: { select: { name: "Published" } },
+    } }] });
+    if (url.includes(`/blocks/${rootId}/children`)) return Response.json({ results: [{ id: databaseId, type: "child_database", has_children: false, child_database: { title: "测试数据库" } }], has_more: false });
+    if (url.includes(`/databases/${databaseId}`)) return Response.json({ title: [{ plain_text: "测试数据库" }], data_sources: [{ id: databaseSourceId }] });
+    if (url.includes(`/data_sources/${databaseSourceId}/query`)) return Response.json({ results: [{ id: "row-1", properties: {
+      名称: { type: "title", title: [{ plain_text: "公开条目" }] },
+      公开字段: { type: "rich_text", rich_text: [{ plain_text: "可以展示" }] },
+      隐藏字段: { type: "email", email: "private@example.com" },
+      密码字段: { type: "password", password: "secret" },
+      计算字段: { type: "formula", formula: { string: "derived secret" } },
+    } }] });
+    throw new Error(`unexpected Notion request: ${url}`);
+  };
+  try {
+    const response = await worker.fetch(new Request("http://localhost/api/content/database", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ slug: "database-test", databaseId }),
+    }), {
+      ASSETS: assets,
+      NOTION_TOKEN: "test-token",
+      NOTION_DATA_SOURCE_ID: "content-db-fields",
+      NOTION_CONFIG_DATA_SOURCE_ID: "config-db-fields",
+    }, context);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.database.rows[0].title, "公开条目");
+    assert.deepEqual(payload.database.rows[0].fields, [{ name: "公开字段", value: "可以展示" }]);
+    assert.doesNotMatch(JSON.stringify(payload), /private@example|secret|derived/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("Notion HEIC files use the same-origin conversion endpoint", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
   const pageId = "11111111-1111-4111-8111-111111111111";
   const imageId = "22222222-2222-4222-8222-222222222222";
+  const lastEdited = "2026-08-30T00:00:00.000Z";
   const source = "https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/photo.HEIC?signature=test";
   globalThis.fetch = async (input) => String(input).includes("/children")
     ? Response.json({ results: [
       { id: imageId, type: "image", has_children: false, image: { type: "file_upload", file: { url: source }, caption: [] } },
       { id: "33333333-3333-4333-8333-333333333333", type: "image", has_children: false, image: { type: "external", external: { url: "https://images.example.com/photo.heic" }, caption: [] } },
     ], has_more: false })
-    : Response.json({ results: [{ id: pageId, properties: {
+    : Response.json({ results: [{ id: pageId, last_edited_time: lastEdited, properties: {
       title: { title: [{ plain_text: "照片" }] }, slug: { rich_text: [{ plain_text: "photo" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
+      type: { select: { name: "Post" } }, status: { select: { name: "Published" } },
     } }] });
   try {
     const response = await worker.fetch(new Request("http://localhost/api/content/post/photo"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     const payload = await response.json();
     const gateway = new URL(payload.blocks[0].url, "http://localhost");
-    assert.equal(gateway.pathname, "/_notion/image");
+    assert.equal(gateway.pathname, "/_notion/media");
     assert.equal(gateway.searchParams.get("id"), imageId);
     assert.equal(gateway.searchParams.get("root"), pageId);
+    assert.equal(gateway.searchParams.get("owner"), pageId);
+    assert.equal(gateway.searchParams.get("rootVersion"), lastEdited);
+    assert.ok(Number(gateway.searchParams.get("expires")) > Math.floor(Date.now() / 1000));
     assert.match(gateway.searchParams.get("signature"), /^[A-Za-z0-9_-]{43}$/);
     assert.equal(gateway.searchParams.has("url"), false, "expiring Notion URLs must not be exposed to the client");
     assert.equal(payload.blocks[1].url, "https://images.example.com/photo.heic", "non-allowlisted external images must not be proxied");
@@ -954,14 +1075,18 @@ test("Notion image gateway proxies allowlisted HEIC and rejects SSRF hosts", asy
   const pageId = "44444444-4444-4444-8444-444444444444";
   const imageId = "55555555-5555-4555-8555-555555555555";
   const source = "https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/photo.heic?signature=fresh";
+  const lastEdited = "2026-08-30T00:00:00.000Z";
+  let currentRootVersion = lastEdited;
   let upstreamImageFetches = 0;
   globalThis.fetch = async (input, init) => {
     const url = String(input);
-    if (url.includes("/data_sources/")) return Response.json({ results: [{ id: pageId, properties: {
+    if (url.includes("/data_sources/")) return Response.json({ results: [{ id: pageId, last_edited_time: lastEdited, properties: {
       title: { title: [{ plain_text: "照片" }] }, slug: { rich_text: [{ plain_text: "photo" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
+      type: { select: { name: "Post" } }, status: { select: { name: "Published" } },
     } }] });
     if (url.includes("/children")) return Response.json({ results: [{ id: imageId, type: "image", has_children: false, image: { type: "file_upload", file: { url: source }, caption: [] } }], has_more: false });
-    if (url.includes(`/blocks/${imageId}`)) return Response.json({ object: "block", id: imageId, type: "image", image: { type: "file", file: { url: source } } });
+    if (url.includes(`/pages/${pageId}`)) return Response.json({ object: "page", id: pageId, last_edited_time: currentRootVersion, archived: false, in_trash: false, properties: { type: { select: { name: "Post" } }, status: { select: { name: "Published" } }, slug: { rich_text: [{ plain_text: "photo" }] }, password: { rich_text: [] } } });
+    if (url.includes(`/blocks/${imageId}`)) return Response.json({ object: "block", id: imageId, parent: { type: "page_id", page_id: pageId }, type: "image", image: { type: "file", file: { url: source } } });
     upstreamImageFetches++;
     assert.equal(new URL(url).hostname, "prod-files-secure.s3.us-west-2.amazonaws.com");
     assert.equal(init.redirect, "manual");
@@ -977,7 +1102,13 @@ test("Notion image gateway proxies allowlisted HEIC and rejects SSRF hosts", asy
     assert.equal(response.headers.get("cache-control"), "public, max-age=300, stale-while-revalidate=86400");
     assert.equal(await response.text(), "heic-binary");
 
-    const blocked = await worker.fetch(new Request("http://localhost/_notion/image?id=55555555-5555-4555-8555-555555555555&root=44444444-4444-4444-8444-444444444444&signature=invalid"), env, context);
+    currentRootVersion = "2026-08-30T00:01:00.000Z";
+    const revoked = await worker.fetch(new Request(new URL(gatewayUrl, "http://localhost")), env, context);
+    assert.equal(revoked.status, 404, "editing or withdrawing the root page must revoke previously issued media URLs");
+
+    const blockedUrl = new URL(gatewayUrl, "http://localhost");
+    blockedUrl.searchParams.set("signature", "invalid");
+    const blocked = await worker.fetch(new Request(blockedUrl), env, context);
     assert.equal(blocked.status, 403);
     assert.equal(upstreamImageFetches, 1, "unsigned image requests must never reach the upstream file host");
   } finally { globalThis.fetch = originalFetch; }
@@ -989,13 +1120,16 @@ test("Notion image gateway rejects non-image upstream payloads", async () => {
   const pageId = "66666666-6666-4666-8666-666666666666";
   const imageId = "77777777-7777-4777-8777-777777777777";
   const source = "https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/photo.heic?signature=fresh";
+  const lastEdited = "2026-08-30T00:00:00.000Z";
   globalThis.fetch = async (input) => {
     const url = String(input);
-    if (url.includes("/data_sources/")) return Response.json({ results: [{ id: pageId, properties: {
+    if (url.includes("/data_sources/")) return Response.json({ results: [{ id: pageId, last_edited_time: lastEdited, properties: {
       title: { title: [{ plain_text: "照片" }] }, slug: { rich_text: [{ plain_text: "photo" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [] },
+      type: { select: { name: "Post" } }, status: { select: { name: "Published" } },
     } }] });
     if (url.includes("/children")) return Response.json({ results: [{ id: imageId, type: "image", has_children: false, image: { type: "file_upload", file: { url: source }, caption: [] } }], has_more: false });
-    if (url.includes(`/blocks/${imageId}`)) return Response.json({ object: "block", id: imageId, type: "image", image: { type: "file", file: { url: source } } });
+    if (url.includes(`/pages/${pageId}`)) return Response.json({ object: "page", id: pageId, last_edited_time: lastEdited, archived: false, in_trash: false, properties: { type: { select: { name: "Post" } }, status: { select: { name: "Published" } }, slug: { rich_text: [{ plain_text: "photo" }] }, password: { rich_text: [] } } });
+    if (url.includes(`/blocks/${imageId}`)) return Response.json({ object: "block", id: imageId, parent: { type: "page_id", page_id: pageId }, type: "image", image: { type: "file", file: { url: source } } });
     return new Response("not-an-image", { headers: { "content-type": "text/html" } });
   };
   try {
@@ -1004,7 +1138,7 @@ test("Notion image gateway rejects non-image upstream payloads", async () => {
     const gatewayUrl = (await article.json()).blocks[0].url;
     const response = await worker.fetch(new Request(new URL(gatewayUrl, "http://localhost")), env, context);
     assert.equal(response.status, 415);
-    assert.deepEqual(await response.json(), { error: "Unsupported image response" });
+    assert.deepEqual(await response.json(), { error: "Unsupported media response" });
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -1014,7 +1148,7 @@ test("content endpoint maps only filtered metadata while keeping browser respons
   let requestBody;
   globalThis.fetch = async (input, init) => {
     assert.equal(init.headers.authorization, "Bearer test-token");
-    if (String(input).includes("fffad771-48f4-8181-b48e-000b8cf60e1b")) return Response.json({ results: [
+    if (String(input).includes("99999999-9999-4999-8999-999999999991")) return Response.json({ results: [
       { id: "author", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "AUTHOR" }] }, "配置值": { rich_text: [{ plain_text: "Notion 作者" }] }, "其他私密项": { rich_text: [{ plain_text: "不得输出" }] } } },
       { id: "since", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "`SINCE`" }] }, "配置值": { rich_text: [{ plain_text: "始于 2019 年" }] } } },
       { id: "quotes", properties: { "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "FOOTER_QUOTES" }] }, "配置值": { rich_text: [{ plain_text: "第一句｜第二句\n第三句 | 第四句" }] } } },
@@ -1027,11 +1161,11 @@ test("content endpoint maps only filtered metadata while keeping browser respons
     const body = JSON.parse(init.body);
     if (body.filter.and.some((item) => item.or?.some((entry) => entry.select?.equals === "Link"))) return Response.json({ results: [
       { id: "rss", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "RSS" }] }, slug: { rich_text: [{ plain_text: "rss/feed.xml" }] }, summary: { rich_text: [{ plain_text: "订阅" }] }, icon: { rich_text: [] } } },
-      { id: "tool", icon: { type: "emoji", emoji: "👾" }, properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "超焦距" }] }, slug: { rich_text: [{ plain_text: "https://hd.530555.xyz" }] }, summary: { rich_text: [{ plain_text: "跳转hd" }] }, icon: { rich_text: [] } } },
+      { id: "tool", icon: { type: "emoji", emoji: "👾" }, properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "超焦距" }] }, slug: { rich_text: [{ plain_text: "https://tool.example" }] }, summary: { rich_text: [{ plain_text: "跳转hd" }] }, icon: { rich_text: [] } } },
       { id: "annotated", properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "带跳转的工具" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [{ plain_text: "Notion 注释链接", href: "https://annotated.example" }] }, icon: { rich_text: [] } } },
       { id: "archive", properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "历史归档" }] }, slug: { rich_text: [{ plain_text: "/archive" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
-      { id: "118ad771-48f4-8006-8e05-f46d51bd244c", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "关于我_" }] }, slug: { rich_text: [{ plain_text: "me" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
-      { id: "fffad771-48f4-816c-b993-d78a936a4c78", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "资讯_" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
+      { id: "99999999-9999-4999-8999-999999999994", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "关于我_" }] }, slug: { rich_text: [{ plain_text: "me" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
+      { id: "99999999-9999-4999-8999-999999999992", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "资讯_" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
       { id: "notice", created_time: "2026-08-13T00:00:00Z", icon: { type: "emoji", emoji: "📣" }, properties: { type: { select: { name: "Notice" } }, title: { title: [{ plain_text: "新的公告" }] }, summary: { rich_text: [{ plain_text: "新的副句" }] }, date: { date: { start: "2026-08-13" } } } },
       { id: "broken", properties: { title: { title: [{ plain_text: "资讯" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] }, icon: { rich_text: [] } } },
     ] });
@@ -1042,14 +1176,14 @@ test("content endpoint maps only filtered metadata while keeping browser respons
     } }] });
   };
   try {
-    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id", NOTION_CONFIG_DATA_SOURCE_ID: "fffad771-48f4-8181-b48e-000b8cf60e1b" };
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id", NOTION_CONFIG_DATA_SOURCE_ID: "99999999-9999-4999-8999-999999999991" };
     const response = await worker.fetch(new Request("http://localhost/api/content/posts"), env, context);
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get("cache-control"), "no-cache, max-age=0, must-revalidate");
+    assert.equal(response.headers.get("cache-control"), "public, max-age=300, stale-while-revalidate=86400");
     const payload = await response.json();
     assert.equal(payload.posts[0].slug, "public-post");
     assert.deepEqual(payload.posts[0].tags, ["旅行"]);
-    assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://hd.530555.xyz", "tool"], ["带跳转的工具", "https://annotated.example", "tool"], ["关于我", "/about", "nav"], ["资讯", "/page/links", "nav"]]);
+    assert.deepEqual(payload.links.map((link) => [link.title, link.href, link.kind]), [["RSS", "/rss.xml", "rss"], ["超焦距", "https://tool.example", "tool"], ["带跳转的工具", "https://annotated.example", "tool"], ["关于我", "/about", "nav"], ["资讯", "/page/links", "nav"]]);
     assert.equal(payload.config.author, "Notion 作者");
     assert.equal(payload.config.since, "2019");
     assert.deepEqual(payload.notice, { id: "notice", title: "新的公告", summary: "新的副句", icon: "📣", date: "2026-08-13" });
@@ -1072,21 +1206,21 @@ test("navigation endpoint returns only live Notion-configured jump links", async
   globalThis.fetch = async () => Response.json({ results: [
     { id: "tool", icon: { type: "emoji", emoji: "🧭" }, properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "导航工具" }] }, slug: { rich_text: [{ plain_text: "打开", href: "https://nav.example" }] }, summary: { rich_text: [] } } },
     { id: "uppercase-url", properties: { type: { select: { name: "Link" } }, title: { title: [{ plain_text: "URL 属性工具" }] }, slug: { rich_text: [{ plain_text: "tool" }] }, URL: { url: "https://uppercase.example/tool" }, summary: { rich_text: [] } } },
-    { id: "118ad771-48f4-8006-8e05-f46d51bd244c", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "关于我_" }] }, slug: { rich_text: [{ plain_text: "me" }] }, summary: { rich_text: [] } } },
-    { id: "fffad771-48f4-816c-b993-d78a936a4c78", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "资讯_" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] } } },
-    { id: "fffad771-48f4-810c-987c-000c02fa3dea", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "RSS_" }] }, slug: { rich_text: [{ plain_text: "rss-page" }] }, summary: { rich_text: [] } } },
+    { id: "99999999-9999-4999-8999-999999999994", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "关于我_" }] }, slug: { rich_text: [{ plain_text: "me" }] }, summary: { rich_text: [] } } },
+    { id: "99999999-9999-4999-8999-999999999992", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "资讯_" }] }, slug: { rich_text: [{ plain_text: "links" }] }, summary: { rich_text: [] } } },
+    { id: "99999999-9999-4999-8999-999999999993", properties: { type: { select: { name: "Page" } }, title: { title: [{ plain_text: "RSS_" }] }, slug: { rich_text: [{ plain_text: "rss-page" }] }, summary: { rich_text: [] } } },
     { id: "invalid", properties: { title: { title: [{ plain_text: "无效跳转" }] }, slug: { rich_text: [{ plain_text: "javascript:alert(1)" }] }, summary: { rich_text: [] } } },
   ] });
   try {
     const response = await worker.fetch(new Request("http://localhost/api/content/navigation"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get("cache-control"), "no-cache, max-age=0, must-revalidate");
+    assert.equal(response.headers.get("cache-control"), "public, max-age=300, stale-while-revalidate=86400");
     assert.deepEqual(await response.json(), { links: [
       { id: "tool", title: "导航工具", href: "https://nav.example", summary: "", icon: "🧭", external: true, kind: "tool" },
       { id: "uppercase-url", title: "URL 属性工具", href: "https://uppercase.example/tool", summary: "", icon: "", external: true, kind: "tool" },
-      { id: "118ad771-48f4-8006-8e05-f46d51bd244c", title: "关于我", href: "/about", summary: "", icon: "", external: false, kind: "nav" },
-      { id: "fffad771-48f4-816c-b993-d78a936a4c78", title: "资讯", href: "/page/links", summary: "", icon: "", external: false, kind: "nav" },
-      { id: "fffad771-48f4-810c-987c-000c02fa3dea", title: "RSS", href: "/rss.xml", summary: "", icon: "", external: false, kind: "rss" },
+      { id: "99999999-9999-4999-8999-999999999994", title: "关于我", href: "/about", summary: "", icon: "", external: false, kind: "nav" },
+      { id: "99999999-9999-4999-8999-999999999992", title: "资讯", href: "/page/links", summary: "", icon: "", external: false, kind: "nav" },
+      { id: "99999999-9999-4999-8999-999999999993", title: "RSS", href: "/rss.xml", summary: "", icon: "", external: false, kind: "rss" },
     ], source: "notion" });
   } finally { globalThis.fetch = originalFetch; }
 });
@@ -1119,6 +1253,62 @@ test("public JSON endpoints reuse the edge cache across Worker isolates", async 
     assert.equal(second.headers.get("x-blog-cache"), "hit");
     assert.equal(upstreamCalls, 1, "the second request should not traverse Notion");
     assert.deepEqual(await second.json(), await first.clone().json());
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.caches = originalCaches;
+  }
+});
+
+test("public article chunks reuse edge cache across isolates while private articles never enter it", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalCaches = globalThis.caches;
+  const entries = new Map();
+  const puts = [];
+  let publicQueries = 0;
+  let publicBlocks = 0;
+  let privateQueries = 0;
+  globalThis.caches = {
+    default: {
+      async match(key) { return entries.get(key.url)?.clone(); },
+      async put(key, response) { puts.push(key.url); entries.set(key.url, response.clone()); },
+    },
+  };
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input);
+    if (url.includes("/blocks/public-page/children")) { publicBlocks += 1; return Response.json({ results: [], has_more: false }); }
+    if (url.includes("/data_sources/content-cache-test/query")) {
+      const body = JSON.parse(String(init.body || "{}"));
+      const serialized = JSON.stringify(body);
+      const locked = serialized.includes("private-cache-test");
+      if (locked) privateQueries += 1;
+      else publicQueries += 1;
+      return Response.json({ results: [{ id: locked ? "private-page" : "public-page", properties: {
+        title: { title: [{ plain_text: locked ? "私密文章" : "公开文章" }] },
+        slug: { rich_text: [{ plain_text: locked ? "private-cache-test" : "public-cache-test" }] },
+        summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null },
+        password: { rich_text: locked ? [{ plain_text: "do-not-cache" }] : [] },
+        type: { select: { name: "Post" } }, status: { select: { name: "Published" } },
+      } }] });
+    }
+    throw new Error(`unexpected Notion request: ${url}`);
+  };
+  try {
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "content-cache-test" };
+    const firstWorker = await loadWorker();
+    const first = await firstWorker.fetch(new Request("https://cache.example/api/content/post/public-cache-test"), env, context);
+    const secondWorker = await loadWorker();
+    const second = await secondWorker.fetch(new Request("https://cache.example/api/content/post/public-cache-test"), env, context);
+    assert.equal(first.headers.get("x-blog-cache"), "miss");
+    assert.equal(second.headers.get("x-blog-cache"), "hit");
+    assert.equal(publicQueries, 1);
+    assert.equal(publicBlocks, 1, "the cached second request must not traverse article blocks");
+    const putsBeforePrivate = puts.length;
+    const privateFirst = await firstWorker.fetch(new Request("https://cache.example/api/content/post/private-cache-test"), env, context);
+    const privateSecond = await secondWorker.fetch(new Request("https://cache.example/api/content/post/private-cache-test"), env, context);
+    assert.equal((await privateFirst.json()).locked, true);
+    assert.equal((await privateSecond.json()).locked, true);
+    assert.equal(privateQueries, 2, "private metadata is revalidated and never read from shared cache");
+    assert.equal(puts.length, putsBeforePrivate, "private article responses must never be written to Cache API");
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.caches = originalCaches;
@@ -1192,7 +1382,7 @@ test("public config endpoint exposes only the public footer, author, and year al
   try {
     const response = await worker.fetch(new Request("http://localhost/api/content/config"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_CONFIG_DATA_SOURCE_ID: "config-source" }, context);
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get("cache-control"), "no-cache, max-age=0, must-revalidate");
+    assert.equal(response.headers.get("cache-control"), "public, max-age=300, stale-while-revalidate=86400");
     const payload = await response.json();
     assert.equal(payload.source, "notion");
     assert.equal(payload.config.author, "louis16s");
@@ -1348,6 +1538,7 @@ test("correct password unlocks normalized content", async () => {
   const pageId = "88888888-8888-4888-8888-888888888888";
   const imageId = "99999999-9999-4999-8999-999999999999";
   const imageSource = "https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/private.jpg?signature=fresh";
+  const lastEdited = "2026-08-30T00:00:00.000Z";
   globalThis.fetch = async (input) => {
     const url = String(input);
     if (url.includes("/children")) return Response.json({ results: [
@@ -1356,11 +1547,17 @@ test("correct password unlocks normalized content", async () => {
         { plain_text: "安全链接", href: "https://example.com/read", annotations: {} },
       ] } },
       { id: imageId, type: "image", has_children: false, image: { type: "file_upload", file: { url: imageSource }, caption: [] } },
+      { id: "aaaaaaaa-1111-4111-8111-111111111111", type: "video", has_children: false, video: { type: "file", file: { url: "https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/private.mp4?signature=fresh" }, caption: [] } },
+      { id: "aaaaaaaa-2222-4222-8222-222222222222", type: "audio", has_children: false, audio: { type: "file", file: { url: "https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/private.mp3?signature=fresh" }, caption: [] } },
+      { id: "aaaaaaaa-3333-4333-8333-333333333333", type: "pdf", has_children: false, pdf: { type: "file", file: { url: "https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/private.pdf?signature=fresh" }, caption: [] } },
+      { id: "aaaaaaaa-4444-4444-8444-444444444444", type: "file", has_children: false, file: { type: "file", file: { url: "https://prod-files-secure.s3.us-west-2.amazonaws.com/workspace/private.zip?signature=fresh" }, caption: [] } },
     ], has_more: false });
-    if (url.includes(`/blocks/${imageId}`)) return Response.json({ object: "block", id: imageId, type: "image", image: { type: "file", file: { url: imageSource } } });
+    if (url.includes(`/pages/${pageId}`)) return Response.json({ object: "page", id: pageId, last_edited_time: lastEdited, archived: false, in_trash: false, properties: { type: { select: { name: "Post" } }, status: { select: { name: "Published" } }, slug: { rich_text: [{ plain_text: "unlock" }] }, password: { rich_text: [{ plain_text: "correct" }] } } });
+    if (url.includes(`/blocks/${imageId}`)) return Response.json({ object: "block", id: imageId, parent: { type: "page_id", page_id: pageId }, type: "image", image: { type: "file", file: { url: imageSource } } });
     if (url.startsWith("https://prod-files-secure")) return new Response("jpeg", { headers: { "content-type": "image/jpeg" } });
-    return Response.json({ results: [{ id: pageId, properties: {
+    return Response.json({ results: [{ id: pageId, last_edited_time: lastEdited, properties: {
       title: { title: [{ plain_text: "可解锁文章" }] }, slug: { rich_text: [{ plain_text: "unlock" }] }, summary: { rich_text: [] }, category: { select: null }, tags: { multi_select: [] }, date: { date: null }, password: { rich_text: [{ plain_text: "correct" }] },
+      type: { select: { name: "Post" } }, status: { select: { name: "Published" } },
     } }] });
   };
   try {
@@ -1379,6 +1576,12 @@ test("correct password unlocks normalized content", async () => {
     const allowed = await worker.fetch(new Request(imageUrl, { headers: { cookie: response.headers.get("set-cookie") } }), env, context);
     assert.equal(allowed.status, 200);
     assert.equal(await allowed.text(), "jpeg");
+    for (const media of payload.blocks.slice(2)) {
+      assert.match(media.url, /^\/_notion\/media\?/);
+      assert.doesNotMatch(media.url, /prod-files-secure|signature=fresh/, `${media.type} must not expose the temporary Notion URL`);
+      const withoutCookie = await worker.fetch(new Request(new URL(media.url, "http://localhost")), env, context);
+      assert.equal(withoutCookie.status, 403, `${media.type} must inherit the parent unlock session`);
+    }
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -1531,6 +1734,10 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
 
     const unpublishedReference = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: unpublishedReferenceId }) }), env, context);
     assert.equal(unpublishedReference.status, 404, "a referenced page outside the Published collection must stay private");
+    const unpublishedBlock = unlockPayload.blocks.find((block) => block.type === "child_page" && block.pageId === unpublishedReferenceId);
+    assert.match(unpublishedBlock.accessSignature, /^[A-Za-z0-9_-]{43}$/);
+    const signedUnpublishedReference = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: unpublishedReferenceId, accessSignature: unpublishedBlock.accessSignature }) }), env, context);
+    assert.equal(signedUnpublishedReference.status, 404, "a UI-issued signature must never replace Published and ancestry authorization");
 
     const outside = await worker.fetch(new Request("http://localhost/api/content/child", { method: "POST", headers: childHeaders, body: JSON.stringify({ slug: "index", pageId: outsideId }) }), env, context);
     assert.equal(outside.status, 404);
@@ -1698,6 +1905,9 @@ test("article renderer opens child pages internally instead of linking to Notion
   const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   assert.match(article, /contentKind === "page" \? "\/api\/content\/page-child" : "\/api\/content\/child"/);
   assert.match(article, /history\.pushState/);
+  assert.match(article, /const restoreChildPath = useCallback/);
+  assert.match(article, /for \(let index = 0; index < pageIds\.length; index\+\+\)/);
+  assert.match(article, /searchParams\.getAll\("child"\)/, "deep links must restore every breadcrumb instead of only the final page");
   assert.match(article, /case "child_page": return block\.pageId/);
   assert.match(article, /const isChildView = childOpening \|\| Boolean\(activeChild\)/);
   assert.match(article, /\{!isChildView \? <header className="article-head">/);

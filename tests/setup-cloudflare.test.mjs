@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
+import { configureWranglerTemplate } from "../scripts/setup-cloudflare.mjs";
 
 const root = new URL("../", import.meta.url);
 
@@ -24,7 +25,24 @@ test("replication uses one package manager and exposes a guided Cloudflare setup
   assert.match(readme, /pnpm create cloudflare@latest my-blog --template github:louis16s\/blogonCF --template-mode tar/);
   assert.match(setupSource, /"d1", "list", "--json"/);
   assert.match(setupSource, /"d1", "create", databaseName/);
-  assert.match(setupSource, /replaceJsonString\(config, "SITE_URL", siteUrl\)/);
+  assert.match(setupSource, /configureWranglerTemplate/);
   assert.match(setupSource, /"secret", "put", "NOTION_TOKEN"/);
+  assert.doesNotMatch(wranglerSource, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i, "the public template must not contain an author's D1 resource ID");
+  assert.doesNotMatch(wranglerSource, /530555|fffad771/i, "the public template must not contain an author's domain or Notion data source");
   assert.doesNotMatch(wranglerSource, /"no_bundle"|"rules"/, "Vinext/Vite-ignored Wrangler options should not be shipped");
+
+  const generated = configureWranglerTemplate(wranglerSource, {
+    workerName: "fresh-blog",
+    databaseName: "fresh-blog-db",
+    databaseId: "11111111-1111-4111-8111-111111111111",
+    siteUrl: "https://blog.example.com",
+    dataSourceId: "22222222-2222-4222-8222-222222222222",
+    configDataSourceId: "",
+  });
+  assert.match(generated, /"name": "fresh-blog"/);
+  assert.match(generated, /"database_id": "11111111-1111-4111-8111-111111111111"/);
+  assert.match(generated, /"NOTION_DATA_SOURCE_ID": "22222222-2222-4222-8222-222222222222"/);
+  assert.throws(() => configureWranglerTemplate(wranglerSource, {
+    workerName: "broken", databaseName: "broken", databaseId: "11111111-1111-4111-8111-111111111111", siteUrl: "", dataSourceId: "", configDataSourceId: "",
+  }), /不能为空/);
 });
