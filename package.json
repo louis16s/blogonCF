@@ -15,18 +15,6 @@
     "vinext"
   ],
   "packageManager": "pnpm@11.9.0",
-  "pnpm": {
-    "overrides": {
-      "brace-expansion@<2": "1.1.18",
-      "brace-expansion@>=5 <6": "5.0.9",
-      "fast-uri": "^3.1.5",
-      "js-yaml": "^4.3.1",
-      "nanoid": "^3.3.17",
-      "postcss": "^8.5.23",
-      "undici": "^7.29.0",
-      "ws": "^8.21.0"
-    }
-  },
   "cloudflare": {
     "bindings": {
       "NOTION_TOKEN": {
