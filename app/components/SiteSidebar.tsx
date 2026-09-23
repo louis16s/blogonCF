@@ -39,16 +39,19 @@ type SidebarProps = {
 export function SiteSidebar({ siteLinks, postCount, syncState, categories = [], activeCategory, onCategoryChange, siteConfig, headings = [] }: SidebarProps) {
   const articleToc = useArticleToc();
   const resolvedHeadings = articleToc?.headings ?? headings;
+  const tocStatus = articleToc?.status ?? "ready";
   const pendingHeadingId = articleToc?.pendingHeadingId || "";
   const needsPostStats = typeof postCount !== "number";
   const bootstrap = useSiteBootstrap({ initialConfig: siteConfig, initialLinks: siteLinks, includePosts: needsPostStats });
   const resolvedLinks = bootstrap.links;
   const config = bootstrap.config;
   const tocDefaultOpen = config.tocDefaultState === "open"
-    || (config.tocDefaultState === "auto" && resolvedHeadings.length > 1 && resolvedHeadings.length <= 8);
+    || (config.tocDefaultState === "auto" && resolvedHeadings.length > 0 && resolvedHeadings.length <= 8);
   const toolsDisclosure = usePersistedDisclosure({ key: "blog.sidebar.tools.v1", defaultOpen: config.toolsDefaultOpen });
   const categoriesDisclosure = usePersistedDisclosure({ key: "blog.sidebar.categories.v2", defaultOpen: config.categoriesDefaultOpen });
-  const tocDisclosure = usePersistedDisclosure({ key: "blog.sidebar.toc.v1", defaultOpen: tocDefaultOpen });
+  // v2 resets the old "hidden until two headings" preference so a newly
+  // indexed single-chapter article is visible immediately after deployment.
+  const tocDisclosure = usePersistedDisclosure({ key: "blog.sidebar.toc.v2", defaultOpen: tocDefaultOpen });
   const toolLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "tool"), [resolvedLinks]);
   const navLinks = useMemo(() => resolvedLinks.filter((link) => link.kind === "nav"), [resolvedLinks]);
   const rssLink = resolvedLinks.find((link) => link.kind === "rss");
@@ -116,11 +119,13 @@ export function SiteSidebar({ siteLinks, postCount, syncState, categories = [], 
           </details>
         )}
 
-        {resolvedHeadings.length > 1 && (
+        {(resolvedHeadings.length > 0 || tocStatus !== "ready") && (
           <details className="sidebar-section sidebar-toc" open={tocDisclosure.open} onToggle={tocDisclosure.onToggle}>
-            <summary><span><List aria-hidden size={16} />目录 <small>{resolvedHeadings.length > 8 ? "较长" : ""}</small></span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
+            <summary><span><List aria-hidden size={16} />目录 <small>{tocStatus === "loading" ? "读取中" : tocStatus === "error" ? "暂不可用" : resolvedHeadings.length > 8 ? "较长" : ""}</small></span><CaretDown className="section-caret" aria-hidden size={14} /></summary>
             <nav className="sidebar-toc-list" aria-label="文章目录">
-              {resolvedHeadings.map((heading) => <a href={`#${heading.id}`} className={pendingHeadingId === heading.id ? "is-loading" : undefined} aria-busy={pendingHeadingId === heading.id || undefined} onClick={(event) => navigateToHeading(event, heading.id)} style={{ "--toc-level": heading.level } as CSSProperties} key={heading.id}>{heading.label}</a>)}
+              {resolvedHeadings.length > 0
+                ? resolvedHeadings.map((heading) => <a href={`#${heading.id}`} className={pendingHeadingId === heading.id ? "is-loading" : undefined} aria-busy={pendingHeadingId === heading.id || undefined} onClick={(event) => navigateToHeading(event, heading.id)} style={{ "--toc-level": heading.level } as CSSProperties} key={heading.id}>{heading.label}</a>)
+                : <p className="sidebar-toc-state" role="status">{tocStatus === "loading" ? "正在从 Notion 整理完整目录…" : "目录暂时无法读取，稍后重新打开页面即可继续。"}</p>}
             </nav>
           </details>
         )}
@@ -175,11 +180,13 @@ export function SiteSidebar({ siteLinks, postCount, syncState, categories = [], 
                 </div>
               </details>
             )}
-            {resolvedHeadings.length > 1 && (
+            {(resolvedHeadings.length > 0 || tocStatus !== "ready") && (
               <details className="mobile-menu-group mobile-menu-disclosure">
-                <summary><span>目录</span><small>{resolvedHeadings.length}</small><CaretDown className="section-caret" aria-hidden size={13} /></summary>
+                <summary><span>目录</span><small>{tocStatus === "loading" ? "读取中" : tocStatus === "error" ? "暂不可用" : resolvedHeadings.length}</small><CaretDown className="section-caret" aria-hidden size={13} /></summary>
                 <div className="mobile-menu-disclosure-content mobile-toc-list">
-                  {resolvedHeadings.map((heading) => <a href={`#${heading.id}`} className={pendingHeadingId === heading.id ? "is-loading" : undefined} aria-busy={pendingHeadingId === heading.id || undefined} onClick={(event) => navigateToHeading(event, heading.id)} key={heading.id}>{heading.label}</a>)}
+                  {resolvedHeadings.length > 0
+                    ? resolvedHeadings.map((heading) => <a href={`#${heading.id}`} className={pendingHeadingId === heading.id ? "is-loading" : undefined} aria-busy={pendingHeadingId === heading.id || undefined} onClick={(event) => navigateToHeading(event, heading.id)} key={heading.id}>{heading.label}</a>)
+                    : <p className="sidebar-toc-state" role="status">{tocStatus === "loading" ? "正在整理目录…" : "目录暂时无法读取，请稍后重新打开页面。"}</p>}
                 </div>
               </details>
             )}

@@ -52,13 +52,11 @@ const MAX_RSS_FEEDS = 8;
 const LEGACY_EMOJI_PATTERN = /^(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*)$/u;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
 const publicContentHeaders = { ...jsonHeaders, "cache-control": "public, max-age=300, stale-while-revalidate=86400" };
-const edgeBootstrapHeaders = { ...jsonHeaders, "cache-control": "public, max-age=300, stale-while-revalidate=86400" };
 const wordCloudCache = new Map<string, { expiresAt: number; payload: WordCloudPayload }>();
 const publicCorpusCache = new Map<string, { expiresAt: number; corpus?: PublicCorpus; pending?: Promise<PublicCorpus> }>();
 const siteBootstrapCache = new Map<string, { freshUntil: number; staleUntil: number; payload?: HomePayload; pending?: Promise<HomePayload> }>();
 const headingIndexCache = new Map<string, { expiresAt: number; headings?: HeadingSummary[]; pending?: Promise<HeadingSummary[]> }>();
 const headingJobCache = new Map<string, HeadingIndexJob>();
-const contentSourceCache = new Map<string, { expiresAt: number; id: string }>();
 const configRowsCache = new Map<string, { expiresAt: number; rows?: NotionConfigPage[]; pending?: Promise<NotionConfigPage[]> }>();
 const expensiveRequestWindows = new Map<string, { startedAt: number; count: number }>();
 
@@ -661,7 +659,10 @@ async function cachedPublicContent(
   const keyUrl = new URL(`/__blog-cache/content/${kind}/${encodeURIComponent(slug)}`, canonical);
   const cursor = normalizeNotionCursor(requestUrl.searchParams.get("cursor"));
   if (cursor) keyUrl.searchParams.set("cursor", cursor);
-  keyUrl.searchParams.set("schema", "2");
+  // Bump the content-cache namespace when the Notion block/TOC contract
+  // changes. Otherwise an edge may keep serving a pre-TOC JSON snapshot for
+  // up to the stale-while-revalidate window after headings are added.
+  keyUrl.searchParams.set("schema", "3");
   const resolvedDataSourceId = env.NOTION_TOKEN
     ? await resolveContentDataSourceId(env).catch(() => env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID)
     : env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID;
@@ -760,7 +761,7 @@ async function notionPosts(env: Env, request?: Request, ctx?: ExecutionContext):
     const body = { ...payload, source: "notion" };
     const response = Response.json(body, { headers: { ...publicContentHeaders, "x-blog-cache": "miss" } });
     if (cache && cacheKey && ctx) {
-      const edgeResponse = Response.json(body, { headers: edgeBootstrapHeaders });
+      const edgeResponse = Response.json(body, { headers: publicContentHeaders });
       ctx.waitUntil(cache.put(cacheKey, edgeResponse).catch((reason) => {
         console.warn(reason instanceof Error ? reason.message : "Site bootstrap cache write failed");
       }));
@@ -815,12 +816,10 @@ async function notionSearch(env: Env, url: URL, ctx?: ExecutionContext): Promise
   const config = await queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig());
   if (!config.searchEnabled) return error(404, "Search is disabled");
   const query = normalizeSearchText(url.searchParams.get("q") || "");
-  const warming = url.searchParams.get("warm") === "1";
-  if (!query && !warming) return Response.json({ matches: [], partial: false, source: "index" }, { headers: { ...jsonHeaders, "cache-control": "public, max-age=60" } });
+  if (!query) return Response.json({ matches: [], partial: false, source: "index" }, { headers: { ...jsonHeaders, "cache-control": "public, max-age=60" } });
   if (query.length > 100) return error(400, "Search query is too long");
   try {
     const corpus = await getPublicCorpus(env, ctx);
-    if (warming) return Response.json({ matches: [], warmed: true, partial: corpus.partial, source: corpus.source }, { headers: { ...jsonHeaders, "cache-control": "public, max-age=60" } });
     const matches = corpus.documents
       .filter((document) => normalizeSearchText([
         document.title,
@@ -848,7 +847,7 @@ async function notionExternalRss(env: Env, url: URL): Promise<Response> {
     const urls = extractExternalUrls(blocks).slice(0, MAX_RSS_FEEDS);
     const feeds = (await mapWithConcurrency(urls, 3, (feedUrl) => fetchExternalFeed(feedUrl, env.DB)))
       .filter((feed): feed is ExternalFeed => Boolean(feed));
-    return Response.json({ feeds, partial: state.truncated, source: "notion" }, { headers: edgeBootstrapHeaders });
+    return Response.json({ feeds, partial: state.truncated, source: "notion" }, { headers: publicContentHeaders });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -1501,12 +1500,10 @@ function configuredContentDataSourceId(env: Env, rows: any[]): string {
 
 async function resolveContentDataSourceId(env: Env): Promise<string> {
   if (!env.NOTION_CONFIG_DATA_SOURCE_ID && env.NOTION_DATA_SOURCE_ID) return env.NOTION_DATA_SOURCE_ID.trim();
-  const cacheKey = env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID || "no-config";
-  const cached = contentSourceCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.id;
+  // Config rows already coalesce reads and own the freshness window. Do not
+  // cache a derived fallback after a transient configuration read failure.
   const id = configuredContentDataSourceId(env, await queryConfigRows(env).catch(() => []));
   if (!id) throw new Error("Notion content Data Source ID is not configured");
-  setBoundedMap(contentSourceCache, cacheKey, { id, expiresAt: Date.now() + 5 * 60 * 1000 }, 8);
   return id;
 }
 

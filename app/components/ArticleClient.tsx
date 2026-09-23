@@ -58,9 +58,10 @@ async function requestChildPage(endpoint: string, payload: Record<string, unknow
 
 async function requestChildHeadings(endpoint: string, payload: Record<string, unknown>, signal: AbortSignal): Promise<TocItem[]> {
   // Heading indexes are built incrementally on the Worker. Avoid a tight
-  // request loop while D1 resumes the job; a small exponential backoff keeps
-  // the UI responsive without turning one click into 20 Worker invocations.
-  for (let attempt = 0; attempt < 5; attempt++) {
+  // request loop while D1 resumes the job. The Worker checkpoints progress
+  // after each bounded batch, so allow enough polls for large nested pages
+  // while keeping the number of extra invocations finite.
+  for (let attempt = 0; attempt < 12; attempt++) {
     const response = await fetch(`${endpoint}?headings=1`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal });
     const data = await response.json();
     if (response.status === 202) {
@@ -74,7 +75,7 @@ async function requestChildHeadings(endpoint: string, payload: Record<string, un
     if (!response.ok) throw new Error(data.error || "目录暂时无法读取");
     return Array.isArray(data.child?.headings) ? data.child.headings : [];
   }
-  throw new Error("目录建立时间过长，请稍后重试");
+  throw new Error("目录仍在建立，请稍后重新打开此页面");
 }
 
 function scrollToArticleStart() {
@@ -114,6 +115,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const contentEndpoint = contentKind === "page" ? "/api/content/page" : "/api/content/post";
   const childEndpoint = contentKind === "page" ? "/api/content/page-child" : "/api/content/child";
   const setTocHeadings = articleToc?.setHeadings;
+  const setTocStatus = articleToc?.setStatus;
   const setPendingHeadingId = articleToc?.setPendingHeadingId;
   const setRootCursor = useCallback((cursor?: string) => {
     nextCursorRef.current = cursor;
@@ -122,8 +124,12 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
 
   useEffect(() => {
     const activeChild = childTrail.at(-1);
-    setTocHeadings?.(activeChild ? activeChild.headings || [] : headings);
-  }, [childTrail, headings, setTocHeadings]);
+    if (activeChild) setTocHeadings?.(activeChild.headings || []);
+    else {
+      setTocHeadings?.(headings);
+      setTocStatus?.("ready");
+    }
+  }, [childTrail, headings, setTocHeadings, setTocStatus]);
 
   const navigateToHeading = useCallback(async (id: string) => {
     pendingHeadingIdRef.current = id;
@@ -270,9 +276,16 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
               childTrailRef.current = next;
               return next;
             });
+            setTocStatus?.("ready");
           })
-          .catch((reason) => { if (reason.name !== "AbortError") setChildError(reason.message || "目录暂时无法读取"); })
+          .catch((reason) => {
+            if (reason.name !== "AbortError") {
+              setChildError(reason.message || "目录暂时无法读取");
+              setTocStatus?.("error");
+            }
+          })
           .finally(() => { if (childHeadingRequestRef.current === headingController) childHeadingRequestRef.current = null; });
+        setTocStatus?.("loading");
       })
       .catch((reason) => { if (reason.name !== "AbortError") setChildError(reason.message || "子页面暂时无法读取"); })
       .finally(() => {
@@ -281,7 +294,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
           setChildOpening(false);
         }
       });
-  }, [childEndpoint, setPendingHeadingId, slug]);
+  }, [childEndpoint, setPendingHeadingId, setTocStatus, slug]);
 
   const restoreChildPath = useCallback((pageIds: string[]) => {
     childRequestRef.current?.abort();
@@ -303,12 +316,17 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
         childIdRef.current = active.id;
         childTrailRef.current = restored;
         setChildTrail(restored);
+        setTocStatus?.("loading");
         const fullHeadings = await requestChildHeadings(childEndpoint, { slug, pageId: active.id, accessSignature: active.accessSignature, trail: pageIds.slice(0, -1) }, controller.signal);
         const completed = restored.map((item, index) => index === restored.length - 1 ? { ...item, headings: fullHeadings } : item);
         childTrailRef.current = completed;
         setChildTrail(completed);
+        setTocStatus?.("ready");
       } catch (reason) {
-        if (reason instanceof Error && reason.name !== "AbortError") setChildError(reason.message || "子页面暂时无法读取");
+        if (reason instanceof Error && reason.name !== "AbortError") {
+          setChildError(reason.message || "子页面暂时无法读取");
+          setTocStatus?.("error");
+        }
       } finally {
         if (childRequestRef.current === controller) {
           childRequestRef.current = null;
@@ -316,7 +334,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
         }
       }
     })();
-  }, [childEndpoint, slug]);
+  }, [childEndpoint, setTocStatus, slug]);
 
   const loadMoreChild = useCallback(() => {
     const currentChild = childTrailRef.current.at(-1);
@@ -466,6 +484,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       return next;
     });
     setChildError("");
+    setTocStatus?.("ready");
     scrollToArticleStart();
   };
 

@@ -829,6 +829,55 @@ test("news pages turn Notion-configured public feed URLs into safe RSS and Atom 
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("data source resolution recovers after a config failure and reuses cached rows", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const configured = "11111111-1111-4111-8111-111111111111";
+  let configReads = 0;
+  const sources = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/config-recovery/query")) {
+      configReads += 1;
+      if (configReads === 1) return Response.json({ message: "temporary failure" }, { status: 403 });
+      return Response.json({ results: [{ properties: {
+        "启用": { checkbox: true }, "配置名": { title: [{ plain_text: "NOTION_DATA_SOURCE_ID" }] },
+        "配置值": { rich_text: [{ plain_text: configured }] },
+      } }] });
+    }
+    sources.push(url.match(/data_sources\/([^/]+)/)?.[1]);
+    return Response.json({ results: [] });
+  };
+  try {
+    for (let i = 0; i < 3; i += 1) {
+      const response = await worker.fetch(new Request("http://localhost/api/content/post/example"), {
+        NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "fallback-source", NOTION_CONFIG_DATA_SOURCE_ID: "config-recovery",
+      }, context);
+      assert.equal(response.status, 404);
+      await response.text();
+    }
+    assert.deepEqual(sources, ["fallback-source", configured, configured]);
+    assert.equal(configReads, 2, "successful rows are reused after the failed read is retried");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("empty search and obsolete warm requests never traverse the corpus", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls += 1; return Response.json({ results: [] }); };
+  try {
+    for (const query of ["", "?warm=1", "?q=%20%20&warm=1"]) {
+      const response = await worker.fetch(new Request(`http://localhost/api/content/search${query}`), {
+        NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "empty-search-source",
+      }, context);
+      assert.equal(response.status, 200);
+      assert.deepEqual((await response.json()).matches, []);
+    }
+    assert.equal(calls, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("search uses the durable public body index and waits with skeletons before an empty result", async () => {
   const [worker, blog, article, css] = await Promise.all([
     readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
@@ -836,7 +885,6 @@ test("search uses the durable public body index and waits with skeletons before 
     readFile(new URL("../app/components/ArticleClient.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
-  assert.match(worker, /url\.searchParams\.get\("warm"\) === "1"/);
   assert.doesNotMatch(blog, /\/api\/content\/search\?warm=1/);
   assert.doesNotMatch(blog, /warmSearchIndex/);
   assert.doesNotMatch(blog, /requestIdleCallback/, "body indexing should start from search intent, not every homepage visit");
@@ -1948,6 +1996,9 @@ test("TOC clicks survive in-flight prefetches and keep loading until the target 
   assert.doesNotMatch(article, /if \(findAndScroll\(\) \|\| childRequestRef\.current\) return/);
   assert.match(context, /pendingHeadingId/);
   assert.match(sidebar, /aria-busy=\{pendingHeadingId === heading\.id \|\| undefined\}/);
+  assert.match(sidebar, /resolvedHeadings\.length > 0/);
+  assert.match(sidebar, /resolvedHeadings\.length > 0 &&/);
+  assert.match(sidebar, /tocDefaultState === "auto" && resolvedHeadings\.length > 0/);
   assert.match(css, /\.sidebar-toc-list a\.is-loading/);
 });
 
