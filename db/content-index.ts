@@ -59,6 +59,26 @@ export async function readContentIndexVersions(db: PasswordRateLimitDatabase | u
   );
 }
 
+export async function readContentIndexVersionsForPages(
+  db: PasswordRateLimitDatabase | undefined,
+  sourceKey: string,
+  pageIds: string[],
+): Promise<ContentIndexVersion[]> {
+  if (!db || pageIds.length === 0) return [];
+  const versions: ContentIndexVersion[] = [];
+  // Keep below D1/SQLite bind-variable limits while avoiding a full index scan.
+  for (let start = 0; start < pageIds.length; start += 80) {
+    const chunk = pageIds.slice(start, start + 80);
+    const placeholders = chunk.map((_, index) => `?${index + 2}`).join(", ");
+    versions.push(...await all<ContentIndexVersion>(db,
+      `SELECT page_id, last_edited_time, locked FROM content_index WHERE source_key = ?1 AND page_id IN (${placeholders})`,
+      sourceKey,
+      ...chunk,
+    ));
+  }
+  return versions;
+}
+
 export async function writeContentIndex(
   db: PasswordRateLimitDatabase | undefined,
   sourceKey: string,

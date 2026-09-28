@@ -51,7 +51,7 @@ cd my-blog && pnpm setup:cloudflare
 
 > 不要把 Notion Token、Cloudflare Token 或 GitHub Token 写进 `wrangler.jsonc`、`.env.example`、提交记录或 Issue。
 
-Cloudflare 的一键部署会从公开仓库创建副本并配置 Workers Builds；仓库只声明 D1 绑定和资源名，不包含作者的资源 ID，Wrangler 会为新账号自动创建并回填 D1。详见 [Deploy to Cloudflare 官方文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/) 和 [C3 远程模板文档](https://developers.cloudflare.com/workers/get-started/guide/)。若是把仓库连接到已有 Worker，Worker 名称需与 `wrangler.jsonc` 中的 `blogincf` 一致，构建目录应为仓库根目录。
+Cloudflare 的一键部署会从公开仓库创建副本并配置 Workers Builds。仓库不包含 D1 数据库实例 ID、站点域名或 Notion 数据源 ID；部署时需填写自己的 Notion 配置，D1 会由 Cloudflare 初始化。详见 [Deploy to Cloudflare 官方文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/) 和 [C3 远程模板文档](https://developers.cloudflare.com/workers/get-started/guide/)。若是把仓库连接到已有 Worker，Worker 名称需与 `wrangler.jsonc` 中的 `blogincf` 一致，构建目录应为仓库根目录。
 
 ## 手动部署
 
@@ -105,7 +105,7 @@ pnpm wrangler d1 migrations apply DB --remote
 pnpm wrangler secret put NOTION_TOKEN
 ```
 
-把 `SITE_URL` 和两个 Data Source ID 写进 `wrangler.jsonc` 的 `vars`，或在 Cloudflare Dashboard 中添加普通变量。不要把 Token 放进 `vars`。
+把 `SITE_URL` 和两个 Data Source ID 写进 `wrangler.jsonc` 的 `vars`，或在 Cloudflare Dashboard 中添加普通变量。模板启用 `keep_vars`，因此后续用通用模板部署时，Dashboard 单独设置的变量会保留；如果你把值写进 Wrangler 配置，配置文件则是该变量的部署来源。不要把 Token 放进 `vars`。
 
 ### 5. 构建并发布
 
@@ -116,7 +116,7 @@ pnpm release
 
 `pnpm release` 会先检查 Wrangler 登录状态，再构建 vinext Worker、执行 D1 迁移并发布。Cloudflare Workers Builds 会分别调用 `pnpm build` 与 `pnpm deploy`，不会重复构建；未登录时会在迁移前直接给出认证提示，不会产生无效的远程 D1 请求。
 
-如果使用旧式 Global API Key，可临时通过环境变量提供邮箱和密钥（仅建议在本机或 CI Secret 中使用；API Token 权限更易收敛）：
+建议使用权限受限的 Cloudflare API Token。旧式 Global API Key 权限等同账号用户权限，不建议用于 CI，也不应长期保存在 shell 配置中；如确实需要，只在受控的本机临时会话中使用：
 
 ```bash
 CLOUDFLARE_EMAIL=你的邮箱 CLOUDFLARE_API_KEY=你的GlobalAPIKey pnpm release
@@ -156,7 +156,7 @@ https://example.com/feed.xml
 https://example.org/rss
 ```
 
-本站会在该页面下方自动渲染订阅动态的标题、来源、日期和摘要；文章仍在原站点打开。RSS 2.0 和 Atom 都可用。无效链接会被静默跳过，不影响 Notion 正文显示；本地、内网和非 `http(s)` 地址会被拒绝。订阅结果写入 D1，并由每小时 Cron Trigger 增量刷新；源站短暂失败时会回退到最近一次成功结果。
+本站会在该页面下方自动渲染订阅动态的标题、来源、日期和摘要；文章仍在原站点打开。RSS 2.0 和 Atom 都可用。无效链接会被静默跳过，不影响 Notion 正文显示；本地、内网和非 `http(s)` 地址会被拒绝。订阅结果写入 D1，并由每 6 小时的 Cron Trigger 刷新；源站短暂失败时会回退到最近一次成功结果。
 
 若订阅源只用于聚合、不希望在资讯正文中显示，可用两行标记包住它们：
 
@@ -235,12 +235,20 @@ pnpm dev
 - 公共 SSR 与 JSON 接口使用 Workers Cache；命中时仍会进入轻量路由，但不会重复读取 Notion。密码、解锁会话和私密媒体始终 `private/no-store`。
 - 公共 Config、导航、文章清单、资讯 RSS、搜索和词云接口使用带版本化键的 Workers Cache；功能关闭、限流和错误响应不会进入缓存。
 - D1 的 `content_index` 保存公开文章的规范化标题、正文搜索文本和词云正文。搜索与词云优先读取 D1，用户请求不再递归遍历 Notion 块。
-- 每小时 Cron 只比较 Notion 的 `last_edited_time`，只同步新增或修改的文章；外部 RSS 和网页预览也持久化到 D1，冷启动和跨数据中心访问可复用。
+- 定时同步每 6 小时运行一次增量检查，每天至少一次全量对账。增量查询按 Notion `last_edited_time` 过滤，使用 5 分钟重叠窗口；D1 游标只在整轮成功后推进，失败时下轮会重试。只有版本变化的公开文章才重新读取正文和写入索引；全量对账清理已删除、归档或不再发布的文章。最近编辑的内容通常在下一轮增量同步后进入搜索/词云索引，最坏会等待约 6 小时；首页和文章页面仍有各自的边缘缓存时效。
+- RSS 源每 6 小时刷新一次，结果与网页预览一起持久化在 D1；单个源失败时保留最近一次成功快照。
 - 浏览器端不再对首页和文章做固定间隔轮询；文章刷新、搜索和目录加载只由用户操作触发，长文章续载仍会在接近末尾时预取。
 - 公共 Config 查询在 Worker isolate 内合并并发请求并短期缓存；Cache API 只作为边缘加速层，D1 作为跨 isolate 的持久快照。
 - 词云、KaTeX 和 HEIC 浏览器兜底按需加载；配置 Cloudflare Images 后，HEIC 会优先在 Worker 侧转换。
 - Config 中上传的公开图片使用稳定站内路径和 5 分钟边缘缓存；即使上游没有声明文件大小，Worker 仍会在读取时执行 12 MB 上限。
 - 密码校验、密码文章正文和错误响应始终使用 `no-store`，不会进入公共缓存。
+
+### 存储与同步取舍
+
+- Notion 是内容源；Workers Cache 用于短期边缘响应缓存；D1 保存可查询的公开文章索引、同步游标、RSS/预览快照和限流状态。
+- 当前没有 KV 依赖。D1 已能用少量 SQL 读取支持搜索、词云和增量版本检查，额外引入 KV 会重复存储并增加一致性维护成本。
+- R2 适合较大的不可变文件或媒体归档，但不能替代 D1 的结构化查询；当前图片和附件仍由 Notion 提供并通过 Worker 受控读取，因此暂不复制到 R2。
+- 增量轮询以较低请求量换取最多约 6 小时的索引新鲜度。若未来需要接近实时同步，可再增加 Notion Webhook；Webhook 通知仍需读取 Notion 页面，并应保留定期全量对账作为删除和漏事件的兜底。
 
 ## 安全设计
 
@@ -251,7 +259,7 @@ pnpm dev
 - 导航只接受 `http(s)` 或站内绝对路径，拒绝 `javascript:` 等危险协议
 - 富文本和媒体地址在 Worker 规范化层过滤危险协议；HTML 响应附带 CSP、权限策略和防嗅探响应头
 - 公共站点配置采用显式字段白名单
-- 所有 Notion 查询只返回 `Published` 内容
+- 面向访客的内容查询只公开 `Published` 页面。增量同步会检查最近编辑记录的类型与发布状态，以便从公开索引移除草稿；只有 `Post + Published` 进入文章搜索索引。
 
 发现安全问题请阅读 [SECURITY.md](SECURITY.md)，不要在公开 Issue 中粘贴令牌或未公开文章。
 

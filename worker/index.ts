@@ -4,7 +4,8 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } fr
 import handler from "vinext/server/app-router-entry";
 import { clearPasswordAttempts, getPasswordAttemptStatus, recordPasswordFailure, type PasswordRateLimitDatabase } from "../db/rate-limit";
 import { deleteHeadingJob, readHeadingCache, readHeadingJob, writeHeadingCache, writeHeadingJob, type HeadingIndexJob, type HeadingIndexTask } from "../db/heading-cache";
-import { deleteContentIndexPage, hasContentIndex, readContentIndex, readContentIndexVersions, writeContentIndex, type IndexedContentDocument } from "../db/content-index";
+import { deleteContentIndexPage, hasContentIndex, readContentIndex, readContentIndexVersions, readContentIndexVersionsForPages, writeContentIndex, type IndexedContentDocument } from "../db/content-index";
+import { readContentSyncState, writeContentSyncState } from "../db/content-sync-state";
 import { clearArticlePayload, storeArticlePayload, type ArticlePayload } from "../server/article-context";
 import { clearHomePayload, storeHomePayload, type HomePayload } from "../server/home-context";
 import { buildWordCloud, normalizeSearchText } from "../shared/wordCloud.js";
@@ -193,8 +194,9 @@ const worker = {
     return secureDocumentResponse(await handler.fetch(requestWithSiteOrigin(request, env), env, ctx));
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(refreshContentIndex(env));
-    ctx.waitUntil(refreshExternalFeeds(env));
+    const reconcile = _controller.cron === "15 3 * * *";
+    ctx.waitUntil(refreshContentIndex(env, reconcile));
+    if (!reconcile) ctx.waitUntil(refreshExternalFeeds(env));
   },
 };
 
@@ -220,30 +222,73 @@ function isClientNavigationRequest(request: Request): boolean {
     || accept.includes("text/x-component");
 }
 
-async function refreshContentIndex(env: Env): Promise<void> {
+const CONTENT_SYNC_OVERLAP_MS = 5 * 60 * 1000;
+const CONTENT_FULL_RECONCILIATION_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+async function refreshContentIndex(env: Env, forceFullReconciliation = false): Promise<void> {
   if (!env.NOTION_TOKEN || !env.DB) return;
   try {
     const sourceKey = await contentIndexSourceKey(env);
-    const pages = await queryPosts(env, undefined, 100);
-    const versions = new Map((await readContentIndexVersions(env.DB, sourceKey)).map((row) => [row.page_id, row]));
-    const currentIds = new Set<string>();
-    for (const page of pages) {
-      const pageId = normalizeNotionId(page.id) || page.id;
-      currentIds.add(pageId);
-      const lastEdited = typeof page.last_edited_time === "string" ? page.last_edited_time : "";
-      const locked = Boolean(plain(page.properties?.password));
-      const existing = versions.get(pageId);
-      if (existing && existing.last_edited_time === lastEdited && Boolean(existing.locked) === locked) continue;
-      try {
-        const document = await buildIndexedDocument(env, page);
-        await writeContentIndex(env.DB, sourceKey, pageId, lastEdited, document);
-      } catch (reason) {
-        console.warn(JSON.stringify({ event: "content-index-page-failed", pageId, message: reason instanceof Error ? reason.message : String(reason) }));
+    const prior = await readContentSyncState(env.DB, sourceKey);
+    const fullSyncDue = !prior?.last_full_sync_at
+      || Date.now() - prior.last_full_sync_at >= CONTENT_FULL_RECONCILIATION_INTERVAL_MS;
+    const fullReconciliation = forceFullReconciliation || fullSyncDue || !prior?.cursor || !Number.isFinite(Date.parse(prior.cursor));
+    const syncStartedAt = new Date().toISOString();
+
+    if (fullReconciliation) {
+      const pages = await queryPosts(env, undefined, 100);
+      const versions = new Map((await readContentIndexVersions(env.DB, sourceKey)).map((row) => [row.page_id, row]));
+      const currentIds = new Set<string>();
+      for (const page of pages) {
+        const pageId = normalizeNotionId(page.id) || page.id;
+        currentIds.add(pageId);
+        await indexPageIfChanged(env, sourceKey, page, versions.get(pageId));
+      }
+      for (const pageId of versions.keys()) if (!currentIds.has(pageId)) await deleteContentIndexPage(env.DB, pageId);
+    } else {
+      const editedAfter = new Date(Math.max(0, Date.parse(prior.cursor) - CONTENT_SYNC_OVERLAP_MS)).toISOString();
+      const changedPages = await queryChangedContentPages(env, editedAfter);
+      const pageIds = changedPages.map((page) => normalizeNotionId(page.id) || page.id);
+      const versions = new Map((await readContentIndexVersionsForPages(env.DB, sourceKey, pageIds)).map((row) => [row.page_id, row]));
+      for (const page of changedPages) {
+        const pageId = normalizeNotionId(page.id) || page.id;
+        const publishedPost = selectValue(page.properties?.type) === "Post" && selectValue(page.properties?.status) === "Published";
+        if (!publishedPost) {
+          if (versions.has(pageId)) await deleteContentIndexPage(env.DB, pageId);
+          continue;
+        }
+        await indexPageIfChanged(env, sourceKey, page, versions.get(pageId));
       }
     }
-    for (const pageId of versions.keys()) if (!currentIds.has(pageId)) await deleteContentIndexPage(env.DB, pageId);
+
+    // Advance only after all pages and deletions succeeded. The overlap makes
+    // concurrent edits/page-boundary races idempotently visible next run.
+    await writeContentSyncState(env.DB, sourceKey, syncStartedAt, fullReconciliation);
   } catch (reason) {
-    console.warn(reason instanceof Error ? reason.message : "Content index refresh failed");
+    console.warn(JSON.stringify({ event: "content-index-refresh-failed", message: reason instanceof Error ? reason.message : String(reason) }));
+  }
+}
+
+function selectValue(property: any): string {
+  return typeof property?.select?.name === "string" ? property.select.name : "";
+}
+
+async function indexPageIfChanged(
+  env: Env,
+  sourceKey: string,
+  page: any,
+  existing?: { last_edited_time: string; locked: number },
+): Promise<void> {
+  const pageId = normalizeNotionId(page.id) || page.id;
+  const lastEdited = typeof page.last_edited_time === "string" ? page.last_edited_time : "";
+  const locked = Boolean(plain(page.properties?.password));
+  if (existing && existing.last_edited_time === lastEdited && Boolean(existing.locked) === locked) return;
+  try {
+    const document = await buildIndexedDocument(env, page);
+    await writeContentIndex(env.DB, sourceKey, pageId, lastEdited, document);
+  } catch (reason) {
+    console.warn(JSON.stringify({ event: "content-index-page-failed", pageId, message: reason instanceof Error ? reason.message : String(reason) }));
+    throw reason;
   }
 }
 
@@ -1372,6 +1417,27 @@ async function queryPosts(env: Env, slug?: string, pageSize = 100, sourceId?: st
     });
     if (Array.isArray(payload.results)) results.push(...payload.results);
     cursor = !slug && payload.has_more && typeof payload.next_cursor === "string" ? payload.next_cursor : undefined;
+  } while (cursor);
+  return results;
+}
+
+async function queryChangedContentPages(env: Env, editedAfter: string, pageSize = 100): Promise<any[]> {
+  const results: any[] = [];
+  let cursor: string | undefined;
+  const sourceId = await resolveContentDataSourceId(env);
+  do {
+    const payload = await notionFetch(env, `/data_sources/${sourceId}/query`, {
+      method: "POST",
+      // Deliberately query every edited row, not only currently published posts:
+      // status/type changes must remove pages from the public index promptly.
+      body: JSON.stringify({
+        filter: { timestamp: "last_edited_time", last_edited_time: { on_or_after: editedAfter } },
+        page_size: pageSize,
+        ...(cursor ? { start_cursor: cursor } : {}),
+      }),
+    });
+    if (Array.isArray(payload.results)) results.push(...payload.results);
+    cursor = payload.has_more && typeof payload.next_cursor === "string" ? payload.next_cursor : undefined;
   } while (cursor);
   return results;
 }

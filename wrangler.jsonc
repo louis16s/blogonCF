@@ -3,6 +3,8 @@
   "name": "blogoncf",
   "workers_dev": false,
   "preview_urls": false,
+  // Keep deployment-specific variables configured in the Cloudflare dashboard.
+  "keep_vars": true,
   "main": "dist/server/index.js",
   // Keep this within the compatibility range supported by the pinned
   // Cloudflare Vite/Miniflare runtime so `pnpm dev` and production agree.
@@ -15,8 +17,8 @@
   // Cache public Worker responses at the edge before the script runs.
   "cache": { "enabled": true },
   "images": { "binding": "IMAGES" },
-  // Background sync is hourly; public requests use the durable snapshot.
-  "triggers": { "crons": ["0 * * * *"] },
+  // Incremental refresh every six hours; reconcile removals and missed edits once daily.
+  "triggers": { "crons": ["0 */6 * * *", "15 3 * * *"] },
   "d1_databases": [
     {
       "binding": "DB",
@@ -24,11 +26,7 @@
       "migrations_dir": "drizzle"
     }
   ],
-  "vars": {
-    "SITE_URL": "",
-    "NOTION_DATA_SOURCE_ID": "fffad771-48f4-81f5-be17-000b319f85ad",
-    "NOTION_CONFIG_DATA_SOURCE_ID": "fffad771-48f4-8181-b48e-000b8cf60e1b"
-  },
+  "vars": {},
   "observability": {
     "enabled": true
   }

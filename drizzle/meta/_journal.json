@@ -43,6 +43,13 @@
       "when": 1784310890418,
       "tag": "0005_link_preview_cache",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1790599268603,
+      "tag": "0006_content_sync_state",
+      "breakpoints": true
     }
   ]
 }

@@ -44,6 +44,13 @@ export const contentIndex = sqliteTable("content_index", {
   index("content_index_updated_at_idx").on(table.updatedAt),
 ]);
 
+export const contentSyncState = sqliteTable("content_sync_state", {
+  sourceKey: text("source_key").primaryKey(),
+  cursor: text("cursor").notNull().default(""),
+  lastFullSyncAt: integer("last_full_sync_at").notNull().default(0),
+  updatedAt: integer("updated_at").notNull(),
+});
+
 export const linkPreviewCache = sqliteTable("link_preview_cache", {
   url: text("url").primaryKey(),
   payload: text("payload").notNull(),

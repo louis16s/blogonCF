@@ -30,6 +30,18 @@ function replaceJsonString(source, key, value) {
   return source.replace(pattern, `$1${JSON.stringify(value)}`);
 }
 
+function upsertVariable(source, key, value) {
+  const varsPattern = /("vars"\s*:\s*{)([^}]*)(})/;
+  const match = source.match(varsPattern);
+  if (!match) throw new Error("wrangler.jsonc 中缺少 vars 配置");
+  const keyPattern = new RegExp(`("${key}"\\s*:\\s*)"[^"]*"`);
+  const currentVars = match[2].trim();
+  const varsBody = keyPattern.test(match[2])
+    ? match[2].replace(keyPattern, `$1${JSON.stringify(value)}`)
+    : `${currentVars ? `${currentVars},` : ""}\n    ${JSON.stringify(key)}: ${JSON.stringify(value)}\n  `;
+  return source.replace(varsPattern, `${match[1]}${varsBody}${match[3]}`);
+}
+
 function upsertD1Id(source, value) {
   if (/"database_id"\s*:/.test(source)) return replaceJsonString(source, "database_id", value);
   const anchor = /(\"database_name\"\s*:\s*\"[^\"]*\",)/;
@@ -42,9 +54,9 @@ export function configureWranglerTemplate(source, { workerName, databaseName, da
   let configured = replaceJsonString(source, "name", workerName);
   configured = replaceJsonString(configured, "database_name", databaseName);
   configured = upsertD1Id(configured, databaseId);
-  configured = replaceJsonString(configured, "SITE_URL", siteUrl);
-  configured = replaceJsonString(configured, "NOTION_DATA_SOURCE_ID", dataSourceId);
-  return replaceJsonString(configured, "NOTION_CONFIG_DATA_SOURCE_ID", configDataSourceId);
+  configured = upsertVariable(configured, "SITE_URL", siteUrl);
+  configured = upsertVariable(configured, "NOTION_DATA_SOURCE_ID", dataSourceId);
+  return upsertVariable(configured, "NOTION_CONFIG_DATA_SOURCE_ID", configDataSourceId);
 }
 
 async function question(label, fallback = "") {
