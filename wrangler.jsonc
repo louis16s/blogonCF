@@ -17,8 +17,8 @@
   // Cache public Worker responses at the edge before the script runs.
   "cache": { "enabled": true },
   "images": { "binding": "IMAGES" },
-  // Incremental refresh every six hours; reconcile removals and missed edits once daily.
-  "triggers": { "crons": ["0 */6 * * *", "15 3 * * *"] },
+  // One account trigger runs incremental sync every 15 minutes, RSS hourly, and reconciliation daily.
+  "triggers": { "crons": ["*/15 * * * *"] },
   "d1_databases": [
     {
       "binding": "DB",

@@ -221,7 +221,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
   }, [dark, themeReady, siteConfig.themeToggleEnabled]);
 
   useEffect(() => {
-    // The server-rendered bootstrap and the hourly Worker sync are the source
+    // The server-rendered bootstrap and the scheduled Worker sync are the source
     // of truth. Avoid making every open tab poll Notion; retrySync remains the
     // explicit recovery path for a failed initial request.
     if (initialPosts.length > 0 || !initialNotionConfigured) return;
