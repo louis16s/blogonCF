@@ -20,6 +20,8 @@ test("replication uses one package manager and exposes a guided Cloudflare setup
   assert.equal(manifest.scripts.release, "pnpm run build && pnpm run deploy:worker");
   assert.equal(manifest.scripts.typecheck, "tsc --noEmit --incremental false");
   assert.equal(manifest.scripts["setup:cloudflare"], "node scripts/setup-cloudflare.mjs");
+  assert.match(wranglerSource, /"run_worker_first": false/, "static assets must bypass the Worker");
+  assert.match(wranglerSource, /"cache": \{ "enabled": false \}/, "built-in caching must not meter free assets");
   await assert.rejects(access(new URL("package-lock.json", root)));
 
   assert.match(readme, /deploy\.workers\.cloudflare\.com\/\?url=https%3A%2F%2Fgithub\.com%2Flouis16s%2FblogonCF\.git/);

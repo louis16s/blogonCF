@@ -364,7 +364,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     if (!nextCursor || continuationLoading) return;
     setContinuationLoading(true);
     const separator = `${contentEndpoint}/${encodeURIComponent(slug)}`;
-    fetch(`${separator}?cursor=${encodeURIComponent(nextCursor)}`, { credentials: "same-origin", cache: "no-store" })
+    fetch(`${separator}?cursor=${encodeURIComponent(nextCursor)}`, { credentials: "same-origin", cache: "default" })
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok || data.locked) throw new Error(data.error || "后续内容暂时无法读取");
@@ -403,7 +403,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     // scheduled snapshot handles updates; navigation/reload is explicit.
     if (initialFetched) return;
     const controller = new AbortController();
-    fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, { signal: controller.signal, cache: "no-store", credentials: "same-origin" })
+    fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, { signal: controller.signal, cache: "default", credentials: "same-origin" })
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");

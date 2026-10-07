@@ -2,6 +2,19 @@
 
 All notable changes to blogonCF are documented here. Versions follow Semantic Versioning.
 
+## [1.1.1] - 2026-10-07
+
+### Improved
+
+- Disabled separately metered Workers Caching and explicitly retained free asset-first routing and the application Cache API.
+- Public search and article chunks now reuse browser HTTP caching; private articles avoid speculative document preloads.
+- Public API cache keys ignore tracking parameters; expired rate-limit rows are cleaned daily instead of every 15 minutes.
+
+### Security
+
+- Added shared D1 limits for expensive cache-miss APIs, HTTPS redirects, HSTS, and secure production unlock cookies.
+- Private content, sessions, and protected media remain excluded from shared caches.
+
 ## [1.1.0] - 2026-09-30
 
 ### Added

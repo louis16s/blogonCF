@@ -12,10 +12,12 @@
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "dist/client",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    "run_worker_first": false
   },
-  // Cache public Worker responses at the edge before the script runs.
-  "cache": { "enabled": true },
+  // Built-in Workers Caching meters cached assets as Worker requests. Keep
+  // assets free via asset-first routing; application Cache API remains active.
+  "cache": { "enabled": false },
   "images": { "binding": "IMAGES" },
   // One account trigger runs incremental sync every 15 minutes, RSS hourly, and reconciliation daily.
   "triggers": { "crons": ["*/15 * * * *"] },

@@ -70,6 +70,26 @@ test("local production server renders when the platform does not inject an env o
   assert.match(html, /请先配置 Notion 内容源/);
 });
 
+test("blog custom domains redirect HTTP to HTTPS while preserving request target", async () => {
+  const worker = await loadWorker();
+  const response = await worker.fetch(new Request("http://blog.530555.xyz/blog/Y-1?from=old-link"), { ASSETS: assets }, context);
+  assert.equal(response.status, 308);
+  assert.equal(response.headers.get("location"), "https://blog.530555.xyz/blog/Y-1?from=old-link");
+  assert.equal(response.headers.get("cache-control"), "no-store");
+
+  const sibling = await worker.fetch(new Request("http://other.530555.xyz/"), { ASSETS: assets }, context);
+  assert.notEqual(sibling.status, 308, "unrelated subdomains must not be redirected by the blog rule");
+});
+
+test("HTTPS HTML on blog domains receives short-lived, host-scoped HSTS", async () => {
+  const worker = await loadWorker();
+  const response = await worker.fetch(new Request("https://blog.530555.xyz/", { headers: { accept: "text/html" } }), { ASSETS: assets }, context);
+  assert.equal(response.headers.get("strict-transport-security"), "max-age=86400");
+
+  const otherHost = await worker.fetch(new Request("https://other.530555.xyz/", { headers: { accept: "text/html" } }), { ASSETS: assets }, context);
+  assert.equal(otherHost.headers.get("strict-transport-security"), null);
+});
+
 test("every non-lazy browser chunk stays below the 500 KiB initial-load budget", async () => {
   const manifestUrl = new URL("../dist/client/.vite/manifest.json", import.meta.url);
   const manifest = JSON.parse(await readFile(manifestUrl, "utf8"));
@@ -391,7 +411,8 @@ test("homepage article cards use a motion-safe, preloaded photographic transitio
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
   assert.match(explorer, /await response\.arrayBuffer\(\)/, "the article warmup must finish consuming the document before navigation");
-  assert.match(explorer, /onPointerEnter=\{\(\) => onPreload\(href\)\}/, "likely article intent should start warming before the click");
+  assert.match(explorer, /if \(!post\.locked\) onPreload\(href\)/, "only reusable public article HTML should be speculatively warmed");
+  assert.match(explorer, /post\.locked \? Promise\.resolve\(\) : warmArticleDocument/, "private navigation must not issue an extra no-store warm request");
   assert.match(explorer, /Promise\.race\(\[documentReady, wait\(ARTICLE_PRELOAD_DEADLINE_MS\)\]\)/, "navigation must wait for a reusable document with a bounded deadline");
   assert.match(explorer, /cache: "force-cache"/, "the warmed document should be reusable by the browser cache");
   assert.match(explorer, /window\.location\.assign\(href\)/, "article transitions must finish with a context-safe document navigation");
@@ -878,6 +899,45 @@ test("empty search and obsolete warm requests never traverse the corpus", async 
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("expensive search misses share the per-IP quota through D1", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const counters = new Map();
+  globalThis.fetch = async () => Response.json({ results: [], has_more: false });
+  const db = {
+    prepare(sql) {
+      let values = [];
+      return {
+        bind(...params) { values = params; return this; },
+        async first() {
+          if (sql.includes("INSERT INTO request_rate_limits")) {
+            const old = counters.get(values[0]);
+            const row = !old || old.window_start <= values[2]
+              ? { request_count: 1, window_start: values[1] }
+              : { ...old, request_count: old.request_count + 1 };
+            counters.set(values[0], row);
+            return row;
+          }
+          return null;
+        },
+        async all() { return { results: [] }; },
+        async run() { return { success: true }; },
+      };
+    },
+  };
+  try {
+    const env = { ASSETS: assets, DB: db, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "shared-limit-source", NOTION_CONFIG_DATA_SOURCE_ID: "shared-limit-config" };
+    for (let index = 0; index < 20; index++) {
+      const response = await worker.fetch(new Request(`https://blog.530555.xyz/api/content/search?q=quota-${index}`, { headers: { "cf-connecting-ip": "192.0.2.123" } }), env, context);
+      assert.equal(response.status, 200);
+    }
+    const blocked = await worker.fetch(new Request("https://blog.530555.xyz/api/content/search?q=quota-last", { headers: { "cf-connecting-ip": "192.0.2.123" } }), env, context);
+    assert.equal(blocked.status, 429);
+    assert.ok(Number(blocked.headers.get("retry-after")) > 0);
+    assert.match([...counters.keys()][0], /^expensive:[a-f0-9]{64}$/, "D1 stores only a hash, not the client IP");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("search uses the durable public body index and waits with skeletons before an empty result", async () => {
   const [worker, blog, article, css] = await Promise.all([
     readFile(new URL("../worker/index.ts", import.meta.url), "utf8"),
@@ -1013,6 +1073,24 @@ test("D1 failures do not masquerade as an empty index and trigger a Notion rebui
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("rate-limit maintenance runs daily, not on every incremental refresh", async () => {
+  const worker = await loadWorker();
+  const queries = [];
+  const pending = [];
+  const env = { ASSETS: assets, DB: { prepare(sql) {
+    queries.push(sql);
+    return { bind() { return this; }, async run() { return { success: true }; } };
+  } } };
+  const ctx = { waitUntil(promise) { pending.push(promise); } };
+  await worker.scheduled({ scheduledTime: Date.parse("2026-10-07T03:00:00Z") }, env, ctx);
+  await Promise.all(pending);
+  assert.equal(queries.length, 0);
+  await worker.scheduled({ scheduledTime: Date.parse("2026-10-07T03:15:00Z") }, env, ctx);
+  await Promise.all(pending);
+  assert.equal(queries.length, 1);
+  assert.match(queries[0], /DELETE FROM request_rate_limits/);
+});
+
 test("scheduled RSS refresh isolates one broken Notion page and continues with the rest", async () => {
   const worker = await loadWorker();
   const originalFetch = globalThis.fetch;
@@ -1029,7 +1107,8 @@ test("scheduled RSS refresh isolates one broken Notion page and continues with t
     throw new Error(`unexpected scheduled request: ${url}`);
   };
   try {
-    await worker.scheduled({ scheduledTime: Date.now(), cron: "0 * * * *" }, { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "cron-resilience" }, {
+    const nextHourUtc = Math.ceil(Date.now() / 3_600_000) * 3_600_000;
+    await worker.scheduled({ scheduledTime: nextHourUtc, cron: "0 * * * *" }, { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "cron-resilience", NOTION_CONFIG_DATA_SOURCE_ID: "cron-config-resilience" }, {
       waitUntil(promise) { pending.push(promise); },
       passThroughOnException() {},
     });
@@ -1294,7 +1373,7 @@ test("public JSON endpoints reuse the edge cache across Worker isolates", async 
   try {
     const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_CONFIG_DATA_SOURCE_ID: "edge-config" };
     const first = await worker.fetch(new Request("https://cache.example/api/content/config"), env, context);
-    const second = await worker.fetch(new Request("https://cache.example/api/content/config"), env, context);
+    const second = await worker.fetch(new Request("https://cache.example/api/content/config?utm_source=test&random=123"), env, context);
     assert.equal(first.status, 200);
     assert.equal(second.status, 200);
     assert.equal(first.headers.get("x-blog-cache"), "miss");
@@ -1737,9 +1816,10 @@ test("child pages stay on-site, inherit the parent password, and enforce ancestr
     assert.equal(wrong.status, 401);
     assert.equal(childBlockRequests, 0, "a wrong parent password must never fetch child content");
 
-    const unlock = await worker.fetch(new Request("http://localhost/api/content/post/index", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "correct" }) }), env, context);
+    const unlock = await worker.fetch(new Request("https://blog.530555.xyz/api/content/post/index", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "correct" }) }), env, context);
     const cookie = unlock.headers.get("set-cookie").split(";", 1)[0];
     assert.match(unlock.headers.get("set-cookie"), /HttpOnly; SameSite=Lax/);
+    assert.match(unlock.headers.get("set-cookie"), /; Secure(?:;|$)/, "production unlock cookies must always require HTTPS");
     const unlockPayload = await unlock.json();
     const referencedBlock = unlockPayload.blocks.find((block) => block.type === "child_page" && block.pageId === referencedId);
     assert.equal(referencedBlock?.icon, undefined, "a child page without a Notion emoji must not receive a fallback icon");

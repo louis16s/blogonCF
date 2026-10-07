@@ -2,7 +2,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Notion block/property unions are normalized at this gateway boundary. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
-import { clearPasswordAttempts, getPasswordAttemptStatus, recordPasswordFailure, type PasswordRateLimitDatabase } from "../db/rate-limit";
+import { checkExpensiveRequest as checkSharedExpensiveRequest, cleanExpiredRequestLimits, clearPasswordAttempts, getPasswordAttemptStatus, recordPasswordFailure, type PasswordRateLimitDatabase } from "../db/rate-limit";
 import { deleteHeadingJob, readHeadingCache, readHeadingJob, writeHeadingCache, writeHeadingJob, type HeadingIndexJob, type HeadingIndexTask } from "../db/heading-cache";
 import { hasContentIndex, readContentIndex, writeContentIndex, type IndexedContentDocument } from "../db/content-index";
 import {
@@ -53,6 +53,7 @@ const CONFIG_ROWS_CACHE_TTL_MS = 5 * 60 * 1000;
 const SITE_BOOTSTRAP_CACHE_TTL_MS = 5 * 60 * 1000;
 const SITE_BOOTSTRAP_STALE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_RSS_FEEDS = 8;
+const HTTPS_ENFORCED_HOSTS = new Set(["530555.xyz", "blog.530555.xyz", "www.530555.xyz"]);
 const LEGACY_EMOJI_PATTERN = /^(?:\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3|\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}(?:\uFE0F|\p{Emoji_Modifier})?)*)$/u;
 const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" };
 const publicContentHeaders = { ...jsonHeaders, "cache-control": "public, max-age=300, stale-while-revalidate=86400" };
@@ -62,7 +63,6 @@ const siteBootstrapCache = new Map<string, { freshUntil: number; staleUntil: num
 const headingIndexCache = new Map<string, { expiresAt: number; headings?: HeadingSummary[]; pending?: Promise<HeadingSummary[]> }>();
 const headingJobCache = new Map<string, HeadingIndexJob>();
 const configRowsCache = new Map<string, { expiresAt: number; rows?: NotionConfigPage[]; pending?: Promise<NotionConfigPage[]> }>();
-const expensiveRequestWindows = new Map<string, { startedAt: number; count: number }>();
 
 type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "d1" | "notion" };
 type SearchDocument = ReturnType<typeof toPost> & { body: string; searchBody: string };
@@ -75,6 +75,10 @@ const worker = {
   async fetch(request: Request, env: Env | undefined, ctx: ExecutionContext): Promise<Response> {
     env ||= {};
     const url = new URL(request.url);
+    if (url.protocol === "http:" && HTTPS_ENFORCED_HOSTS.has(url.hostname.toLocaleLowerCase())) {
+      url.protocol = "https:";
+      return new Response(null, { status: 308, headers: { location: url.toString(), "cache-control": "no-store" } });
+    }
     const allowedMethods = allowedMethodsForPath(url.pathname);
     if (allowedMethods && !allowedMethods.includes(request.method)) {
       return Response.json({ error: "Method not allowed" }, {
@@ -98,7 +102,7 @@ const worker = {
     }
     if (url.pathname === "/api/content/search" && request.method === "GET") {
       return cachedPublicApi(request, env, ctx, "search", 120, async () => {
-        const limited = checkExpensiveRequest(request, "search", 20, 60_000);
+        const limited = await checkExpensiveRequest(env, request, "search", 20, 60_000);
         return limited || notionSearch(env, url, ctx);
       });
     }
@@ -108,7 +112,7 @@ const worker = {
     if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url, request, env.NOTION_TOKEN, env.DB);
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") {
       return cachedPublicApi(request, env, ctx, "word-cloud", 900, async () => {
-        const limited = checkExpensiveRequest(request, "word-cloud", 2, 10 * 60_000);
+        const limited = await checkExpensiveRequest(env, request, "word-cloud", 2, 10 * 60_000);
         return limited || notionWordCloud(env, ctx);
       });
     }
@@ -157,7 +161,7 @@ const worker = {
         const status = payload.status && payload.status >= 400 && rendered.status < 400 ? payload.status : rendered.status;
         const responseHeaders = new Headers(rendered.headers);
         responseHeaders.set("cache-control", renderedCacheControl(request, payload.status, Boolean(payload.post?.locked)));
-        return secureDocumentResponse(new Response(rendered.body, { status, headers: responseHeaders }));
+        return secureDocumentResponse(new Response(rendered.body, { status, headers: responseHeaders }), url);
       }
       finally { clearArticlePayload(key); }
     }
@@ -174,7 +178,7 @@ const worker = {
         const status = payload.status && payload.status >= 400 && rendered.status < 400 ? payload.status : rendered.status;
         const responseHeaders = new Headers(rendered.headers);
         responseHeaders.set("cache-control", renderedCacheControl(request, payload.status));
-        return secureDocumentResponse(new Response(rendered.body, { status, headers: responseHeaders }));
+        return secureDocumentResponse(new Response(rendered.body, { status, headers: responseHeaders }), url);
       }
       finally { clearArticlePayload(key); }
     }
@@ -190,16 +194,17 @@ const worker = {
         const status = payload.status && payload.status >= 400 && rendered.status < 400 ? payload.status : rendered.status;
         const responseHeaders = new Headers(rendered.headers);
         responseHeaders.set("cache-control", renderedCacheControl(request, payload.status));
-        return secureDocumentResponse(new Response(rendered.body, { status, headers: responseHeaders }));
+        return secureDocumentResponse(new Response(rendered.body, { status, headers: responseHeaders }), url);
       }
       finally { clearHomePayload(key); }
     }
-    return secureDocumentResponse(await handler.fetch(requestWithSiteOrigin(request, env), env, ctx));
+    return secureDocumentResponse(await handler.fetch(requestWithSiteOrigin(request, env), env, ctx), url);
   },
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     const tasks = scheduledRefreshTasks(_controller.scheduledTime);
     ctx.waitUntil(refreshContentIndex(env, tasks.reconcile));
     if (tasks.refreshFeeds) ctx.waitUntil(refreshExternalFeeds(env));
+    if (tasks.reconcile) ctx.waitUntil(cleanExpiredRequestLimits(env.DB));
   },
 };
 
@@ -609,9 +614,13 @@ async function cachedPublicApi(
   const canonical = publicSiteOrigin(env, keyUrl);
   keyUrl.protocol = canonical.protocol;
   keyUrl.host = canonical.host;
-  const sortedParams = [...keyUrl.searchParams.entries()].sort(([leftKey, leftValue], [rightKey, rightValue]) =>
-    leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue));
-  keyUrl.search = new URLSearchParams(sortedParams).toString();
+  // Only input consumed by the loader belongs in its cache key. Tracking and
+  // random parameters must not force repeated Notion/index reads.
+  const query = normalizeSearchText(keyUrl.searchParams.get("q") || "");
+  const slug = keyUrl.searchParams.get("slug");
+  keyUrl.search = "";
+  if (namespace === "search") keyUrl.searchParams.set("q", query);
+  if (namespace.startsWith("rss-feeds:") && slug) keyUrl.searchParams.set("slug", slug);
   keyUrl.searchParams.set("schema", "1");
   keyUrl.searchParams.set("cache", namespace);
   const resolvedDataSourceId = env.NOTION_TOKEN
@@ -1172,23 +1181,13 @@ async function readJsonRequest(request: Request, maximumBytes = 16 * 1024): Prom
   } catch { return { response: error(400, "Invalid JSON body") }; }
 }
 
-function checkExpensiveRequest(request: Request, route: string, limit: number, windowMs: number): Response | null {
-  const ip = request.headers.get("cf-connecting-ip") || request.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim() || "unknown";
-  const key = `${route}:${ip}`;
-  const now = Date.now();
-  const current = expensiveRequestWindows.get(key);
-  if (!current || current.startedAt <= now - windowMs) {
-    expensiveRequestWindows.set(key, { startedAt: now, count: 1 });
-  } else if (current.count >= limit) {
-    const retryAfter = Math.max(1, Math.ceil((current.startedAt + windowMs - now) / 1000));
-    return Response.json({ error: "请求过于频繁，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(retryAfter) } });
-  } else {
-    current.count += 1;
-  }
-  if (expensiveRequestWindows.size > 2_000) {
-    for (const [windowKey, window] of expensiveRequestWindows) if (window.startedAt <= now - windowMs) expensiveRequestWindows.delete(windowKey);
-  }
-  return null;
+async function checkExpensiveRequest(env: Env, request: Request, route: string, limit: number, windowMs: number): Promise<Response | null> {
+  const result = await checkSharedExpensiveRequest(env.DB, request, route, limit, windowMs, Date.now(), env.NOTION_TOKEN || "blogonCF-local-rate-limit");
+  if (result.allowed) return null;
+  return Response.json({ error: "请求过于频繁，请稍后再试" }, {
+    status: result.available ? 429 : 502,
+    headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(result.retryAfter) },
+  });
 }
 
 async function notionChildDatabase(env: Env, request: Request): Promise<Response> {
@@ -2017,7 +2016,7 @@ function allowedMethodsForPath(pathname: string): string[] | undefined {
   return undefined;
 }
 
-function secureDocumentResponse(response: Response): Response {
+function secureDocumentResponse(response: Response, requestUrl?: URL): Response {
   const headers = new Headers(response.headers);
   headers.set("x-content-type-options", "nosniff");
   headers.set("referrer-policy", "strict-origin-when-cross-origin");
@@ -2036,6 +2035,9 @@ function secureDocumentResponse(response: Response): Response {
     else headers.delete("vary");
     headers.set("x-frame-options", "SAMEORIGIN");
     headers.set("cross-origin-opener-policy", "same-origin");
+    if (requestUrl?.protocol === "https:" && HTTPS_ENFORCED_HOSTS.has(requestUrl.hostname.toLocaleLowerCase())) {
+      headers.set("strict-transport-security", "max-age=86400");
+    }
     headers.set("content-security-policy", [
       "default-src 'self'",
       "base-uri 'self'",

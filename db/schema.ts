@@ -6,6 +6,12 @@ export const passwordAttempts = sqliteTable("password_attempts", {
   attemptCount: integer("attempt_count").notNull().default(0),
 });
 
+export const requestRateLimits = sqliteTable("request_rate_limits", {
+  key: text("key").primaryKey(),
+  windowStart: integer("window_start").notNull(),
+  requestCount: integer("request_count").notNull().default(0),
+});
+
 export const externalFeedCache = sqliteTable("external_feed_cache", {
   url: text("url").primaryKey(),
   payload: text("payload").notNull(),

@@ -110,7 +110,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
     hoverPreloadTimerRef.current = window.setTimeout(() => {
       hoverPreloadTimerRef.current = null;
       void warmArticleDocument(href).catch(() => undefined);
-    }, immediate ? 0 : 120);
+    }, immediate ? 0 : 300);
   }, []);
 
   const cancelArticlePreload = useCallback(() => {
@@ -125,7 +125,9 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
     const navigationAttempt = ++articleNavigationAttemptRef.current;
     const href = `/blog/${encodeURIComponent(post.slug)}`;
     cancelArticlePreload();
-    const documentReady = warmArticleDocument(href).catch(() => undefined);
+    // Private HTML is deliberately no-store: warming it would cause a second
+    // uncached request on navigation without improving reuse.
+    const documentReady = post.locked ? Promise.resolve() : warmArticleDocument(href).catch(() => undefined);
     document.body.classList.add("article-transition-playing");
     setArticleOpening({
       bounds: { top: bounds.top, right: bounds.right, bottom: bounds.bottom, left: bounds.left, width: bounds.width, height: bounds.height },
@@ -248,7 +250,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
     }
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      fetch(`/api/content/search?q=${encodeURIComponent(needle)}`, { signal: controller.signal, cache: "no-store" })
+      fetch(`/api/content/search?q=${encodeURIComponent(needle)}`, { signal: controller.signal, cache: "default" })
         .then((response) => response.ok ? response.json() : Promise.reject())
         .then((data) => setContentSearch({ query: needle, ids: Array.isArray(data.matches) ? data.matches : [] }))
         .catch(() => { if (!controller.signal.aborted) setContentSearch({ query: needle, ids: [] }); });
@@ -364,10 +366,10 @@ function PostCard({ post, index, onOpen, onPreload, onCancelPreload }: { post: P
       className="post-card"
       title={post.summary || undefined}
       style={{ "--card-order": Math.min(index, 8) } as CSSProperties}
-      onPointerEnter={() => onPreload(href)}
+      onPointerEnter={() => { if (!post.locked) onPreload(href); }}
       onPointerLeave={onCancelPreload}
-      onPointerDown={() => onPreload(href, true)}
-      onFocusCapture={() => onPreload(href, true)}
+      onPointerDown={() => { if (!post.locked) onPreload(href, true); }}
+      onFocusCapture={() => { if (!post.locked) onPreload(href, true); }}
     >
       {post.icon ? <span className="post-emoji" aria-label={`Notion 图标 ${post.icon}`}>{post.icon}</span> : null}
       <div className="post-card-body">

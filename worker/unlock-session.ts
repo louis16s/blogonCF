@@ -83,7 +83,9 @@ export async function verifyMediaAccessSignature(
 export async function createUnlockCookie(secret: string, slug: string, requestUrl: string): Promise<string> {
   const payload = base64Url(new TextEncoder().encode(JSON.stringify({ slug: normalizedSlug(slug), exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS })));
   const token = `${payload}.${await signature(secret, payload)}`;
-  const secure = new URL(requestUrl).protocol === "https:" ? "; Secure" : "";
+  const url = new URL(requestUrl);
+  const localDevelopment = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+  const secure = localDevelopment ? "" : "; Secure";
   return `${await cookieName(slug)}=${token}; Path=/; Max-Age=${SESSION_TTL_SECONDS}; HttpOnly; SameSite=Lax${secure}`;
 }
 
