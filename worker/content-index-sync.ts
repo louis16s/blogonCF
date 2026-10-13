@@ -8,7 +8,9 @@ import {
   deleteContentIndexPage,
   readContentIndexVersions,
   readContentIndexVersionsForPages,
+  readFailedContentIndexVersions,
   writeContentIndex,
+  type ContentIndexVersion,
   type IndexedContentDocument,
 } from "../db/content-index";
 import { readContentSyncState, writeContentSyncState } from "../db/content-sync-state";
@@ -27,14 +29,13 @@ export function scheduledRefreshTasks(scheduledTime: number): { reconcile: boole
   };
 }
 
-type ExistingVersion = { last_edited_time: string; locked: number };
-
 export async function refreshContentIndex(options: {
   db: PasswordRateLimitDatabase;
   sourceKey: string;
   forceFullReconciliation?: boolean;
   queryPublishedPosts: () => Promise<any[]>;
   queryChangedPages: (editedAfter: string) => Promise<any[]>;
+  queryPage?: (pageId: string) => Promise<any>;
   buildDocument: (page: any) => Promise<IndexedContentDocument>;
 }): Promise<void> {
   const { db, sourceKey, forceFullReconciliation = false } = options;
@@ -61,6 +62,25 @@ export async function refreshContentIndex(options: {
     } else {
       const editedAfter = new Date(Math.max(0, Date.parse(prior.cursor) - CONTENT_SYNC_OVERLAP_MS)).toISOString();
       const changedPages = await options.queryChangedPages(editedAfter);
+      const failedVersions = await readFailedContentIndexVersions(db, sourceKey);
+      const changedIds = new Set(changedPages.map((page) => normalizeNotionId(page.id) || page.id));
+      const retryVersions = failedVersions.filter((row) => !changedIds.has(row.page_id));
+      if (retryVersions.length) {
+        if (options.queryPage) {
+          for (const row of retryVersions) {
+            const page = await options.queryPage(row.page_id);
+            if (!page || page.archived || page.in_trash) await deleteContentIndexPage(db, row.page_id);
+            else changedPages.push(page);
+          }
+        } else {
+          const retryIds = new Set(retryVersions.map((row) => row.page_id));
+          const publishedPages = await options.queryPublishedPosts();
+          for (const page of publishedPages) {
+            if (retryIds.delete(normalizeNotionId(page.id) || page.id)) changedPages.push(page);
+          }
+          for (const pageId of retryIds) await deleteContentIndexPage(db, pageId);
+        }
+      }
       const pageIds = changedPages.map((page) => normalizeNotionId(page.id) || page.id).filter((id): id is string => typeof id === "string" && Boolean(id));
       const versions = new Map((await readContentIndexVersionsForPages(db, sourceKey, pageIds)).map((row) => [row.page_id, row]));
       for (const page of changedPages) {
@@ -91,13 +111,13 @@ async function indexPageIfChanged(
   db: PasswordRateLimitDatabase,
   sourceKey: string,
   page: any,
-  existing: ExistingVersion | undefined,
+  existing: ContentIndexVersion | undefined,
   buildDocument: (page: any) => Promise<IndexedContentDocument>,
 ): Promise<void> {
   const pageId = normalizeNotionId(page.id) || page.id;
   const lastEdited = typeof page.last_edited_time === "string" ? page.last_edited_time : "";
   const locked = Boolean(plain(page.properties?.password));
-  if (existing && existing.last_edited_time === lastEdited && Boolean(existing.locked) === locked) return;
+  if (existing && !existing.retryable && existing.last_edited_time === lastEdited && Boolean(existing.locked) === locked) return;
   try {
     const document = await buildDocument(page);
     await writeContentIndex(db, sourceKey, pageId, lastEdited, document);

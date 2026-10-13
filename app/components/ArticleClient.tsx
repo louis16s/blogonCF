@@ -6,6 +6,7 @@ import type { ChildDatabase, ChildPage, ContentBlock, Post, SiteConfig } from ".
 import { withoutHiddenNotionBlocks } from "../../shared/contentVisibility.js";
 import { useArticleToc } from "./ArticleTocContext";
 import { loadLinkPreview, type LinkPreview } from "./linkPreviewClient";
+import { videoEmbedUrl } from "../../shared/videoEmbed.js";
 
 type ArticleClientProps = {
   slug: string;
@@ -13,6 +14,7 @@ type ArticleClientProps = {
   initialPost?: Post;
   initialBlocks?: ContentBlock[];
   initialHeadings?: TocItem[];
+  initialHeadingsPending?: boolean;
   initialNextCursor?: string;
   initialLocked?: boolean;
   initialFetched?: boolean;
@@ -88,7 +90,22 @@ function scrollToArticleStart() {
   });
 }
 
-export function ArticleClient({ slug, contentKind = "post", initialPost, initialBlocks = [], initialHeadings = [], initialNextCursor, initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false, siteConfig }: ArticleClientProps) {
+// Commit a cursor only after a successful response. A failed request remains
+// retryable; a self-loop or longer cycle cannot restart automatic pagination.
+function recordContinuationCursor(seen: Set<string>, cursor: string, nextCursor?: string | null) {
+  if (seen.has(cursor) || nextCursor === cursor || (nextCursor && seen.has(nextCursor))) {
+    throw new Error("内容分页没有前进，请稍后重试。");
+  }
+  seen.add(cursor);
+}
+
+function childContinuationSet(seen: Map<string, Set<string>>, id: string): Set<string> {
+  let page = seen.get(id);
+  if (!page) { page = new Set(); seen.set(id, page); }
+  return page;
+}
+
+export function ArticleClient({ slug, contentKind = "post", initialPost, initialBlocks = [], initialHeadings = [], initialHeadingsPending = false, initialNextCursor, initialLocked = false, initialFetched = false, initialError = "", initialTruncated = false, siteConfig }: ArticleClientProps) {
   const articleToc = useArticleToc();
   const [post, setPost] = useState<Post | undefined>(initialPost);
   const [blocks, setBlocks] = useState<ContentBlock[]>(initialBlocks);
@@ -99,9 +116,13 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const [truncated, setTruncated] = useState(initialTruncated);
   const [nextCursor, setNextCursor] = useState(initialNextCursor);
   const [continuationLoading, setContinuationLoading] = useState(false);
+  const [continuationError, setContinuationError] = useState("");
+  const [headingsPending, setHeadingsPending] = useState(initialHeadingsPending);
+  const [headingsError, setHeadingsError] = useState(false);
   const [childTrail, setChildTrail] = useState<ChildPage[]>([]);
   const [childOpening, setChildOpening] = useState(false);
   const [childContinuationLoading, setChildContinuationLoading] = useState(false);
+  const [childContinuationError, setChildContinuationError] = useState("");
   const [childError, setChildError] = useState("");
   const [feeds, setFeeds] = useState<ExternalFeed[]>([]);
   const [feedsLoading, setFeedsLoading] = useState(false);
@@ -112,6 +133,8 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const pendingHeadingIdRef = useRef("");
   const nextCursorRef = useRef(initialNextCursor);
   const continuationLoadedRef = useRef(false);
+  const rootCursorsRef = useRef(new Set<string>());
+  const childCursorsRef = useRef(new Map<string, Set<string>>());
   const contentEndpoint = contentKind === "page" ? "/api/content/page" : "/api/content/post";
   const childEndpoint = contentKind === "page" ? "/api/content/page-child" : "/api/content/child";
   const setTocHeadings = articleToc?.setHeadings;
@@ -123,13 +146,43 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   }, []);
 
   useEffect(() => {
+    rootCursorsRef.current.clear();
+    childCursorsRef.current.clear();
+  }, [slug, contentKind]);
+
+  useEffect(() => {
     const activeChild = childTrail.at(-1);
     if (activeChild) setTocHeadings?.(activeChild.headings || []);
     else {
       setTocHeadings?.(headings);
-      setTocStatus?.("ready");
+      setTocStatus?.(headingsPending ? "loading" : headingsError ? "error" : "ready");
     }
-  }, [childTrail, headings, setTocHeadings, setTocStatus]);
+  }, [childTrail, headings, headingsError, headingsPending, setTocHeadings, setTocStatus]);
+
+  useEffect(() => {
+    if (!headingsPending || locked) return;
+    const controller = new AbortController();
+    const read = async () => {
+      for (let attempt = 0; attempt < 12; attempt++) {
+        const response = await fetch(`${contentEndpoint}/${encodeURIComponent(slug)}?headings=1`, { credentials: "same-origin", signal: controller.signal });
+        const data = await response.json();
+        if (response.status === 202) {
+          const seconds = Number(response.headers.get("retry-after"));
+          await abortableDelay(Number.isFinite(seconds) && seconds > 0 ? Math.min(4000, seconds * 1000) : Math.min(4000, 250 * 2 ** attempt), controller.signal);
+          continue;
+        }
+        if (!response.ok) throw new Error(data.error || "目录暂时无法读取");
+        setHeadings(Array.isArray(data.headings) ? data.headings : []);
+        setHeadingsPending(false);
+        return;
+      }
+      throw new Error("目录仍在建立，请稍后刷新重试");
+    };
+    void read().catch((reason) => {
+      if (!controller.signal.aborted) { setHeadingsPending(false); setHeadingsError(true); setTocStatus?.("error"); setError(reason.message || "目录暂时无法读取"); }
+    });
+    return () => controller.abort();
+  }, [contentEndpoint, headingsPending, locked, setTocStatus, slug]);
 
   const navigateToHeading = useCallback(async (id: string) => {
     pendingHeadingIdRef.current = id;
@@ -161,11 +214,14 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     if (activeChild) {
       const controller = new AbortController();
       childRequestRef.current = controller;
+      setChildContinuationError("");
       setChildContinuationLoading(true);
       let current = activeChild;
       try {
         while (!findAndScroll() && current.nextCursor) {
-          const page = await requestChildPage(childEndpoint, { slug, pageId: current.id, accessSignature: current.accessSignature, trail: childTrailRef.current.map((item) => item.id), cursor: current.nextCursor }, controller.signal);
+          const cursor = current.nextCursor;
+          const page = await requestChildPage(childEndpoint, { slug, pageId: current.id, accessSignature: current.accessSignature, trail: childTrailRef.current.map((item) => item.id), cursor }, controller.signal);
+          recordContinuationCursor(childContinuationSet(childCursorsRef.current, current.id), cursor, page.nextCursor);
           current = { ...current, blocks: [...current.blocks, ...page.blocks], nextCursor: page.nextCursor, truncated: Boolean(current.truncated || page.truncated) };
           const index = childTrailRef.current.findIndex((item) => item.id === current.id);
           if (index < 0) break;
@@ -182,7 +238,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       } catch (reason) {
         if (reason instanceof Error && reason.name !== "AbortError") {
           finishNavigation();
-          setChildError(reason.message || "章节暂时无法定位");
+          setChildContinuationError(reason.message || "章节暂时无法定位");
         }
       } finally {
         if (childRequestRef.current === controller) childRequestRef.current = null;
@@ -190,6 +246,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       }
       return;
     }
+    setContinuationError("");
     setContinuationLoading(true);
     try {
       while (!findAndScroll() && nextCursorRef.current) {
@@ -198,6 +255,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
         const response = await fetch(endpoint, { credentials: "same-origin", cache: "no-store" });
         const data = await response.json();
         if (!response.ok || data.locked) throw new Error(data.error || "后续内容暂时无法读取");
+        recordContinuationCursor(rootCursorsRef.current, cursor, data.nextCursor);
         continuationLoadedRef.current = true;
         setBlocks((currentBlocks) => [...currentBlocks, ...(data.blocks || [])]);
         setRootCursor(data.nextCursor);
@@ -211,7 +269,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     } catch (reason) {
       if (reason instanceof Error && reason.name !== "AbortError") {
         finishNavigation();
-        setError(reason.message || "章节暂时无法定位");
+        setContinuationError(reason.message || "章节暂时无法定位");
       }
     } finally {
       setContinuationLoading(false);
@@ -244,11 +302,12 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     childHeadingRequestRef.current?.abort();
     const controller = new AbortController();
     childRequestRef.current = controller;
-    setChildOpening(true); setChildContinuationLoading(false); setChildError("");
+    setChildOpening(true); setChildContinuationLoading(false); setChildContinuationError(""); setChildError("");
     scrollToArticleStart();
     const requestTrail = authorizedTrail || childTrailRef.current.map((item) => item.id);
     requestChildPage(childEndpoint, { slug, pageId, accessSignature, trail: requestTrail }, controller.signal)
       .then((child) => {
+        childCursorsRef.current.delete(child.id);
         childIdRef.current = child.id;
         setChildTrail((current) => {
           const previous = current.findIndex((item) => item.id === child.id);
@@ -306,6 +365,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     void (async () => {
       try {
         const restored: ChildPage[] = [];
+        childCursorsRef.current.clear();
         for (let index = 0; index < pageIds.length; index++) {
           const pageId = pageIds[index];
           const child = await requestChildPage(childEndpoint, { slug, pageId, trail: pageIds.slice(0, index) }, controller.signal);
@@ -341,17 +401,21 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
     if (!currentChild?.nextCursor || childRequestRef.current) return;
     const controller = new AbortController();
     childRequestRef.current = controller;
+    setChildContinuationError("");
     setChildContinuationLoading(true);
     requestChildPage(childEndpoint, { slug, pageId: currentChild.id, accessSignature: currentChild.accessSignature, trail: childTrailRef.current.map((item) => item.id), cursor: currentChild.nextCursor }, controller.signal)
-      .then((page) => setChildTrail((current) => {
+      .then((page) => {
+        recordContinuationCursor(childContinuationSet(childCursorsRef.current, currentChild.id), currentChild.nextCursor!, page.nextCursor);
+        setChildTrail((current) => {
         const index = current.findIndex((item) => item.id === page.id);
         if (index < 0) return current;
         const next = [...current];
         next[index] = { ...next[index], blocks: [...next[index].blocks, ...page.blocks], nextCursor: page.nextCursor, truncated: Boolean(next[index].truncated || page.truncated) };
         childTrailRef.current = next;
         return next;
-      }))
-      .catch((reason) => { if (reason.name !== "AbortError") setChildError(reason.message || "后续内容暂时无法读取"); })
+        });
+      })
+      .catch((reason) => { if (reason.name !== "AbortError") setChildContinuationError(reason.message || "后续内容暂时无法读取"); })
       .finally(() => {
         if (childRequestRef.current === controller) {
           childRequestRef.current = null;
@@ -362,36 +426,40 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
 
   const loadMoreContent = useCallback(() => {
     if (!nextCursor || continuationLoading) return;
+    setContinuationError("");
     setContinuationLoading(true);
     const separator = `${contentEndpoint}/${encodeURIComponent(slug)}`;
     fetch(`${separator}?cursor=${encodeURIComponent(nextCursor)}`, { credentials: "same-origin", cache: "default" })
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok || data.locked) throw new Error(data.error || "后续内容暂时无法读取");
+        recordContinuationCursor(rootCursorsRef.current, nextCursor, data.nextCursor);
         continuationLoadedRef.current = true;
         setBlocks((current) => [...current, ...(data.blocks || [])]);
         setRootCursor(data.nextCursor);
         setTruncated((current) => Boolean(current || data.truncated));
       })
-      .catch((reason) => setError(reason.message || "后续内容暂时无法读取"))
+      .catch((reason) => setContinuationError(reason.message || "后续内容暂时无法读取"))
       .finally(() => setContinuationLoading(false));
   }, [contentEndpoint, continuationLoading, nextCursor, setRootCursor, slug]);
 
   const load = (password?: string) => {
     setLoading(true); setError("");
+    setContinuationError("");
     continuationLoadedRef.current = false;
+    rootCursorsRef.current.clear();
     fetch(`${contentEndpoint}/${encodeURIComponent(slug)}`, password ? { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ password }) } : { credentials: "same-origin" })
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "文章读取失败");
         if (password && !data.locked) {
-          const verification = await fetch(`/api/content/unlock-session?slug=${encodeURIComponent(slug)}`, { credentials: "same-origin", cache: "no-store" });
+          const verification = await fetch(`/api/content/unlock-session?slug=${encodeURIComponent(slug)}&kind=${contentKind}`, { credentials: "same-origin", cache: "no-store" });
           const verified = await verification.json();
           if (!verification.ok || !verified.unlocked) throw new Error("安全会话未能建立，请允许本站 Cookie 后重试");
-          setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setHeadings(data.headings || []); setRootCursor(data.nextCursor); setTruncated(Boolean(data.truncated));
+          setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setHeadings(data.headings || []); setHeadingsPending(Boolean(data.headingsPending)); setHeadingsError(false); setRootCursor(data.nextCursor); setTruncated(Boolean(data.truncated));
           return;
         }
-        setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setHeadings(data.headings || []); setRootCursor(data.nextCursor); setTruncated(Boolean(data.truncated));
+        setPost(data.post); setLocked(Boolean(data.locked)); setBlocks(data.blocks || []); setHeadings(data.headings || []); setHeadingsPending(Boolean(data.headingsPending)); setHeadingsError(false); setRootCursor(data.nextCursor); setTruncated(Boolean(data.truncated));
       })
       .catch((reason) => setError(reason.message || "文章暂时无法读取"))
       .finally(() => setLoading(false));
@@ -412,6 +480,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
         if (!continuationLoadedRef.current) {
           setBlocks(data.blocks || []);
           setHeadings(data.headings || []);
+          setHeadingsPending(Boolean(data.headingsPending));
           setRootCursor(data.nextCursor);
         }
         setTruncated((current) => continuationLoadedRef.current ? Boolean(current || data.truncated) : Boolean(data.truncated));
@@ -503,7 +572,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       </div>
       {post.tags.length ? <div className="tags">{post.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
     </header> : null}
-    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} continuationLoading={childContinuationLoading} error={childError} databaseContext={{ slug, contentKind, trail: childTrail.map((item) => item.id) }} breadcrumb={[post.title, ...childTrail.map((item) => item.title)]} /> : blocks.length ? <div className="notion-content"><Blocks blocks={visibleBlocks} onOpenChild={loadChild} databaseContext={{ slug, contentKind, trail: [] }} breadcrumb={[post.title]} />{isNewsPage && siteConfig?.rssEnabled !== false ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}<ContentPrefetchSentinel pending={Boolean(nextCursor)} loading={continuationLoading} onLoad={loadMoreContent} /></div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
+    {locked ? <PasswordForm onSubmit={load} error={error} loading={loading} /> : childOpening ? <ChildLoading /> : activeChild ? <ChildDocument child={activeChild} parentTitle={childTrail.at(-2)?.title || post.title} onBack={closeChild} onOpenChild={loadChild} onLoadMore={loadMoreChild} continuationLoading={childContinuationLoading} continuationError={childContinuationError} error={childError} databaseContext={{ slug, contentKind, trail: childTrail.map((item) => item.id) }} breadcrumb={[post.title, ...childTrail.map((item) => item.title)]} /> : blocks.length ? <div className="notion-content"><Blocks blocks={visibleBlocks} onOpenChild={loadChild} databaseContext={{ slug, contentKind, trail: [] }} breadcrumb={[post.title]} />{isNewsPage && siteConfig?.rssEnabled !== false ? <ExternalRssFeeds feeds={feeds} loading={feedsLoading} /> : null}{truncated ? <ContentLimitNotice /> : null}{childError ? <p className="child-page-error" role="alert">{childError}</p> : null}<ContentPrefetchSentinel pending={Boolean(nextCursor)} loading={continuationLoading} error={continuationError} onLoad={loadMoreContent} /></div> : <div className="article-state"><p>{loading ? "正在同步正文…" : error || "正文需要配置 Notion 连接后显示。"}</p></div>}
   </>;
 }
 
@@ -531,8 +600,9 @@ function ChildLoading() {
 }
 
 type DatabaseContext = { slug: string; contentKind: "post" | "page"; trail: string[] };
+type OpenChild = (pageId: string, accessSignature?: string, updateHistory?: boolean, authorizedTrail?: string[]) => void;
 
-function ChildDocument({ child, parentTitle, onBack, onOpenChild, onLoadMore, continuationLoading, error, databaseContext, breadcrumb }: { child: ChildPage; parentTitle: string; onBack: () => void; onOpenChild: (pageId: string, accessSignature?: string) => void; onLoadMore: () => void; continuationLoading: boolean; error: string; databaseContext: DatabaseContext; breadcrumb: string[] }) {
+function ChildDocument({ child, parentTitle, onBack, onOpenChild, onLoadMore, continuationLoading, continuationError, error, databaseContext, breadcrumb }: { child: ChildPage; parentTitle: string; onBack: () => void; onOpenChild: OpenChild; onLoadMore: () => void; continuationLoading: boolean; continuationError: string; error: string; databaseContext: DatabaseContext; breadcrumb: string[] }) {
   return <section className="child-document" aria-labelledby={`child-${child.id}`}>
     <nav className="child-document-nav" aria-label="子页面导航">
       <button type="button" onClick={onBack} aria-label={`返回 ${parentTitle}`}>
@@ -548,25 +618,25 @@ function ChildDocument({ child, parentTitle, onBack, onOpenChild, onLoadMore, co
       <div className="notion-content"><Blocks blocks={child.blocks} onOpenChild={onOpenChild} databaseContext={databaseContext} breadcrumb={breadcrumb} /></div>
     </div>
     {child.truncated ? <ContentLimitNotice /> : null}
-    <ContentPrefetchSentinel pending={Boolean(child.nextCursor)} loading={continuationLoading} onLoad={onLoadMore} />
+    <ContentPrefetchSentinel pending={Boolean(child.nextCursor)} loading={continuationLoading} error={continuationError} onLoad={onLoadMore} />
     {error ? <p className="child-page-error" role="alert">{error}</p> : null}
   </section>;
 }
 
-function ContentPrefetchSentinel({ pending, loading, onLoad }: { pending: boolean; loading: boolean; onLoad: () => void }) {
+function ContentPrefetchSentinel({ pending, loading, error = "", onLoad }: { pending: boolean; loading: boolean; error?: string; onLoad: () => void }) {
   const sentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const node = sentinelRef.current;
-    if (!node || !pending || loading) return;
+    if (!node || !pending || loading || error) return;
     if (!("IntersectionObserver" in window)) { onLoad(); return; }
     const observer = new IntersectionObserver(([entry]) => {
       if (entry?.isIntersecting) onLoad();
     }, { rootMargin: "2400px 0px" });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [loading, onLoad, pending]);
+  }, [error, loading, onLoad, pending]);
   if (!pending && !loading) return null;
-  return <div ref={sentinelRef} className="content-prefetch-sentinel" aria-live="polite">{loading ? "正在准备后续内容…" : null}</div>;
+  return <div ref={sentinelRef} className="content-prefetch-sentinel" aria-live="polite">{error ? <div className="content-retry" role="alert"><p>{error}</p><button type="button" onClick={onLoad}>重试读取</button></div> : loading ? "正在准备后续内容…" : null}</div>;
 }
 
 function ContentLimitNotice() {
@@ -597,7 +667,7 @@ function PasswordForm({ onSubmit, error, loading }: { onSubmit: (value: string) 
 
 type TocItem = { id: string; label: string; level: number };
 
-function Blocks({ blocks, onOpenChild, databaseContext, breadcrumb = [] }: { blocks: ContentBlock[]; onOpenChild: (pageId: string, accessSignature?: string) => void; databaseContext?: DatabaseContext; breadcrumb?: string[] }) {
+function Blocks({ blocks, onOpenChild, databaseContext, breadcrumb = [] }: { blocks: ContentBlock[]; onOpenChild: OpenChild; databaseContext?: DatabaseContext; breadcrumb?: string[] }) {
   const output: ReactNode[] = [];
   for (let index = 0; index < blocks.length;) {
     const block = blocks[index];
@@ -615,9 +685,9 @@ function Blocks({ blocks, onOpenChild, databaseContext, breadcrumb = [] }: { blo
   return <>{output}</>;
 }
 
-function Rich({ value = [], onOpenChild }: { value?: ContentBlock["richText"]; onOpenChild: (pageId: string, accessSignature?: string) => void }) {
+function Rich({ value = [], onOpenChild }: { value?: ContentBlock["richText"]; onOpenChild: OpenChild }) {
   return <>{value?.map((item, index) => {
-    let node = <>{item.text}</>;
+    let node = item.equation ? <EquationBlock expression={item.equation} inline /> : <>{item.text}</>;
     if (item.code) node = <code>{node}</code>;
     if (item.bold) node = <strong>{node}</strong>;
     if (item.italic) node = <em>{node}</em>;
@@ -697,38 +767,62 @@ function NotionImage({ src, alt, caption }: { src: string; alt: string; caption?
   return <figure><img src={src} alt={alt} loading="lazy" decoding="async" />{caption ? <figcaption>{caption}</figcaption> : null}</figure>;
 }
 
-function EquationBlock({ expression }: { expression: string }) {
+function EquationBlock({ expression, inline = false }: { expression: string; inline?: boolean }) {
   const [html, setHtml] = useState("");
   useEffect(() => {
     let active = true;
     Promise.all([import("katex/dist/katex.min.css"), import("katex")]).then(([, { default: katex }]) => {
-      if (active) setHtml(katex.renderToString(expression, { throwOnError: false, strict: "ignore", trust: false, displayMode: true }));
+      if (active) setHtml(katex.renderToString(expression, { throwOnError: false, strict: "ignore", trust: false, displayMode: !inline }));
     }).catch(() => undefined);
     return () => { active = false; };
-  }, [expression]);
-  return <div className="equation" aria-label={`数学公式：${expression}`}>{html ? <span dangerouslySetInnerHTML={{ __html: html }} /> : expression}</div>;
+  }, [expression, inline]);
+  const Tag = inline ? "span" : "div";
+  return <Tag className={inline ? "equation-inline" : "equation"} aria-label={`数学公式：${expression}`}>{html ? <span dangerouslySetInnerHTML={{ __html: html }} /> : expression}</Tag>;
 }
 
-function ChildDatabaseBlock({ block, context }: { block: ContentBlock; context: DatabaseContext }) {
+function NotionVideo({ block, className }: { block: ContentBlock; className: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!block.url) return null;
+  const embed = videoEmbedUrl(block.url);
+  return <figure className={`${className} notion-media`}>
+    {embed ? <iframe src={embed} title={block.caption || "视频"} loading="lazy" allow="fullscreen; encrypted-media; picture-in-picture" allowFullScreen sandbox="allow-scripts allow-same-origin allow-presentation" /> : failed ? <p role="status">浏览器暂时无法播放这个视频。</p> : <video src={block.url} controls preload="metadata" onError={() => setFailed(true)} />}
+    <a className="media-source-link" href={block.url} target="_blank" rel="noreferrer">打开视频来源<ArrowSquareOut aria-hidden size={15} /></a>
+    {block.caption ? <figcaption>{block.caption}</figcaption> : null}
+  </figure>;
+}
+
+function ChildDatabaseBlock({ block, context, onOpenChild }: { block: ContentBlock; context: DatabaseContext; onOpenChild: OpenChild }) {
   const [database, setDatabase] = useState<ChildDatabase>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const load = async () => {
-    if (loading || !block.databaseId) return;
+  const inFlight = useRef(false);
+  const seenCursors = useRef(new Set<string>());
+  const load = useCallback(async (cursor?: string) => {
+    if (inFlight.current || !block.databaseId) return;
+    inFlight.current = true;
     setLoading(true); setError("");
     try {
-      const response = await fetch("/api/content/database", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...context, databaseId: block.databaseId }) });
+      const response = await fetch("/api/content/database", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...context, databaseId: block.databaseId, ...(cursor ? { cursor } : {}) }) });
       const value = await response.json();
       if (!response.ok) throw new Error(value.error || "数据库读取失败");
-      setDatabase(value.database);
+      const page: ChildDatabase = value.database;
+      if (cursor) recordContinuationCursor(seenCursors.current, cursor, page.nextCursor);
+      else seenCursors.current.clear();
+      setDatabase((previous) => cursor && previous ? { ...page, rows: [...previous.rows, ...page.rows.filter((row) => !previous.rows.some((old) => old.id === row.id))] } : page);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "数据库读取失败"); }
-    finally { setLoading(false); }
-  };
+    finally { inFlight.current = false; setLoading(false); }
+  }, [block.databaseId, context]);
+  useEffect(() => {
+    if (!database?.nextCursor || loading || error) return;
+    const cursor = database.nextCursor;
+    const timer = window.setTimeout(() => void load(cursor), 80);
+    return () => window.clearTimeout(timer);
+  }, [database?.nextCursor, error, load, loading]);
   if (!database) return <div className="notion-child-database"><button type="button" onClick={() => void load()} disabled={loading}><FileText aria-hidden size={18} /><span><small>NOTION DATABASE</small><strong>{block.caption || "子数据库"}</strong></span><CaretRight aria-hidden size={16} /></button>{error ? <p role="alert">{error}</p> : null}</div>;
-  return <section className="notion-child-database is-open"><header><small>NOTION DATABASE</small><h3>{database.title}</h3></header><div className="notion-database-grid">{database.rows.map((row) => <article key={row.id}><h4>{row.icon ? <span aria-hidden>{row.icon}</span> : null}{row.title}</h4>{row.fields.map((field) => <p key={field.name}><small>{field.name}</small><span>{field.value}</span></p>)}</article>)}</div>{error ? <p role="alert">{error}</p> : null}</section>;
+  return <section className="notion-child-database is-open"><header><small>NOTION DATABASE</small><h3>{database.title}</h3></header><div className="notion-database-grid">{database.rows.map((row) => <article key={row.id}><h4>{row.href ? <a href={row.href}>{row.icon ? <span aria-hidden>{row.icon}</span> : null}{row.title}</a> : <button type="button" onClick={() => onOpenChild(row.id, undefined, true, context.trail)}>{row.icon ? <span aria-hidden>{row.icon}</span> : null}{row.title}</button>}</h4>{row.fields.map((field) => <p key={field.name}><small>{field.name}</small><span>{field.value}</span></p>)}</article>)}</div>{loading ? <p role="status">正在读取后续条目…</p> : null}{error ? <div className="content-retry" role="alert"><p>{error}</p><button type="button" onClick={() => void load(database.nextCursor || undefined)}>重试读取</button></div> : null}</section>;
 }
 
-function Block({ block, onOpenChild, databaseContext, breadcrumb }: { block: ContentBlock; onOpenChild: (pageId: string, accessSignature?: string) => void; databaseContext?: DatabaseContext; breadcrumb: string[] }) {
+function Block({ block, onOpenChild, databaseContext, breadcrumb }: { block: ContentBlock; onOpenChild: OpenChild; databaseContext?: DatabaseContext; breadcrumb: string[] }) {
   const children = block.children?.length ? <Blocks blocks={block.children} onOpenChild={onOpenChild} databaseContext={databaseContext} breadcrumb={breadcrumb} /> : null;
   const className = block.color ? `notion-block notion-color-${block.color}` : "notion-block";
   switch (block.type) {
@@ -745,12 +839,12 @@ function Block({ block, onOpenChild, databaseContext, breadcrumb }: { block: Con
     case "image": return block.url ? <NotionImage src={block.url} alt={block.caption || "文章图片"} caption={block.caption} /> : null;
     case "bookmark": return <BookmarkCard block={block} className={className} />;
     case "embed": return block.url ? <figure className={`${className} notion-embed`}><iframe src={block.url} title={block.caption || "Notion 嵌入内容"} loading="lazy" allowFullScreen sandbox="allow-forms allow-popups allow-same-origin allow-scripts" />{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
-    case "video": return block.url ? <figure className={`${className} notion-media`}><video src={block.url} controls preload="metadata">浏览器无法播放这个视频。</video>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
+    case "video": return <NotionVideo block={block} className={className} />;
     case "audio": return block.url ? <figure className={`${className} notion-media notion-audio`}><audio src={block.url} controls preload="metadata">浏览器无法播放这段音频。</audio>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
     case "pdf": return block.url ? <figure className={`${className} notion-pdf`}><iframe src={block.url} title={block.caption || "PDF 文档"} loading="lazy" /><a href={block.url} target="_blank" rel="noreferrer">在新窗口打开 PDF<ArrowSquareOut aria-hidden size={15} /></a>{block.caption ? <figcaption>{block.caption}</figcaption> : null}</figure> : null;
     case "file": return block.url ? <a className="bookmark" href={block.url} target="_blank" rel="noreferrer"><span><strong>{block.caption || "下载附件"}</strong><small>{bookmarkSource(block.url)}</small></span><ArrowSquareOut aria-hidden size={16} /></a> : null;
     case "child_page": return block.pageId ? <a className={`${className} notion-child-page`} href={`?child=${encodeURIComponent(block.pageId)}`} onClick={(event) => { event.preventDefault(); onOpenChild(block.pageId!, block.accessSignature); }}>{block.icon ? <span className="notion-child-page-icon" aria-hidden>{block.icon}</span> : null}<strong>{block.caption || "子页面"}</strong><CaretRight aria-hidden size={16} /></a> : null;
-    case "child_database": return block.databaseId && databaseContext ? <ChildDatabaseBlock block={block} context={databaseContext} /> : null;
+    case "child_database": return block.databaseId && databaseContext ? <ChildDatabaseBlock block={block} context={databaseContext} onOpenChild={onOpenChild} /> : null;
     case "equation": return <EquationBlock expression={block.caption || ""} />;
     case "table": return <div className="notion-table" role="table">{children}</div>;
     case "table_row": return <div className="notion-table-row" role="row">{block.children?.map((cell, index) => <div role="cell" key={`${block.id}-${index}`}><Rich value={cell.richText} onOpenChild={onOpenChild} /></div>)}</div>;

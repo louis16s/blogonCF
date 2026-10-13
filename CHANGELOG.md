@@ -2,6 +2,22 @@
 
 All notable changes to blogonCF are documented here. Versions follow Semantic Versioning.
 
+## [1.1.2] - 2026-10-13
+
+### Fixed
+
+- Unified password protection for Post and Page bodies, children, databases, media, and SSR. Unlock sessions now bind the canonical page ID and current password.
+- Revalidated publication/password metadata before returning public content snapshots. Search and word cloud filter stale indexes against current public metadata; readers receive no-store responses.
+- Stopped automatic continuation requests after a failure and added explicit retry controls. Removed duplicate HTML preloads while retaining the article-opening animation.
+- Recovered failed empty search-index entries during incremental and full synchronization.
+- Added child-database pagination and on-site entry navigation, published Notion cross-links, inline equations, and safe YouTube/Vimeo players with source links.
+- Separated long-article heading indexing from the first body response, bounded each directory batch, and retained progress when D1 checkpoint storage is unavailable.
+- Updated vulnerable dependencies. A narrowly scoped, expiring exception remains for the unpatched build-time braces advisory.
+
+### Verification
+
+- Added runtime regression tests for protected Pages, credential rotation, cache revocation, index recovery, continuation failures, database pagination, formulas, videos, and navigation restoration.
+
 ## [1.1.1] - 2026-10-07
 
 ### Improved

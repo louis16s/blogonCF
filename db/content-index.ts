@@ -20,7 +20,7 @@ export type IndexedContentDocument = {
   partial: boolean;
 };
 
-type ContentIndexVersion = { page_id: string; last_edited_time: string; locked: number };
+export type ContentIndexVersion = { page_id: string; last_edited_time: string; locked: number; retryable?: number };
 
 type AllCapableStatement = { all<T>(): Promise<{ results?: T[] }> };
 
@@ -54,7 +54,7 @@ export async function hasContentIndex(db: PasswordRateLimitDatabase | undefined,
 export async function readContentIndexVersions(db: PasswordRateLimitDatabase | undefined, sourceKey: string): Promise<ContentIndexVersion[]> {
   if (!db) return [];
   return all<ContentIndexVersion>(db,
-    "SELECT page_id, last_edited_time, locked FROM content_index WHERE source_key = ?1",
+    "SELECT page_id, last_edited_time, locked, (partial = 1 AND body = '' AND search_body = '' AND is_public = 1) AS retryable FROM content_index WHERE source_key = ?1",
     sourceKey,
   );
 }
@@ -71,12 +71,19 @@ export async function readContentIndexVersionsForPages(
     const chunk = pageIds.slice(start, start + 80);
     const placeholders = chunk.map((_, index) => `?${index + 2}`).join(", ");
     versions.push(...await all<ContentIndexVersion>(db,
-      `SELECT page_id, last_edited_time, locked FROM content_index WHERE source_key = ?1 AND page_id IN (${placeholders})`,
+      `SELECT page_id, last_edited_time, locked, (partial = 1 AND body = '' AND search_body = '' AND is_public = 1) AS retryable FROM content_index WHERE source_key = ?1 AND page_id IN (${placeholders})`,
       sourceKey,
       ...chunk,
     ));
   }
   return versions;
+}
+
+export async function readFailedContentIndexVersions(db: PasswordRateLimitDatabase, sourceKey: string): Promise<ContentIndexVersion[]> {
+  return all<ContentIndexVersion>(db,
+    "SELECT page_id, last_edited_time, locked, 1 AS retryable FROM content_index WHERE source_key = ?1 AND partial = 1 AND body = '' AND search_body = '' AND is_public = 1 ORDER BY updated_at ASC LIMIT 20",
+    sourceKey,
+  );
 }
 
 export async function writeContentIndex(

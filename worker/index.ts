@@ -62,7 +62,10 @@ const publicCorpusCache = new Map<string, { expiresAt: number; corpus?: PublicCo
 const siteBootstrapCache = new Map<string, { freshUntil: number; staleUntil: number; payload?: HomePayload; pending?: Promise<HomePayload> }>();
 const headingIndexCache = new Map<string, { expiresAt: number; headings?: HeadingSummary[]; pending?: Promise<HeadingSummary[]> }>();
 const headingJobCache = new Map<string, HeadingIndexJob>();
+const headingBatches = new Map<string, Promise<{ complete: boolean; headings: HeadingSummary[] }>>();
 const configRowsCache = new Map<string, { expiresAt: number; rows?: NotionConfigPage[]; pending?: Promise<NotionConfigPage[]> }>();
+const publicResponseLoads = new Map<string, Promise<Response>>();
+const publishedPageLookups = new Map<string, Promise<any | null>>();
 
 type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "d1" | "notion" };
 type SearchDocument = ReturnType<typeof toPost> & { body: string; searchBody: string };
@@ -107,7 +110,7 @@ const worker = {
       });
     }
     if (url.pathname === "/api/content/rss-feeds" && request.method === "GET") {
-      return cachedPublicApi(request, env, ctx, `rss-feeds:${url.searchParams.get("slug") || ""}`, 300, () => notionExternalRss(env, url));
+      return cachedPublicApi(request, env, ctx, `rss-feeds:${url.searchParams.get("slug") || ""}`, 300, (page) => notionExternalRss(env, url, page));
     }
     if (url.pathname === "/api/content/link-preview" && request.method === "GET") return externalLinkPreview(url, request, env.NOTION_TOKEN, env.DB);
     if (url.pathname === "/api/content/word-cloud" && request.method === "GET") {
@@ -124,12 +127,14 @@ const worker = {
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
       const slug = decodeRouteSegment(url.pathname.slice("/api/content/post/".length));
       return request.method === "GET"
-        ? cachedPublicContent(request, env, ctx, "post", slug, () => notionPost(env, slug, request))
+        ? cachedPublicContent(request, env, ctx, "post", slug, (page) => notionPost(env, slug, request, "post", page))
         : notionPost(env, slug, request);
     }
-    if (url.pathname.startsWith("/api/content/page/") && request.method === "GET") {
+    if (url.pathname.startsWith("/api/content/page/") && ["GET", "POST"].includes(request.method)) {
       const slug = decodeRouteSegment(url.pathname.slice("/api/content/page/".length));
-      return cachedPublicContent(request, env, ctx, "page", slug, () => notionSitePage(env, slug, request));
+      return request.method === "GET"
+        ? cachedPublicContent(request, env, ctx, "page", slug, (page) => notionPost(env, slug, request, "page", page))
+        : notionPost(env, slug, request, "page");
     }
     if (url.pathname === "/api/health" && (request.method === "GET" || request.method === "HEAD")) {
       return withHead(request, Response.json({ ok: true, notionConfigured: Boolean(env.NOTION_TOKEN) }, { headers: { ...jsonHeaders, "cache-control": "no-store" } }));
@@ -160,7 +165,7 @@ const worker = {
         const rendered = await handler.fetch(new Request(request, { headers }), env, ctx);
         const status = payload.status && payload.status >= 400 && rendered.status < 400 ? payload.status : rendered.status;
         const responseHeaders = new Headers(rendered.headers);
-        responseHeaders.set("cache-control", renderedCacheControl(request, payload.status, Boolean(payload.post?.locked)));
+        responseHeaders.set("cache-control", payload.post?.locked ? "private, no-store" : "no-store");
         return secureDocumentResponse(new Response(rendered.body, { status, headers: responseHeaders }), url);
       }
       finally { clearArticlePayload(key); }
@@ -177,7 +182,7 @@ const worker = {
         const rendered = await handler.fetch(new Request(request, { headers }), env, ctx);
         const status = payload.status && payload.status >= 400 && rendered.status < 400 ? payload.status : rendered.status;
         const responseHeaders = new Headers(rendered.headers);
-        responseHeaders.set("cache-control", renderedCacheControl(request, payload.status));
+        responseHeaders.set("cache-control", payload.post?.locked ? "private, no-store" : "no-store");
         return secureDocumentResponse(new Response(rendered.body, { status, headers: responseHeaders }), url);
       }
       finally { clearArticlePayload(key); }
@@ -240,6 +245,10 @@ async function refreshContentIndex(env: Env, forceFullReconciliation = false): P
       forceFullReconciliation,
       queryPublishedPosts: () => queryPosts(env, undefined, 100),
       queryChangedPages: (editedAfter) => queryChangedContentPages(env, editedAfter),
+      queryPage: (id) => notionFetch(env, `/pages/${id}`).catch((reason) => {
+        if (reason instanceof Error && reason.message.includes("Notion 404")) return null;
+        throw reason;
+      }),
       buildDocument: (page) => buildIndexedDocument(env, page),
     });
   } catch (reason) {
@@ -261,7 +270,7 @@ async function refreshExternalFeeds(env: Env): Promise<void> {
   const config = await queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig());
   if (!config.rssEnabled) return;
   const pages = await querySitePages(env, undefined, 100);
-  const candidates = pages.filter((page) => /资讯|news|links/i.test(`${plain(page.properties?.slug)} ${title(page.properties?.title)}`));
+  const candidates = pages.filter((page) => !plain(page.properties?.password) && /资讯|news|links/i.test(`${plain(page.properties?.slug)} ${title(page.properties?.title)}`));
   for (const page of candidates.slice(0, 4)) {
     try {
       const state = newBlockReadState();
@@ -416,7 +425,6 @@ async function notionMedia(request: Request, env: Env): Promise<Response> {
   const suppliedSignature = requestUrl.searchParams.get("signature") || "";
   if (!blockId || !rootPageId || !ownerPageId || privateSlug.length > 180 || rootVersion.length > 80 || ownerVersion.length > 80) return error(400, "Invalid media request");
   if (!await verifyMediaAccessSignature(env.NOTION_TOKEN, rootPageId, ownerPageId, blockId, rootVersion, ownerVersion, expiresAt, privateSlug, suppliedSignature)) return error(403, "Media URL is not authorized");
-  if (privateSlug && !await hasUnlockSession(request, env.NOTION_TOKEN, privateSlug)) return error(403, "请先解锁父文章");
   try {
     const [rootPage, ownerPage, block] = await Promise.all([
       notionFetch(env, `/pages/${rootPageId}`),
@@ -427,7 +435,7 @@ async function notionMedia(request: Request, env: Env): Promise<Response> {
     if (rootPage?.object !== "page" || rootPage.archived || rootPage.in_trash || rootPage.last_edited_time !== rootVersion) return error(404, "Media parent is no longer available");
     if (!isPublishedContentPage(rootPage)) return error(403, "Media parent is not published");
     if (privateSlug) {
-      if (plain(rootPage.properties?.slug) !== privateSlug || !plain(rootPage.properties?.password)) return error(403, "Media parent does not match the unlock session");
+      if (!plain(rootPage.properties?.password) || !await hasPageUnlockSession(env, request, rootPage)) return error(403, "请先解锁父页面");
     } else if (plain(rootPage.properties?.password)) return error(403, "Media parent requires an unlock session");
     if (resolvedOwner?.object !== "page" || resolvedOwner.archived || resolvedOwner.in_trash || resolvedOwner.last_edited_time !== ownerVersion) return error(404, "Media owner is no longer available");
     if (ownerPageId !== rootPageId) {
@@ -468,7 +476,7 @@ async function notionMedia(request: Request, env: Env): Promise<Response> {
     const headers = new Headers(output.headers);
     headers.set("cache-control", privateSlug
       ? "private, no-store"
-      : "public, max-age=300, stale-while-revalidate=86400");
+      : "no-store");
     headers.set("x-content-type-options", "nosniff");
     if (block.type === "file") {
       const filename = decodeURIComponent(source.pathname.split("/").pop() || "attachment").replace(/[\r\n"\\]/g, "_").slice(0, 160) || "attachment";
@@ -484,7 +492,7 @@ async function notionMedia(request: Request, env: Env): Promise<Response> {
 
 async function articlePayloadForRender(env: Env, slug: string, request: Request, ctx: ExecutionContext): Promise<ArticlePayload> {
   const [response, config] = await Promise.all([
-    cachedPublicContent(request, env, ctx, "post", slug, () => notionPost(env, slug, new Request(request.url, { headers: request.headers }))),
+    cachedPublicContent(request, env, ctx, "post", slug, (page) => notionPost(env, slug, new Request(request.url, { headers: request.headers }), "post", page)),
     queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig()),
   ]);
   const payload = await response.json().catch(() => ({ error: "文章暂时无法读取" })) as ArticlePayload;
@@ -493,7 +501,7 @@ async function articlePayloadForRender(env: Env, slug: string, request: Request,
 
 async function sitePagePayloadForRender(env: Env, slug: string, request: Request, ctx: ExecutionContext): Promise<ArticlePayload> {
   const [response, config] = await Promise.all([
-    cachedPublicContent(request, env, ctx, "page", slug, () => notionSitePage(env, slug, new Request(`https://internal.invalid/api/content/page/${encodeURIComponent(slug)}`))),
+    cachedPublicContent(request, env, ctx, "page", slug, (page) => notionPost(env, slug, new Request(request.url, { headers: request.headers }), "page", page)),
     queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig()),
   ]);
   const payload = await response.json().catch(() => ({ error: "页面暂时无法读取" })) as ArticlePayload;
@@ -603,12 +611,27 @@ async function cachedPublicApi(
   ctx: ExecutionContext,
   namespace: string,
   maxAgeSeconds: number,
-  load: () => Promise<Response>,
+  load: (page?: any) => Promise<Response>,
 ): Promise<Response> {
+  // A fresh metadata projection gates durable corpus snapshots. Queries do
+  // not expose previously-public text after a password/publication change.
+  if (["search", "word-cloud"].includes(namespace)) return coalescedResponse(`${env.NOTION_TOKEN}:${namespace}:${request.url}`, load);
   const cache = defaultWorkerCache();
   // Keep unit tests and local Miniflare behavior identical when Cache API is
   // unavailable; production Workers have the default cache binding enabled.
   if (!cache) return load();
+
+  let pageVersion = "";
+  let rssPage: any;
+  if (namespace.startsWith("rss-feeds:")) {
+    try {
+      const page = await findSitePage(env, new URL(request.url).searchParams.get("slug") || "");
+      if (!page) return error(404, "Page not found");
+      if (plain(page.properties?.password)) return error(403, "Private pages cannot expose RSS sources");
+      pageVersion = page.last_edited_time || "";
+      rssPage = page;
+    } catch (reason) { return notionError(reason); }
+  }
 
   const keyUrl = new URL(request.url);
   const canonical = publicSiteOrigin(env, keyUrl);
@@ -621,8 +644,9 @@ async function cachedPublicApi(
   keyUrl.search = "";
   if (namespace === "search") keyUrl.searchParams.set("q", query);
   if (namespace.startsWith("rss-feeds:") && slug) keyUrl.searchParams.set("slug", slug);
-  keyUrl.searchParams.set("schema", "1");
+  keyUrl.searchParams.set("schema", "2");
   keyUrl.searchParams.set("cache", namespace);
+  if (pageVersion) keyUrl.searchParams.set("version", pageVersion);
   const resolvedDataSourceId = env.NOTION_TOKEN
     ? await resolveContentDataSourceId(env).catch(() => env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID)
     : env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID;
@@ -633,11 +657,12 @@ async function cachedPublicApi(
   if (cached) {
     const headers = new Headers(cached.headers);
     headers.set("x-blog-cache", "hit");
+    if (namespace.startsWith("rss-feeds:")) headers.set("cache-control", "no-store");
     return new Response(cached.body, { status: cached.status, headers });
   }
 
-  const response = await load();
-  if (!response.ok) return response;
+  const response = await coalescedResponse(`${env.NOTION_TOKEN}:${key.url}`, () => load(rssPage));
+  if (!response.ok || (!namespace.startsWith("rss-feeds:") && response.headers.get("cache-control")?.includes("no-store"))) return response;
   const headers = new Headers(response.headers);
   headers.set("cache-control", `public, max-age=${maxAgeSeconds}, stale-while-revalidate=86400`);
   headers.set("x-blog-cache", "miss");
@@ -645,6 +670,11 @@ async function cachedPublicApi(
   ctx.waitUntil(cache.put(key, cacheable.clone()).catch((reason) => {
     console.warn(reason instanceof Error ? reason.message : "Public API cache write failed");
   }));
+  if (namespace.startsWith("rss-feeds:")) {
+    const outgoing = new Headers(headers);
+    outgoing.set("cache-control", "no-store");
+    return new Response(cacheable.body, { status: cacheable.status, headers: outgoing });
+  }
   return cacheable;
 }
 
@@ -654,10 +684,16 @@ async function cachedPublicContent(
   ctx: ExecutionContext,
   kind: "post" | "page",
   slug: string,
-  load: () => Promise<Response>,
+  load: (page?: any) => Promise<Response>,
 ): Promise<Response> {
   const cache = defaultWorkerCache();
   if (!cache || request.method !== "GET") return load();
+  let page: any;
+  try {
+    page = await (kind === "page" ? findSitePage(env, slug) : findPost(env, slug));
+    if (!page) return error(404, "Page not found");
+  } catch (reason) { return notionError(reason); }
+  if (plain(page.properties?.password) || urlBoolean(new URL(request.url), "headings")) return load(page);
   const requestUrl = new URL(request.url);
   const canonical = publicSiteOrigin(env, requestUrl);
   const keyUrl = new URL(`/__blog-cache/content/${kind}/${encodeURIComponent(slug)}`, canonical);
@@ -666,7 +702,8 @@ async function cachedPublicContent(
   // Bump the content-cache namespace when the Notion block/TOC contract
   // changes. Otherwise an edge may keep serving a pre-TOC JSON snapshot for
   // up to the stale-while-revalidate window after headings are added.
-  keyUrl.searchParams.set("schema", "3");
+  keyUrl.searchParams.set("schema", "4");
+  keyUrl.searchParams.set("version", page.last_edited_time || "unversioned");
   const resolvedDataSourceId = env.NOTION_TOKEN
     ? await resolveContentDataSourceId(env).catch(() => env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID)
     : env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID;
@@ -677,10 +714,11 @@ async function cachedPublicContent(
   if (cached) {
     const headers = new Headers(cached.headers);
     headers.set("x-blog-cache", "hit");
+    headers.set("cache-control", "no-store");
     return new Response(cached.body, { status: cached.status, headers });
   }
 
-  const response = await load();
+  const response = await coalescedResponse(`${env.NOTION_TOKEN}:${key.url}`, () => load(page));
   if (!response.ok) return response;
   const payload = await response.clone().json().catch(() => null) as ArticlePayload | null;
   // An unlocked private response still carries post.locked=true. Neither it
@@ -688,13 +726,25 @@ async function cachedPublicContent(
   if (!payload || payload.locked !== false || payload.post?.locked) return response;
   const headers = new Headers(response.headers);
   headers.delete("set-cookie");
-  headers.set("cache-control", "public, max-age=300, stale-while-revalidate=86400");
+  headers.set("cache-control", "public, max-age=300");
   headers.set("x-blog-cache", "miss");
   const cacheable = new Response(response.body, { status: response.status, headers });
   ctx.waitUntil(cache.put(key, cacheable.clone()).catch((reason) => {
     console.warn(reason instanceof Error ? reason.message : "Public content cache write failed");
   }));
-  return cacheable;
+  const outgoing = new Headers(headers);
+  outgoing.set("cache-control", "no-store");
+  return new Response(cacheable.body, { status: cacheable.status, headers: outgoing });
+}
+
+async function coalescedResponse(key: string, load: () => Promise<Response>): Promise<Response> {
+  let pending = publicResponseLoads.get(key);
+  if (!pending) {
+    pending = load();
+    publicResponseLoads.set(key, pending);
+    void pending.finally(() => { if (publicResponseLoads.get(key) === pending) publicResponseLoads.delete(key); }).catch(() => undefined);
+  }
+  return (await pending).clone();
 }
 
 async function cachedConfigAsset(request: Request, env: Env, ctx: ExecutionContext, load: () => Promise<Response>): Promise<Response> {
@@ -796,22 +846,26 @@ async function notionWordCloud(env: Env, ctx?: ExecutionContext): Promise<Respon
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   const config = await queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig());
   if (!config.wordCloudEnabled) return error(404, "Word cloud is disabled");
-  const cacheKey = await contentIndexSourceKey(env);
+  const livePages = (await queryPosts(env)).filter((page) => !plain(page.properties?.password));
+  const revision = livePages.map((page) => `${page.id}:${page.last_edited_time || ""}`).sort().join("|");
+  const cacheKey = `${await contentIndexSourceKey(env)}:${revision}`;
   const cached = wordCloudCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
-    return Response.json(cached.payload, { headers: { ...jsonHeaders, "cache-control": "public, max-age=900, stale-while-revalidate=86400" } });
+    return Response.json(cached.payload, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   }
 
   try {
     const corpus = await getPublicCorpus(env, ctx);
+    const allowed = new Set(livePages.map((page) => normalizeNotionId(page.id) || page.id));
+    const documents = corpus.documents.filter((doc) => allowed.has(normalizeNotionId(doc.id) || doc.id));
     const payload: WordCloudPayload = {
-      words: buildWordCloud(corpus.documents.map(({ id, title, body }) => ({ id, title, body }))),
-      sourceCount: corpus.documents.length,
+      words: buildWordCloud(documents.map(({ id, title, body }) => ({ id, title, body }))),
+      sourceCount: documents.length,
       partial: corpus.partial,
       source: corpus.source,
     };
     setBoundedMap(wordCloudCache, cacheKey, { expiresAt: Date.now() + WORD_CLOUD_CACHE_TTL_MS, payload }, 8);
-    return Response.json(payload, { headers: { ...jsonHeaders, "cache-control": "public, max-age=900, stale-while-revalidate=86400" } });
+    return Response.json(payload, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -823,8 +877,10 @@ async function notionSearch(env: Env, url: URL, ctx?: ExecutionContext): Promise
   if (!query) return Response.json({ matches: [], partial: false, source: "index" }, { headers: { ...jsonHeaders, "cache-control": "public, max-age=60" } });
   if (query.length > 100) return error(400, "Search query is too long");
   try {
-    const corpus = await getPublicCorpus(env, ctx);
+    const [corpus, livePages] = await Promise.all([getPublicCorpus(env, ctx), queryPosts(env)]);
+    const allowed = new Set(livePages.filter((page) => !plain(page.properties?.password)).map((page) => normalizeNotionId(page.id) || page.id));
     const matches = corpus.documents
+      .filter((document) => allowed.has(normalizeNotionId(document.id) || document.id))
       .filter((document) => normalizeSearchText([
         document.title,
         document.summary,
@@ -833,25 +889,26 @@ async function notionSearch(env: Env, url: URL, ctx?: ExecutionContext): Promise
         document.searchBody,
       ].join("\n")).includes(query))
       .map((document) => document.id);
-    return Response.json({ matches, partial: corpus.partial, source: corpus.source }, { headers: { ...jsonHeaders, "cache-control": "public, max-age=120, stale-while-revalidate=600" } });
+    return Response.json({ matches, partial: corpus.partial, source: corpus.source }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
 
-async function notionExternalRss(env: Env, url: URL): Promise<Response> {
+async function notionExternalRss(env: Env, url: URL, resolvedPage?: any): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   const config = await queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig());
   if (!config.rssEnabled) return error(404, "RSS is disabled");
   const slug = url.searchParams.get("slug") || "";
   if (!slug || slug.length > 180) return error(400, "Invalid page slug");
   try {
-    const page = await findSitePage(env, slug);
+    const page = resolvedPage || await findSitePage(env, slug);
     if (!page) return error(404, "Page not found");
+    if (plain(page.properties?.password)) return error(403, "Private pages cannot expose RSS sources");
     const state = newBlockReadState();
     const blocks = await getBlockChildren(env, page.id, state, 0);
     const urls = extractExternalUrls(blocks).slice(0, MAX_RSS_FEEDS);
     const feeds = (await mapWithConcurrency(urls, 3, (feedUrl) => fetchExternalFeed(feedUrl, env.DB)))
       .filter((feed): feed is ExternalFeed => Boolean(feed));
-    return Response.json({ feeds, partial: state.truncated, source: "notion" }, { headers: publicContentHeaders });
+    return Response.json({ feeds, partial: state.truncated, source: "notion" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -886,13 +943,13 @@ async function getPublicCorpus(env: Env, ctx?: ExecutionContext): Promise<Public
       } catch (reason) {
         partial = true;
         console.warn(reason instanceof Error ? reason.message : "Public article index read failed");
-        return { document: { ...toPost(page), body: "", searchBody: "", partial: true }, lastEditedTime: typeof page.last_edited_time === "string" ? page.last_edited_time : "" };
+        return { document: { ...toPost(page), body: "", searchBody: "", partial: true }, lastEditedTime: "", failed: true };
       }
     });
     const documents = indexedDocuments.map(({ document }) => document);
     const corpus = { documents, partial, source: "notion" as const };
     if (env.DB) {
-      const persist = Promise.all(indexedDocuments.map(({ document, lastEditedTime }) => writeContentIndex(
+      const persist = Promise.all(indexedDocuments.filter((item) => !("failed" in item && item.failed)).map(({ document, lastEditedTime }) => writeContentIndex(
         env.DB,
         sourceKey,
         document.id,
@@ -920,7 +977,11 @@ async function getPublicCorpus(env: Env, ctx?: ExecutionContext): Promise<Public
   }
 }
 
-async function notionPost(env: Env, slug: string, request: Request): Promise<Response> {
+async function hasPageUnlockSession(env: Env, request: Request, page: any): Promise<boolean> {
+  return Boolean(env.NOTION_TOKEN) && hasUnlockSession(request, env.NOTION_TOKEN!, normalizeNotionId(page.id) || page.id, plain(page.properties?.password));
+}
+
+async function notionPost(env: Env, slug: string, request: Request, kind: "post" | "page" = "post", resolvedPage?: any): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   if (!slug || slug.length > 180) return error(400, "Invalid article slug");
   const requestedCursor = new URL(request.url).searchParams.get("cursor");
@@ -939,12 +1000,17 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
     if (!attempt.allowed) return Response.json({ error: "尝试次数过多，请稍后再试" }, { status: 429, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(attempt.retryAfter) } });
   }
   try {
-    const page = await findPost(env, slug);
+    const page = resolvedPage || await (kind === "page" ? findSitePage(env, slug) : findPost(env, slug));
     if (!page) return error(404, "Article not found");
-    const post = toPost(page);
+    const post = kind === "page" ? toSitePagePost(page) : toPost(page);
     const expectedPassword = plain(page.properties?.password);
+    if (urlBoolean(new URL(request.url), "headings")) {
+      if (expectedPassword && !await hasPageUnlockSession(env, request, page)) return error(403, "请先解锁页面");
+      const index = await advanceHeadingIndex(env, page.id, page.last_edited_time || "");
+      return Response.json({ headings: index.headings }, { status: index.complete ? 200 : 202, headers: { ...jsonHeaders, "cache-control": "no-store", ...(index.complete ? {} : { "retry-after": "1" }) } });
+    }
     if (expectedPassword) {
-      const sessionUnlocked = await hasUnlockSession(request, env.NOTION_TOKEN, slug);
+      const sessionUnlocked = await hasPageUnlockSession(env, request, page);
       let supplied = "";
       if (!sessionUnlocked && request.method === "POST") {
         supplied = suppliedPassword;
@@ -958,24 +1024,24 @@ async function notionPost(env: Env, slug: string, request: Request): Promise<Res
       }
       if (env.DB) await clearPasswordAttempts(env.DB, attemptKey);
       const blockState = newBlockReadState();
-      const { chunk, headings } = await readArticleChunk(env, page.id, blockState, cursor);
+      const { chunk, headings, headingsPending } = await readArticleChunk(env, page.id, blockState, cursor, page.last_edited_time || "");
       await Promise.all([
         attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN),
         attachChildAccessSignatures(chunk.blocks, env, page.id),
         attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page, page, slug),
       ]);
       const headers = new Headers({ ...jsonHeaders, "cache-control": "no-store" });
-      if (!sessionUnlocked) headers.append("set-cookie", await createUnlockCookie(env.NOTION_TOKEN, slug, request.url));
-      return Response.json({ post: { ...post, locked: true }, locked: false, blocks: chunk.blocks, headings, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers });
+      if (!sessionUnlocked) headers.append("set-cookie", await createUnlockCookie(env.NOTION_TOKEN, normalizeNotionId(page.id) || page.id, request.url, expectedPassword));
+      return Response.json({ post: { ...post, locked: true }, locked: false, blocks: chunk.blocks, headings, headingsPending, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers });
     }
     const blockState = newBlockReadState();
-    const { chunk, headings } = await readArticleChunk(env, page.id, blockState, cursor);
+    const { chunk, headings, headingsPending } = await readArticleChunk(env, page.id, blockState, cursor, page.last_edited_time || "");
     await Promise.all([
       attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN),
       attachChildAccessSignatures(chunk.blocks, env, page.id),
       attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page, page),
     ]);
-    return Response.json({ post: { ...post, locked: Boolean(expectedPassword) }, locked: false, blocks: chunk.blocks, headings, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    return Response.json({ post: { ...post, locked: Boolean(expectedPassword) }, locked: false, blocks: chunk.blocks, headings, headingsPending, nextCursor: chunk.nextCursor, truncated: blockState.truncated }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -983,37 +1049,13 @@ async function notionUnlockSession(env: Env, request: Request, url: URL): Promis
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   const slug = url.searchParams.get("slug") || "";
   if (!slug || slug.length > 180) return error(400, "Invalid article slug");
-  const unlocked = await hasUnlockSession(request, env.NOTION_TOKEN, slug);
-  return Response.json({ unlocked }, {
-    status: unlocked ? 200 : 403,
-    headers: { ...jsonHeaders, "cache-control": "no-store" },
-  });
-}
-
-async function notionSitePage(env: Env, slug: string, request: Request): Promise<Response> {
-  if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  if (!slug || slug.length > 180) return error(400, "Invalid page slug");
-  const requestedCursor = new URL(request.url).searchParams.get("cursor");
-  const cursor = normalizeNotionCursor(requestedCursor);
-  if (requestedCursor && !cursor) return error(400, "Invalid content cursor");
   try {
-    const page = await findSitePage(env, slug);
-    if (!page) return error(404, "Page not found");
-    const blockState = newBlockReadState();
-    const { chunk, headings } = await readArticleChunk(env, page.id, blockState, cursor);
-    await Promise.all([
-      attachPreviewSignatures(chunk.blocks, env.NOTION_TOKEN),
-      attachChildAccessSignatures(chunk.blocks, env, page.id),
-      attachMediaAccessSignatures(chunk.blocks, env.NOTION_TOKEN, page, page),
-    ]);
-    return Response.json({
-      post: toSitePagePost(page),
-      locked: false,
-      blocks: chunk.blocks,
-      headings,
-      nextCursor: chunk.nextCursor,
-      truncated: blockState.truncated,
-    }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    const page = await (url.searchParams.get("kind") === "page" ? findSitePage(env, slug) : findPost(env, slug));
+    const unlocked = Boolean(page) && await hasPageUnlockSession(env, request, page);
+    return Response.json({ unlocked }, {
+      status: unlocked ? 200 : 403,
+      headers: { ...jsonHeaders, "cache-control": "no-store" },
+    });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -1034,7 +1076,7 @@ async function notionChildPage(env: Env, request: Request): Promise<Response> {
     if (!parent) return error(404, "Article not found");
     const expectedPassword = plain(parent.properties?.password);
     if (expectedPassword) {
-      if (!await hasUnlockSession(request, env.NOTION_TOKEN, slug)) return error(403, "请先解锁父文章");
+      if (!await hasPageUnlockSession(env, request, parent)) return error(403, "请先解锁父文章");
     }
 
     const childPage = await resolveChildPage(env, parent, trail, pageId, accessSignature);
@@ -1057,9 +1099,11 @@ async function notionSitePageChild(env: Env, request: Request): Promise<Response
   try {
     const parent = await findSitePage(env, slug);
     if (!parent) return error(404, "Page not found");
+    const protectedPage = Boolean(plain(parent.properties?.password));
+    if (protectedPage && !await hasPageUnlockSession(env, request, parent)) return error(403, "请先解锁父页面");
     const childPage = await resolveChildPage(env, parent, trail, pageId, accessSignature);
     if (!childPage) return error(404, "没有找到这个子页面，或它已从当前页面移除");
-    return childPageResponse(env, childPage, parent, cursor, urlBoolean(new URL(request.url), "headings"));
+    return childPageResponse(env, childPage, parent, cursor, urlBoolean(new URL(request.url), "headings"), protectedPage ? slug : "");
   } catch (reason) { return notionError(reason); }
 }
 
@@ -1070,7 +1114,7 @@ async function childPageResponse(env: Env, childPage: any, rootPage: any, cursor
     // the client can only ever replace its TOC with a complete result.
     const index = await advanceHeadingIndex(env, childPage.id, childPage.last_edited_time || "");
     if (!index.complete) return Response.json({ pending: true }, { status: 202, headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": "1" } });
-    return Response.json({ child: { id: childPage.id, headings: index.headings } }, { headers: { ...jsonHeaders, "cache-control": "private, max-age=300" } });
+    return Response.json({ child: { id: childPage.id, headings: index.headings } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   }
   const blockState = newBlockReadState();
   const chunk = await getBlockChildrenChunk(env, childPage.id, blockState, 0, cursor);
@@ -1096,6 +1140,16 @@ async function childPageResponse(env: Env, childPage: any, rootPage: any, cursor
 }
 
 async function advanceHeadingIndex(env: Env, pageId: string, version: string): Promise<{ complete: boolean; headings: HeadingSummary[] }> {
+  const key = `${pageId}:${version}`;
+  const active = headingBatches.get(key);
+  if (active) return active;
+  const pending = buildHeadingBatch(env, pageId, version);
+  headingBatches.set(key, pending);
+  try { return await pending; }
+  finally { if (headingBatches.get(key) === pending) headingBatches.delete(key); }
+}
+
+async function buildHeadingBatch(env: Env, pageId: string, version: string): Promise<{ complete: boolean; headings: HeadingSummary[] }> {
   const cacheKey = `${pageId}:${version}`;
   const cached = headingIndexCache.get(cacheKey);
   if (cached?.headings && cached.expiresAt > Date.now()) return { complete: true, headings: cached.headings };
@@ -1105,8 +1159,9 @@ async function advanceHeadingIndex(env: Env, pageId: string, version: string): P
     return { complete: true, headings: persisted };
   }
 
-  const job = (env.DB ? await readHeadingJob(env.DB, pageId, version) : headingJobCache.get(cacheKey))
-    || { queue: [{ kind: "page", parentId: pageId, cursor: "", depth: 0 }], headings: [] };
+  const priorJob = (env.DB ? await readHeadingJob(env.DB, pageId, version) : null) || headingJobCache.get(cacheKey);
+  const job: HeadingIndexJob = priorJob ? structuredClone(priorJob)
+    : { queue: [{ kind: "page", parentId: pageId, cursor: "", depth: 0 }], headings: [] };
   let notionRequests = 0;
   // Keep each HTTP request comfortably below reverse-proxy timeouts. Large
   // Notion pages resume from D1 on the next request and reveal no partial TOC.
@@ -1138,14 +1193,15 @@ async function advanceHeadingIndex(env: Env, pageId: string, version: string): P
   }
 
   if (job.queue.length) {
+    setBoundedMap(headingJobCache, cacheKey, job, 256);
     if (env.DB) await writeHeadingJob(env.DB, pageId, version, job);
-    else setBoundedMap(headingJobCache, cacheKey, job, 256);
     return { complete: false, headings: [] };
   }
   if (env.DB) {
     await writeHeadingCache(env.DB, pageId, version, job.headings);
     await deleteHeadingJob(env.DB, pageId);
-  } else headingJobCache.delete(cacheKey);
+  }
+  headingJobCache.delete(cacheKey);
   setBoundedMap(headingIndexCache, cacheKey, { headings: job.headings, expiresAt: Date.now() + 10 * 60 * 1000 }, 256);
   return { complete: true, headings: job.headings };
 }
@@ -1194,15 +1250,16 @@ async function notionChildDatabase(env: Env, request: Request): Promise<Response
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
   const parsed = await readJsonRequest(request);
   if ("response" in parsed) return parsed.response;
-  const body = parsed.body as { slug?: unknown; databaseId?: unknown; trail?: unknown; contentKind?: unknown };
+  const body = parsed.body as { slug?: unknown; databaseId?: unknown; trail?: unknown; contentKind?: unknown; cursor?: unknown };
   const slug = typeof body.slug === "string" ? body.slug : "";
   const databaseId = normalizeNotionId(body.databaseId);
+  const cursor = normalizeNotionCursor(body.cursor);
   const trail = Array.isArray(body.trail) ? body.trail.map(normalizeNotionId).filter(Boolean).slice(0, 8) : [];
-  if (!slug || !databaseId) return error(400, "Invalid child database request");
+  if (!slug || slug.length > 180 || !databaseId || (body.cursor != null && !cursor)) return error(400, "Invalid child database request");
   try {
     const root = body.contentKind === "page" ? await findSitePage(env, slug) : await findPost(env, slug);
     if (!root) return error(404, "Parent page not found");
-    if (body.contentKind !== "page" && plain(root.properties?.password) && !await hasUnlockSession(request, env.NOTION_TOKEN, slug)) return error(403, "请先解锁父文章");
+    if (plain(root.properties?.password) && !await hasPageUnlockSession(env, request, root)) return error(403, "请先解锁父页面");
     const parent = trail.length ? await authorizedChildPage(env, root, trail) : root;
     if (!parent) return error(404, "Parent page not found");
     const state = newBlockReadState();
@@ -1210,7 +1267,7 @@ async function notionChildDatabase(env: Env, request: Request): Promise<Response
     if (!referencesDatabase(blocks, databaseId)) return error(404, "Child database not found");
     const database = await notionFetch(env, `/databases/${databaseId}`);
     const dataSourceId = normalizeNotionId(database.data_sources?.[0]?.id) || databaseId;
-    const result = await notionFetch(env, `/data_sources/${dataSourceId}/query`, { method: "POST", body: JSON.stringify({ page_size: 100 }) });
+    const result = await notionFetch(env, `/data_sources/${dataSourceId}/query`, { method: "POST", body: JSON.stringify({ page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) }) });
     const pages: any[] = Array.isArray(result.results) ? result.results : [];
     const configRows = await queryConfigRows(env).catch(() => []);
     const publicFields = new Set(configRows
@@ -1223,13 +1280,14 @@ async function notionChildDatabase(env: Env, request: Request): Promise<Response
       id: page.id,
       title: notionPageTitle(page) || "未命名条目",
       icon: page.icon?.type === "emoji" ? page.icon.emoji : undefined,
+      href: isPublishedContentPage(page) ? (page.properties?.type?.select?.name === "Post" ? `/blog/${encodeURIComponent(toPost(page).slug)}` : sitePagePath(toSitePagePost(page))) : undefined,
       fields: Object.entries(page.properties || {})
-        .filter(([name, property]: [string, any]) => publicFields.has(name) && safePropertyTypes.has(property?.type))
+        .filter(([name, property]: [string, any]) => name.toLocaleLowerCase() !== "password" && publicFields.has(name) && safePropertyTypes.has(property?.type))
         .slice(0, 6)
         .map(([name, property]) => ({ name, value: notionPropertyText(property) }))
         .filter((field) => field.value),
     }));
-    return Response.json({ database: { id: databaseId, title: richText(database.title) || "子数据库", rows } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    return Response.json({ database: { id: databaseId, title: richText(database.title) || "子数据库", rows, nextCursor: result.has_more ? normalizeNotionCursor(result.next_cursor) || null : null } }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
 }
 
@@ -1260,12 +1318,17 @@ async function attachChildAccessSignatures(blocks: any[], env: Env, rootPageId: 
     }
   };
   visit(blocks);
-  const uniquePageIds = [...new Set(targets.filter(({ target }) => target.type === "child_page").map(({ pageId }) => pageId))];
+  const uniquePageIds = [...new Set(targets.map(({ pageId }) => pageId))];
   const pageMetadata = await readNotionPageMetadata(env, uniquePageIds);
   await Promise.all(targets.map(async ({ target, pageId }) => {
+    const page = pageMetadata.get(pageId);
+    if (target.type !== "child_page" && isPublishedContentPage(page)) {
+      const content = page.properties?.type?.select?.name === "Post" ? toPost(page) : toSitePagePost(page);
+      target.href = page.properties?.type?.select?.name === "Post" ? `/blog/${encodeURIComponent(content.slug)}` : sitePagePath(content);
+      return;
+    }
     target.accessSignature = await createChildAccessSignature(env.NOTION_TOKEN!, normalizeNotionId(rootPageId), pageId);
     if (target.type === "child_page") {
-      const page = pageMetadata.get(pageId);
       if (page?.icon?.type === "emoji" && typeof page.icon.emoji === "string") target.icon = page.icon.emoji;
       else delete target.icon;
     }
@@ -1411,6 +1474,7 @@ async function querySitePages(env: Env, slug?: string, pageSize = 100, sourceId?
 }
 
 async function findSitePage(env: Env, slug: string): Promise<any | null> {
+  return lookupPublishedPage(env, "page", slug, async () => {
   const requestedSlug = slug === "about" ? "me" : slug;
   const bySlug = await querySitePages(env, requestedSlug, 1);
   if (bySlug[0]) return bySlug[0];
@@ -1422,9 +1486,11 @@ async function findSitePage(env: Env, slug: string): Promise<any | null> {
     return pageTitle.includes("关于");
   }) || null;
   return null;
+  });
 }
 
 async function findPost(env: Env, slug: string): Promise<any | null> {
+  return lookupPublishedPage(env, "post", slug, async () => {
   const bySlug = await queryPosts(env, slug, 1);
   if (bySlug[0]) return bySlug[0];
 
@@ -1432,6 +1498,17 @@ async function findPost(env: Env, slug: string): Promise<any | null> {
   if (!pageId) return null;
   const published = await queryPosts(env, undefined, 100);
   return published.find((page) => normalizeNotionId(page.id) === pageId) || null;
+  });
+}
+
+async function lookupPublishedPage(env: Env, kind: "post" | "page", slug: string, load: () => Promise<any | null>): Promise<any | null> {
+  const key = `${env.NOTION_TOKEN}:${env.NOTION_DATA_SOURCE_ID}:${env.NOTION_CONFIG_DATA_SOURCE_ID}:${kind}:${slug}`;
+  const active = publishedPageLookups.get(key);
+  if (active) return active;
+  const pending = load();
+  publishedPageLookups.set(key, pending);
+  try { return await pending; }
+  finally { if (publishedPageLookups.get(key) === pending) publishedPageLookups.delete(key); }
 }
 
 async function querySiteLinks(env: Env, sourceId?: string): Promise<any[]> {
@@ -1577,39 +1654,15 @@ async function getBlockChildren(env: Env, id: string, budget: BlockReadState, de
   return output;
 }
 
-async function getBlockHeadings(env: Env, id: string): Promise<HeadingSummary[]> {
-  const result: HeadingSummary[] = [];
-  const visit = async (parentId: string, depth: number): Promise<void> => {
-    if (depth > MAX_BLOCK_DEPTH) return;
-    let cursor: string | undefined;
-    do {
-      const query = new URLSearchParams({ page_size: "100" });
-      if (cursor) query.set("start_cursor", cursor);
-      const payload = await notionFetch(env, `/blocks/${parentId}/children?${query}`);
-      for (const raw of payload.results || []) {
-        if (/^heading_[123]$/.test(raw.type)) {
-          const level = Number(raw.type.at(-1));
-          const label = richText(raw[raw.type]?.rich_text || []).trim();
-          if (label) result.push({ id: raw.id, label, level });
-        }
-        if (raw.has_children && raw.type !== "child_page" && raw.type !== "child_database") await visit(raw.id, depth + 1);
-      }
-      cursor = payload.has_more && typeof payload.next_cursor === "string" ? payload.next_cursor : undefined;
-    } while (cursor);
-  };
-  await visit(id, 0);
-  return result;
-}
-
-async function readArticleChunk(env: Env, pageId: string, budget: BlockReadState, cursor = "") {
+async function readArticleChunk(env: Env, pageId: string, budget: BlockReadState, cursor = "", version = "") {
   const chunk = await getBlockChildrenChunk(env, pageId, budget, 0, cursor);
   if (cursor) return { chunk, headings: undefined as HeadingSummary[] | undefined };
   // Most articles fit in the initial chunk. Reuse its normalized block tree
   // for the TOC instead of traversing the same Notion blocks a second time.
   if (!chunk.nextCursor && !budget.truncated) return { chunk, headings: headingsFromBlocks(chunk.blocks) };
-  // Long/deep pages still receive a complete index, but only pay the second
-  // traversal when the first chunk cannot contain the whole article.
-  return { chunk, headings: await getBlockHeadings(env, pageId) };
+  const cached = headingIndexCache.get(`${pageId}:${version}`);
+  const persisted = cached?.headings || (env.DB ? await readHeadingCache(env.DB, pageId, version) : null);
+  return { chunk, headings: persisted || [], headingsPending: !persisted };
 }
 
 function headingsFromBlocks(blocks: any[]): HeadingSummary[] {
@@ -1697,7 +1750,7 @@ function toSitePagePost(page: any) {
     tags: [],
     date: "",
     icon: notionDisplayEmoji(page),
-    locked: false,
+    locked: Boolean(plain(properties.password)),
   };
 }
 
@@ -1797,15 +1850,47 @@ async function authorizedChildPage(env: Env, rootPage: any, path: string[]): Pro
     if (!candidate) {
       const referenceState = newBlockReadState();
       const blocks = await getBlockChildren(env, currentPage.id, referenceState, 0);
+      if (referencesDatabase(blocks, pageId)) {
+        currentPage = await notionFetch(env, `/databases/${pageId}`);
+        if (currentPage.archived || currentPage.in_trash) return null;
+        continue;
+      }
+      const linkedMember = await linkedDatabaseMember(env, pageId, blocks);
+      if (linkedMember) {
+        if (plain(linkedMember.properties?.password)) return null;
+        currentPage = linkedMember;
+        continue;
+      }
       if (!referencesPage(blocks, pageId)) return null;
-      const publishedTarget = (await querySitePages(env, undefined, 100))
+      const publishedTarget = [...await querySitePages(env, undefined, 100), ...await queryPosts(env, undefined, 100)]
         .find((page) => normalizeNotionId(page.id) === pageId && !plain(page.properties?.password));
       if (!publishedTarget) return null;
       candidate = publishedTarget;
     }
+    if (plain(candidate.properties?.password)) return null;
     currentPage = candidate;
   }
   return currentPage === rootPage ? null : currentPage;
+}
+
+async function linkedDatabaseMember(env: Env, pageId: string, blocks: any[]): Promise<any | null> {
+  if (!blocks.some((block) => block.databaseId || (block.children?.length && referencesAnyDatabase(block.children)))) return null;
+  const page = await notionFetch(env, `/pages/${pageId}`);
+  if (page.archived || page.in_trash) return null;
+  let databaseId = normalizeNotionId(page.parent?.database_id);
+  const sourceId = normalizeNotionId(page.parent?.data_source_id);
+  if (sourceId) {
+    const source = await notionFetch(env, `/data_sources/${sourceId}`);
+    if (source.archived || source.in_trash) return null;
+    databaseId = normalizeNotionId(source.parent?.database_id);
+  }
+  if (!databaseId || !referencesDatabase(blocks, databaseId)) return null;
+  const database = await notionFetch(env, `/databases/${databaseId}`);
+  return database.archived || database.in_trash ? null : page;
+}
+
+function referencesAnyDatabase(blocks: any[]): boolean {
+  return blocks.some((block) => block.databaseId || (block.children?.length && referencesAnyDatabase(block.children)));
 }
 
 async function resolveAuthorizedChildPage(env: Env, rootPage: any, trail: string[], pageId: string): Promise<any | null> {
@@ -1865,7 +1950,11 @@ function notionPageIdFromUrl(value: unknown): string {
 }
 
 async function descendantPage(env: Env, childId: string, ancestorId: string): Promise<any | null> {
-  const targetPage = await notionFetch(env, `/pages/${childId}`);
+  const targetPage = await notionFetch(env, `/pages/${childId}`).catch((reason) => {
+    if (reason instanceof Error && reason.message.includes("Notion 404")) return null;
+    throw reason;
+  });
+  if (!targetPage) return null;
   if (targetPage?.archived || targetPage?.in_trash) return null;
   let parent = targetPage.parent;
   for (let depth = 0; depth < 20; depth++) {
@@ -1884,6 +1973,20 @@ async function descendantPage(env: Env, childId: string, ancestorId: string): Pr
       parent = block.parent;
       continue;
     }
+    const dataSourceId = normalizeNotionId(parent?.data_source_id);
+    let databaseId = normalizeNotionId(parent?.database_id);
+    if (dataSourceId) {
+      const source = await notionFetch(env, `/data_sources/${dataSourceId}`);
+      if (source.archived || source.in_trash) return null;
+      databaseId = normalizeNotionId(source.parent?.database_id);
+    }
+    if (databaseId) {
+      if (databaseId === ancestorId) return targetPage;
+      const database = await notionFetch(env, `/databases/${databaseId}`);
+      if (database.archived || database.in_trash) return null;
+      parent = database.parent;
+      continue;
+    }
     return null;
   }
   return null;
@@ -1896,7 +1999,8 @@ function notionPageTitle(page: any): string {
 
 function normalizeRichText(value: any[] = []) {
   return value.map((item) => ({
-    text: item.plain_text || item.text?.content || "",
+    text: item.plain_text || item.text?.content || item.equation?.expression || "",
+    equation: item.type === "equation" ? item.equation?.expression : undefined,
     href: safeRichTextHref(item.href),
     bold: item.annotations?.bold || undefined,
     italic: item.annotations?.italic || undefined,
@@ -2012,7 +2116,7 @@ function allowedMethodsForPath(pathname: string): string[] | undefined {
   if (["/api/content/navigation", "/api/content/config", "/api/content/search", "/api/content/rss-feeds", "/api/content/link-preview", "/api/content/word-cloud", "/api/content/unlock-session"].includes(pathname)) return ["GET"];
   if (["/api/content/child", "/api/content/page-child", "/api/content/database"].includes(pathname)) return ["POST"];
   if (pathname.startsWith("/api/content/post/")) return ["GET", "POST"];
-  if (pathname.startsWith("/api/content/page/")) return ["GET"];
+  if (pathname.startsWith("/api/content/page/")) return ["GET", "POST"];
   return undefined;
 }
 

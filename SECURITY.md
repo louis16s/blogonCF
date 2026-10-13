@@ -20,8 +20,13 @@ proof of concept. You should receive an acknowledgement within seven days.
 
 ## Runtime boundaries
 
-- Password-protected bodies, child pages and Notion-hosted images require the
-  article-scoped HttpOnly unlock session.
+- Password-protected Post and Page bodies, child pages, databases and Notion-hosted
+  media require a root-page-scoped HttpOnly unlock session. Sessions bind the
+  canonical page ID and current password; changing that password revokes them.
+- Public body snapshots are gated by current Notion publication/password metadata.
+  Search and word cloud filter durable indexes against the current public-page list.
+  Reader-facing content responses use no-store. Previously downloaded content cannot
+  be remotely erased; metadata requests fail closed when Notion is unavailable.
 - Public Notion image URLs are signed by the Worker and contain block IDs, not
   expiring upstream file URLs. The Worker re-resolves the current file URL and
   only accepts the configured Notion file host.

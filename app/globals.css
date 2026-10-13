@@ -609,3 +609,12 @@ html[data-intro="playing"] .site-intro { display: grid; }
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
   .site-intro { display: none !important; }
 }
+
+.content-retry { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; padding: 16px; }
+.content-retry p { margin: 0; }
+.content-retry button { min-height: 44px; padding: 8px 16px; border: 1px solid currentColor; border-radius: 10px; background: transparent; color: inherit; cursor: pointer; }
+.notion-database-grid h4 button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+.content-retry button:focus-visible, .notion-database-grid h4 button:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+.notion-media iframe { width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 12px; }
+.media-source-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; }
+.equation-inline { display: inline; }

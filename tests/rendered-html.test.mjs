@@ -404,17 +404,14 @@ test("mobile header uses explicit labels, predictable links, and touch-sized con
   assert.match(css, /\.footer-signature \{ align-self: flex-end; margin-left: auto; \}/);
 });
 
-test("homepage article cards use a motion-safe, preloaded photographic transition", async () => {
+test("homepage article cards keep their motion-safe transition without duplicate document requests", async () => {
   const [explorer, transition, css] = await Promise.all([
     readFile(new URL("../app/components/BlogExplorer.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/ArticleOpenTransition.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
-  assert.match(explorer, /await response\.arrayBuffer\(\)/, "the article warmup must finish consuming the document before navigation");
-  assert.match(explorer, /if \(!post\.locked\) onPreload\(href\)/, "only reusable public article HTML should be speculatively warmed");
-  assert.match(explorer, /post\.locked \? Promise\.resolve\(\) : warmArticleDocument/, "private navigation must not issue an extra no-store warm request");
-  assert.match(explorer, /Promise\.race\(\[documentReady, wait\(ARTICLE_PRELOAD_DEADLINE_MS\)\]\)/, "navigation must wait for a reusable document with a bounded deadline");
-  assert.match(explorer, /cache: "force-cache"/, "the warmed document should be reusable by the browser cache");
+  assert.doesNotMatch(explorer, /warmArticleDocument|onPreload|cache: "force-cache"/, "no-store documents must not be fetched twice for navigation");
+  assert.match(explorer, /ARTICLE_TRANSITION_MS = 840/);
   assert.match(explorer, /window\.location\.assign\(href\)/, "article transitions must finish with a context-safe document navigation");
   assert.match(explorer, /window\.addEventListener\("pageshow", resetArticleTransition\)/, "bfcache restores must clear the completed transition layer");
   assert.match(explorer, /articleNavigationAttemptRef\.current !== navigationAttempt/, "a restored page must invalidate suspended navigation work");
@@ -777,7 +774,7 @@ test("word-cloud endpoint reads public titles and bodies without leaking propert
   try {
     const response = await worker.fetch(new Request("http://localhost/api/content/word-cloud"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     assert.equal(response.status, 200);
-    assert.match(response.headers.get("cache-control"), /public, max-age=900/);
+    assert.equal(response.headers.get("cache-control"), "no-store");
     const payload = await response.json();
     assert.equal(payload.sourceCount, 2);
     assert.equal(payload.partial, false);
@@ -789,7 +786,7 @@ test("word-cloud endpoint reads public titles and bodies without leaking propert
 
     const bodySearch = await worker.fetch(new Request("http://localhost/api/content/search?q=cloudflare"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
     assert.equal(bodySearch.status, 200);
-    assert.match(bodySearch.headers.get("cache-control"), /public, max-age=120/);
+    assert.equal(bodySearch.headers.get("cache-control"), "no-store");
     assert.deepEqual((await bodySearch.json()).matches.sort(), ["public-one", "public-two"]);
 
     const codeSearch = await worker.fetch(new Request("http://localhost/api/content/search?q=forbidden_code"), { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "source-id" }, context);
@@ -949,7 +946,7 @@ test("search uses the durable public body index and waits with skeletons before 
   assert.doesNotMatch(blog, /warmSearchIndex/);
   assert.doesNotMatch(blog, /requestIdleCallback/, "body indexing should start from search intent, not every homepage visit");
   assert.match(blog, /!visible\.length && searching && <div className="search-skeleton"/);
-  assert.match(blog, /!visible\.length && !searching && \(/);
+  assert.match(blog, /!visible\.length && !searching && !searchError && \(/);
   assert.match(css, /\.search-skeleton/);
   assert.match(worker, /\/api\/content\/rss-feeds/);
   assert.match(article, /\/api\/content\/rss-feeds\?slug=/);
@@ -1226,7 +1223,7 @@ test("Notion image gateway proxies allowlisted HEIC and rejects SSRF hosts", asy
     const response = await worker.fetch(new Request(new URL(gatewayUrl, "http://localhost")), env, context);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), "image/heic");
-    assert.equal(response.headers.get("cache-control"), "public, max-age=300, stale-while-revalidate=86400");
+    assert.equal(response.headers.get("cache-control"), "no-store");
     assert.equal(await response.text(), "heic-binary");
 
     currentRootVersion = "2026-08-30T00:01:00.000Z";
@@ -1427,7 +1424,7 @@ test("public article chunks reuse edge cache across isolates while private artic
     const second = await secondWorker.fetch(new Request("https://cache.example/api/content/post/public-cache-test"), env, context);
     assert.equal(first.headers.get("x-blog-cache"), "miss");
     assert.equal(second.headers.get("x-blog-cache"), "hit");
-    assert.equal(publicQueries, 1);
+    assert.equal(publicQueries, 2, "warm content must revalidate its publication/password metadata");
     assert.equal(publicBlocks, 1, "the cached second request must not traverse article blocks");
     const putsBeforePrivate = puts.length;
     const privateFirst = await firstWorker.fetch(new Request("https://cache.example/api/content/post/private-cache-test"), env, context);
@@ -1953,14 +1950,19 @@ test("long articles return bounded chunks and expose a continuation cursor", asy
     const firstPayload = await first.json();
     assert.equal(firstPayload.blocks.length, 300);
     assert.equal(firstPayload.nextCursor, "page_4");
-    assert.equal(blockRequests.length, 7, "the initial response also scans the full heading index");
+    assert.equal(blockRequests.length, 3, "first content does not wait for a second full directory traversal");
+    assert.equal(firstPayload.headingsPending, true);
 
     const second = await worker.fetch(new Request("http://localhost/api/content/post/long-post?cursor=page_4"), env, context);
     assert.equal(second.status, 200);
     const secondPayload = await second.json();
     assert.equal(secondPayload.blocks.length, 1);
     assert.equal(secondPayload.nextCursor, undefined);
-    assert.equal(blockRequests.length, 8, "continuation responses reuse the heading index from the initial response");
+    assert.equal(blockRequests.length, 4, "continuation responses do not repeat the heading traversal");
+    const directory = await worker.fetch(new Request("http://localhost/api/content/post/long-post?headings=1"), env, context);
+    assert.equal(directory.status, 200);
+    assert.ok(Array.isArray((await directory.json()).headings));
+    assert.equal(blockRequests.length, 8, "the separate directory request follows all Notion cursors");
   } finally { globalThis.fetch = originalFetch; }
 });
 

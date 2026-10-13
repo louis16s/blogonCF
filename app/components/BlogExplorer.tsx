@@ -19,37 +19,6 @@ import { siteThemeVariables } from "../../shared/site-config";
 
 const ALL = "全部";
 const ARTICLE_TRANSITION_MS = 840;
-const ARTICLE_PRELOAD_DEADLINE_MS = 8_000;
-const ARTICLE_NAVIGATION_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8";
-const articleDocumentPreloads = new Map<string, Promise<void>>();
-
-function warmArticleDocument(href: string): Promise<void> {
-  const existing = articleDocumentPreloads.get(href);
-  if (existing) return existing;
-
-  while (articleDocumentPreloads.size >= 8) {
-    const oldest = articleDocumentPreloads.keys().next().value;
-    if (typeof oldest !== "string") break;
-    articleDocumentPreloads.delete(oldest);
-  }
-
-  const request: Promise<void> = fetch(href, {
-    cache: "force-cache",
-    credentials: "same-origin",
-    headers: { accept: ARTICLE_NAVIGATION_ACCEPT },
-  }).then(async (response) => {
-    if (!response.ok) throw new Error(`Article preload failed with ${response.status}`);
-    // A response is not reusable until its body has been consumed. Finishing
-    // this read before navigation prevents the browser from cancelling the
-    // warm request and starting the same Worker/Notion work again.
-    await response.arrayBuffer();
-  }).catch((reason) => {
-    if (articleDocumentPreloads.get(href) === request) articleDocumentPreloads.delete(href);
-    throw reason;
-  });
-  articleDocumentPreloads.set(href, request);
-  return request;
-}
 
 const WordCloudDialog = dynamic(() => import("./WordCloudDialog").then((module) => module.WordCloudDialog), {
   loading: () => null,
@@ -64,7 +33,8 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
   const [category, setCategory] = useState(ALL);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
-  const [contentSearch, setContentSearch] = useState<{ query: string; ids: string[] }>({ query: "", ids: [] });
+  const [contentSearch, setContentSearch] = useState<{ query: string; ids: string[]; error?: string }>({ query: "", ids: [] });
+  const [searchRetry, setSearchRetry] = useState(0);
   const [dark, setDark] = useState(false);
   const [themeReady, setThemeReady] = useState(false);
   const [wordCloudOpen, setWordCloudOpen] = useState(false);
@@ -73,15 +43,10 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
   const articleOpeningRef = useRef(false);
   const articleNavigationAttemptRef = useRef(0);
   const transitionTimersRef = useRef<number[]>([]);
-  const hoverPreloadTimerRef = useRef<number | null>(null);
 
   const clearArticleTransitionResources = useCallback(() => {
     transitionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     transitionTimersRef.current = [];
-    if (hoverPreloadTimerRef.current !== null) {
-      window.clearTimeout(hoverPreloadTimerRef.current);
-      hoverPreloadTimerRef.current = null;
-    }
     document.body.classList.remove("article-transition-playing");
   }, []);
 
@@ -105,29 +70,11 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
     };
   }, [clearArticleTransitionResources, resetArticleTransition]);
 
-  const preloadArticle = useCallback((href: string, immediate = false) => {
-    if (hoverPreloadTimerRef.current !== null) window.clearTimeout(hoverPreloadTimerRef.current);
-    hoverPreloadTimerRef.current = window.setTimeout(() => {
-      hoverPreloadTimerRef.current = null;
-      void warmArticleDocument(href).catch(() => undefined);
-    }, immediate ? 0 : 300);
-  }, []);
-
-  const cancelArticlePreload = useCallback(() => {
-    if (hoverPreloadTimerRef.current === null) return;
-    window.clearTimeout(hoverPreloadTimerRef.current);
-    hoverPreloadTimerRef.current = null;
-  }, []);
-
   const openArticle = useCallback((post: Post, bounds: DOMRect) => {
     if (articleOpeningRef.current || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return false;
     articleOpeningRef.current = true;
     const navigationAttempt = ++articleNavigationAttemptRef.current;
     const href = `/blog/${encodeURIComponent(post.slug)}`;
-    cancelArticlePreload();
-    // Private HTML is deliberately no-store: warming it would cause a second
-    // uncached request on navigation without improving reuse.
-    const documentReady = post.locked ? Promise.resolve() : warmArticleDocument(href).catch(() => undefined);
     document.body.classList.add("article-transition-playing");
     setArticleOpening({
       bounds: { top: bounds.top, right: bounds.right, bottom: bounds.bottom, left: bounds.left, width: bounds.width, height: bounds.height },
@@ -138,18 +85,14 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
     const wait = (delay: number) => new Promise<void>((resolve) => {
       transitionTimersRef.current.push(window.setTimeout(resolve, delay));
     });
-    // Keep the existing visual timing, but leave its completed full-screen
-    // frame in place until the warmed document is reusable. The deadline
-    // avoids trapping navigation when the network is genuinely unavailable.
-    void Promise.all([
-      wait(ARTICLE_TRANSITION_MS),
-      Promise.race([documentReady, wait(ARTICLE_PRELOAD_DEADLINE_MS)]),
-    ]).then(() => {
+    void wait(ARTICLE_TRANSITION_MS).then(() => {
       if (articleNavigationAttemptRef.current !== navigationAttempt) return;
+      // Document navigation keeps Safari history restoration and the existing entrance animation consistent.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
       window.location.assign(href);
     });
     return true;
-  }, [cancelArticlePreload]);
+  }, []);
 
   useEffect(() => {
     if (!siteConfig.wordCloudEnabled) return;
@@ -252,15 +195,16 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
     const timer = window.setTimeout(() => {
       fetch(`/api/content/search?q=${encodeURIComponent(needle)}`, { signal: controller.signal, cache: "default" })
         .then((response) => response.ok ? response.json() : Promise.reject())
-        .then((data) => setContentSearch({ query: needle, ids: Array.isArray(data.matches) ? data.matches : [] }))
-        .catch(() => { if (!controller.signal.aborted) setContentSearch({ query: needle, ids: [] }); });
+        .then((data) => { if (!controller.signal.aborted) setContentSearch({ query: needle, ids: Array.isArray(data.matches) ? data.matches : [] }); })
+        .catch(() => { if (!controller.signal.aborted) setContentSearch({ query: needle, ids: [], error: "正文搜索暂时不可用，请重试。" }); });
     }, 350);
     return () => { controller.abort(); window.clearTimeout(timer); };
-  }, [deferredQuery]);
+  }, [deferredQuery, searchRetry]);
 
   const normalizedValue = normalizeSearchText(deferredQuery);
   const normalizedQuery = normalizedValue.length >= 2 ? normalizedValue : "";
   const searching = Boolean(normalizedQuery && contentSearch.query !== normalizedQuery);
+  const searchError = normalizedQuery && contentSearch.query === normalizedQuery ? contentSearch.error : undefined;
 
   const categories = useMemo(() => {
     const found = Array.from(new Set(posts.map((post) => post.category).filter(Boolean)));
@@ -329,17 +273,18 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
         </header>
 
         <section className="posts-shell" id="posts" aria-label="全部文章">
+          {searchError ? <div className="content-retry" role="alert"><p>{searchError}</p><button type="button" onClick={() => { setContentSearch({ query: "", ids: [] }); setSearchRetry((value) => value + 1); }}>重试搜索</button></div> : null}
           {groups.map(([name, items]) => (
             <section className="category-section" key={name} aria-labelledby={`category-${slugify(name)}`}>
               {siteConfig.categoriesEnabled ? <h2 id={`category-${slugify(name)}`}>#&nbsp; {name}</h2> : null}
               <div className="post-grid">
-                {items.map((post, index) => <PostCard post={post} index={index} onOpen={openArticle} onPreload={preloadArticle} onCancelPreload={cancelArticlePreload} key={post.id} />)}
+                {items.map((post, index) => <PostCard post={post} index={index} onOpen={openArticle} key={post.id} />)}
               </div>
             </section>
           ))}
 
           {!visible.length && searching && <div className="search-skeleton" aria-label="正在检索正文" aria-busy="true"><i /><i /><i /><i /></div>}
-          {!visible.length && !searching && (
+          {!visible.length && !searching && !searchError && (
             <div className="empty">
               <FileText aria-hidden size={30} />
               <p>{!initialNotionConfigured ? "请先配置 Notion 内容源。" : syncState === "loading" ? "正在从 Notion 读取文章…" : syncState === "unavailable" ? "内容源暂时不可用。" : "没有找到匹配的文章。"}</p>
@@ -354,7 +299,7 @@ export function BlogExplorer({ initialPosts = [], initialLinks = [], initialNoti
   );
 }
 
-function PostCard({ post, index, onOpen, onPreload, onCancelPreload }: { post: Post; index: number; onOpen: (post: Post, bounds: DOMRect) => boolean; onPreload: (href: string, immediate?: boolean) => void; onCancelPreload: () => void }) {
+function PostCard({ post, index, onOpen }: { post: Post; index: number; onOpen: (post: Post, bounds: DOMRect) => boolean }) {
   const open = (event: ReactMouseEvent<HTMLAnchorElement>) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const card = event.currentTarget.closest<HTMLElement>(".post-card");
@@ -366,10 +311,6 @@ function PostCard({ post, index, onOpen, onPreload, onCancelPreload }: { post: P
       className="post-card"
       title={post.summary || undefined}
       style={{ "--card-order": Math.min(index, 8) } as CSSProperties}
-      onPointerEnter={() => { if (!post.locked) onPreload(href); }}
-      onPointerLeave={onCancelPreload}
-      onPointerDown={() => { if (!post.locked) onPreload(href, true); }}
-      onFocusCapture={() => { if (!post.locked) onPreload(href, true); }}
     >
       {post.icon ? <span className="post-emoji" aria-label={`Notion 图标 ${post.icon}`}>{post.icon}</span> : null}
       <div className="post-card-body">

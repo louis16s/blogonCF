@@ -6,6 +6,7 @@ export type ArticlePayload = {
   post?: Post;
   blocks?: ContentBlock[];
   headings?: HeadingSummary[];
+  headingsPending?: boolean;
   nextCursor?: string;
   truncated?: boolean;
   locked?: boolean;

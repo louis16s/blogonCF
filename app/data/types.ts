@@ -33,6 +33,7 @@ export type SiteNotice = {
 
 export type RichText = {
   text: string;
+  equation?: string;
   href?: string;
   bold?: boolean;
   italic?: boolean;
@@ -71,7 +72,8 @@ export type ContentBlock = {
 export type ChildDatabase = {
   id: string;
   title: string;
-  rows: Array<{ id: string; title: string; icon?: string; fields: Array<{ name: string; value: string }> }>;
+  nextCursor?: string | null;
+  rows: Array<{ id: string; title: string; icon?: string; href?: string; fields: Array<{ name: string; value: string }> }>;
 };
 
 export type ChildPage = {

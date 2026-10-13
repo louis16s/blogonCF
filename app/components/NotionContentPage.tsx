@@ -26,6 +26,7 @@ export function NotionContentPage({ slug, payload, fetched = true, contentKind }
               initialPost={payload?.post}
               initialBlocks={locked ? [] : payload?.blocks || []}
               initialHeadings={payload?.headings || []}
+              initialHeadingsPending={Boolean(payload?.headingsPending)}
               initialNextCursor={locked ? undefined : payload?.nextCursor}
               initialLocked={locked}
               initialFetched={fetched}

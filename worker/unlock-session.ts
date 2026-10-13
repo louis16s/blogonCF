@@ -80,8 +80,8 @@ export async function verifyMediaAccessSignature(
   } catch { return false; }
 }
 
-export async function createUnlockCookie(secret: string, slug: string, requestUrl: string): Promise<string> {
-  const payload = base64Url(new TextEncoder().encode(JSON.stringify({ slug: normalizedSlug(slug), exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS })));
+export async function createUnlockCookie(secret: string, slug: string, requestUrl: string, credentialVersion = ""): Promise<string> {
+  const payload = base64Url(new TextEncoder().encode(JSON.stringify({ slug: normalizedSlug(slug), version: await signature(secret, credentialVersion), exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS })));
   const token = `${payload}.${await signature(secret, payload)}`;
   const url = new URL(requestUrl);
   const localDevelopment = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
@@ -89,7 +89,7 @@ export async function createUnlockCookie(secret: string, slug: string, requestUr
   return `${await cookieName(slug)}=${token}; Path=/; Max-Age=${SESSION_TTL_SECONDS}; HttpOnly; SameSite=Lax${secure}`;
 }
 
-export async function hasUnlockSession(request: Request, secret: string, slug: string): Promise<boolean> {
+export async function hasUnlockSession(request: Request, secret: string, slug: string, credentialVersion = ""): Promise<boolean> {
   const name = await cookieName(slug);
   const token = request.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1);
   if (!token) return false;
@@ -103,7 +103,7 @@ export async function hasUnlockSession(request: Request, secret: string, slug: s
     let mismatch = 0;
     for (let index = 0; index < left.byteLength; index++) mismatch |= left[index] ^ right[index];
     if (mismatch) return false;
-    const value = JSON.parse(new TextDecoder().decode(decodeBase64Url(payload))) as { slug?: unknown; exp?: unknown };
-    return value.slug === normalizedSlug(slug) && typeof value.exp === "number" && value.exp > Math.floor(Date.now() / 1000);
+    const value = JSON.parse(new TextDecoder().decode(decodeBase64Url(payload))) as { slug?: unknown; version?: unknown; exp?: unknown };
+    return value.slug === normalizedSlug(slug) && value.version === await signature(secret, credentialVersion) && typeof value.exp === "number" && value.exp > Math.floor(Date.now() / 1000);
   } catch { return false; }
 }
