@@ -25,6 +25,7 @@ function createRateLimitDb() {
       return {
         bind(...params) { values = params; return this; },
         async first() {
+          if (sql.includes("INSERT INTO request_rate_limits")) return { request_count: 1, window_start: values[1] };
           if (sql.includes("SELECT attempt_count")) return rows.get(values[0]) || null;
           const current = rows.get(values[0]);
           const next = !current || current.window_start <= values[2]
@@ -178,6 +179,44 @@ test("public site bootstrap deduplicates upstream Notion reads within its freshn
     assert.equal((await second.json()).posts[0].slug, "cached");
     assert.equal(upstreamCalls, 3, "posts, navigation, and config should each be read only once");
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("homepage edge hits do not read Notion config before checking the cache", async () => {
+  const previousCaches = globalThis.caches;
+  const previousFetch = globalThis.fetch;
+  const entries = new Map();
+  const pending = [];
+  let upstreamCalls = 0;
+  globalThis.caches = { default: {
+    async match(key) { return entries.get(key.url)?.clone(); },
+    async put(key, response) { entries.set(key.url, response.clone()); },
+  } };
+  globalThis.fetch = async (input, init = {}) => {
+    upstreamCalls += 1;
+    const url = String(input);
+    const body = String(init.body || "");
+    if (url.includes("/data_sources/cache-config/query")) return Response.json({ results: [] });
+    if (body.includes('"Published"') && !body.includes('"Post"')) return Response.json({ results: [] });
+    return Response.json({ results: [] });
+  };
+  try {
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "cache-source", NOTION_CONFIG_DATA_SOURCE_ID: "cache-config" };
+    const makeContext = () => ({ waitUntil(promise) { pending.push(promise); }, passThroughOnException() {} });
+    const firstWorker = await loadWorker();
+    const first = await firstWorker.fetch(new Request("https://blog.example/api/content/posts"), env, makeContext());
+    assert.equal(first.status, 200);
+    await Promise.all(pending.splice(0));
+    const warmedCalls = upstreamCalls;
+
+    const nextWorker = await loadWorker();
+    const second = await nextWorker.fetch(new Request("https://blog.example/api/content/posts"), env, makeContext());
+    assert.equal(second.status, 200);
+    assert.equal(second.headers.get("x-blog-cache"), "hit");
+    assert.equal(upstreamCalls, warmedCalls, "an edge hit should avoid Notion config lookup as well as content queries");
+  } finally {
+    globalThis.caches = previousCaches;
+    globalThis.fetch = previousFetch;
+  }
 });
 
 test("social preview image is correctly sized and kept below the initial multi-megabyte asset", async () => {

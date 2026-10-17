@@ -39,7 +39,7 @@ async function fixture(run, password = "fixture-password") {
   };
   const worker = (await import(`../dist/server/index.js?security=${Math.random()}`)).default;
   const env = { NOTION_TOKEN: "synthetic-test-token", NOTION_DATA_SOURCE_ID: "fixture-content", NOTION_CONFIG_DATA_SOURCE_ID: "fixture-config", DB: {
-    prepare() { return { bind() { return this; }, async first() { return null; }, async run() { return { success: true }; } }; },
+    prepare(sql) { return { bind() { return this; }, async first() { return sql.includes("request_rate_limits") ? { request_count: 1, window_start: Date.now() } : null; }, async run() { return { success: true }; } }; },
   } };
   const fetch = (path, body, cookie) => worker.fetch(new Request(`http://localhost${path}`, {
     ...(body ? { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) } } : { headers: cookie ? { cookie } : {} }),
@@ -142,6 +142,81 @@ test("directory indexing retains progress when D1 checkpoints fail", async () =>
     assert.equal((await complete.json()).headings.length, 5);
     assert.deepEqual(blockCursors, [1, 2, 3, 4, 5]);
   } finally { globalThis.fetch = previousFetch; }
+});
+
+test("media, child and database reads enforce shared limits before contacting Notion", async () => {
+  const previousFetch = globalThis.fetch;
+  let notionCalls = 0;
+  globalThis.fetch = async () => { notionCalls++; throw new Error("rate-limited routes must not reach Notion"); };
+  const db = { prepare() { return {
+    bind() { return this; },
+    async first() { return { request_count: 10_000, window_start: Date.now() }; },
+  }; } };
+  try {
+    const worker = (await import(`../dist/server/index.js?limits=${Math.random()}`)).default;
+    const env = { NOTION_TOKEN: "synthetic-test-token", DB: db };
+    const context = { waitUntil() {}, passThroughOnException() {} };
+    const requests = [
+      new Request("http://localhost/api/content/child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "fixture", pageId: child }) }),
+      new Request("http://localhost/api/content/page-child", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "fixture", pageId: child }) }),
+      new Request("http://localhost/api/content/database", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "fixture", databaseId: database }) }),
+      new Request("http://localhost/_notion/media?id=invalid"),
+    ];
+    for (const request of requests) {
+      const response = await worker.fetch(request, env, context);
+      assert.equal(response.status, 429);
+      assert.equal(response.headers.get("retry-after") !== null, true);
+    }
+    assert.equal(notionCalls, 0);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("search and word cloud reuse a short-lived metadata-only edge snapshot", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousCaches = globalThis.caches;
+  const entries = new Map();
+  const pending = [];
+  let postQueries = 0;
+  const publicPost = { id: root, last_edited_time: "2026-10-13T00:00:00Z", properties: {
+    title: { title: [{ plain_text: "Public fixture" }] }, slug: rich("fixture"), summary: rich(""), password: rich(""),
+    type: { select: { name: "Post" } }, status: { select: { name: "Published" } },
+  } };
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/data_sources/fixture-config/query")) return Response.json({ results: [], has_more: false });
+    if (url.includes("/data_sources/fixture-content/query")) { postQueries++; return Response.json({ results: [publicPost], has_more: false }); }
+    throw new Error(`Unexpected Notion request: ${url}`);
+  };
+  globalThis.caches = { default: {
+    async match(key) { return entries.get(key.url)?.clone(); },
+    async put(key, response) { entries.set(key.url, response.clone()); },
+  } };
+  const db = { prepare(sql) { return {
+    bind() { return this; },
+    async first() { return { request_count: 1, attempt_count: 1, window_start: Date.now() }; },
+    async all() { return { results: sql.includes("SELECT post_json") ? [{ post_json: JSON.stringify({ id: root, title: "Public fixture", slug: "fixture", summary: "", category: "", tags: [], date: "", icon: "", locked: false }), body: "uniqueterm uniqueterm uniqueterm", search_body: "uniqueterm", partial: 0 }] : [] }; },
+  }; } };
+  try {
+    const worker = (await import(`../dist/server/index.js?metadata-cache=${Math.random()}`)).default;
+    const env = { NOTION_TOKEN: "synthetic-test-token", NOTION_DATA_SOURCE_ID: "fixture-content", NOTION_CONFIG_DATA_SOURCE_ID: "fixture-config", DB: db };
+    const context = { waitUntil(promise) { pending.push(promise); }, passThroughOnException() {} };
+    const fetch = (path) => worker.fetch(new Request(`http://localhost${path}`), env, context);
+    const result = await (await fetch("/api/content/search?q=uniqueterm")).json();
+    assert.deepEqual(result.matches, [root]);
+    await Promise.all(pending.splice(0));
+    const second = await fetch("/api/content/search?q=anotherterm");
+    assert.deepEqual((await second.json()).matches, []);
+    assert.equal(second.headers.get("cache-control"), "no-store", "search results remain private to the current request");
+    assert.equal(postQueries, 1, "a second query should reuse the cross-isolate public ID snapshot");
+    assert.equal(entries.size, 1);
+    const stored = await entries.values().next().value.clone().text();
+    assert.match(stored, new RegExp(root));
+    assert.match(stored, /2026-10-13T00:00:00Z/);
+    assert.doesNotMatch(stored, /uniqueterm|password|body/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    globalThis.caches = previousCaches;
+  }
 });
 
 test("a cached public Page becomes inaccessible as soon as its current metadata requires a password", async () => fixture(async ({ fetch, page }) => {

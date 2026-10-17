@@ -2,6 +2,18 @@
 
 All notable changes to blogonCF are documented here. Versions follow Semantic Versioning.
 
+## [1.1.3] - 2026-10-17
+
+### Improved
+
+- Added shared per-IP limits to public media, child-page, and database reads before they can fan out to Notion.
+- Made long-directory failures resumable from the sidebar without forcing a page reload.
+- Let the homepage edge cache return before reading Notion configuration, and added a 15-second metadata-only snapshot for search and word-cloud visibility filtering.
+
+### Verification
+
+- Added regression coverage for read limits, metadata-only cache reuse, and homepage edge hits across Worker isolates.
+
 ## [1.1.2] - 2026-10-13
 
 ### Fixed

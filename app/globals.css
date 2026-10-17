@@ -174,7 +174,9 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .sidebar-toc { padding: 10px 0 4px; border-top: 1px solid var(--line); }
 .sidebar-section[open] .sidebar-toc-list { animation: section-content-arrive .24s var(--ease-out) backwards; }
 .sidebar-toc-list { display: grid; gap: 2px; max-height: min(38vh, 360px); overflow-y: auto; margin-top: 8px; scrollbar-width: thin; }
-.sidebar-toc-state { margin: 3px 7px 6px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.sidebar-toc-state { display: grid; justify-items: start; gap: 7px; margin: 3px 7px 6px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.sidebar-toc-retry { padding: 5px 9px; color: var(--ink); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 7px; font: inherit; font-weight: 600; cursor: pointer; }
+.sidebar-toc-retry:hover, .sidebar-toc-retry:focus-visible { background: var(--surface); outline: 2px solid var(--accent); outline-offset: 2px; }
 .sidebar-toc-list a { display: block; overflow: hidden; padding: 6px 7px 6px calc(7px + (var(--toc-level, 1) - 1) * 10px); color: color-mix(in srgb, var(--ink) 82%, var(--muted)); border-radius: 6px; font-size: 13px; font-weight: 500; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-toc-list a:hover, .sidebar-toc-list a:focus-visible { color: var(--ink); background: var(--surface-soft); outline: none; }
 .sidebar-toc-list a.is-loading, .mobile-toc-list a.is-loading { color: var(--ink); background: var(--surface-soft); }

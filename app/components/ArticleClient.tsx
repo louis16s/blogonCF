@@ -126,11 +126,13 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   const [childError, setChildError] = useState("");
   const [feeds, setFeeds] = useState<ExternalFeed[]>([]);
   const [feedsLoading, setFeedsLoading] = useState(false);
+  const retryVersion = articleToc?.retryVersion ?? 0;
   const childIdRef = useRef("");
   const childTrailRef = useRef<ChildPage[]>([]);
   const childRequestRef = useRef<AbortController | null>(null);
   const childHeadingRequestRef = useRef<AbortController | null>(null);
   const pendingHeadingIdRef = useRef("");
+  const handledTocRetryRef = useRef(retryVersion);
   const nextCursorRef = useRef(initialNextCursor);
   const continuationLoadedRef = useRef(false);
   const rootCursorsRef = useRef(new Set<string>());
@@ -160,7 +162,7 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
   }, [childTrail, headings, headingsError, headingsPending, setTocHeadings, setTocStatus]);
 
   useEffect(() => {
-    if (!headingsPending || locked) return;
+    if (!headingsPending || locked || childTrail.length > 0) return;
     const controller = new AbortController();
     const read = async () => {
       for (let attempt = 0; attempt < 12; attempt++) {
@@ -178,11 +180,50 @@ export function ArticleClient({ slug, contentKind = "post", initialPost, initial
       }
       throw new Error("目录仍在建立，请稍后刷新重试");
     };
-    void read().catch((reason) => {
-      if (!controller.signal.aborted) { setHeadingsPending(false); setHeadingsError(true); setTocStatus?.("error"); setError(reason.message || "目录暂时无法读取"); }
+    void read().catch(() => {
+      if (!controller.signal.aborted) { setHeadingsPending(false); setHeadingsError(true); setTocStatus?.("error"); }
     });
     return () => controller.abort();
-  }, [contentEndpoint, headingsPending, locked, setTocStatus, slug]);
+  }, [childTrail.length, contentEndpoint, headingsPending, locked, setTocStatus, slug]);
+
+  useEffect(() => {
+    if (retryVersion === handledTocRetryRef.current) return;
+    handledTocRetryRef.current = retryVersion;
+    setError("");
+    const activeChild = childTrailRef.current.at(-1);
+    if (!activeChild) {
+      setHeadingsError(false);
+      setHeadingsPending(true);
+      return;
+    }
+
+    childHeadingRequestRef.current?.abort();
+    const controller = new AbortController();
+    childHeadingRequestRef.current = controller;
+    setChildError("");
+    setTocStatus?.("loading");
+    void requestChildHeadings(childEndpoint, {
+      slug,
+      pageId: activeChild.id,
+      accessSignature: activeChild.accessSignature,
+      trail: childTrailRef.current.slice(0, -1).map((item) => item.id),
+    }, controller.signal).then((fullHeadings) => {
+      setChildTrail((current) => {
+        const index = current.findIndex((item) => item.id === activeChild.id);
+        if (index < 0) return current;
+        const next = [...current];
+        next[index] = { ...next[index], headings: fullHeadings };
+        childTrailRef.current = next;
+        return next;
+      });
+      setTocStatus?.("ready");
+    }).catch((reason) => {
+      if (reason.name !== "AbortError") { setChildError(reason.message || "目录暂时无法读取"); setTocStatus?.("error"); }
+    }).finally(() => {
+      if (childHeadingRequestRef.current === controller) childHeadingRequestRef.current = null;
+    });
+    return () => controller.abort();
+  }, [childEndpoint, retryVersion, setTocStatus, slug]);
 
   const navigateToHeading = useCallback(async (id: string) => {
     pendingHeadingIdRef.current = id;

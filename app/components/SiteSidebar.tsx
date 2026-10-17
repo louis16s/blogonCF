@@ -41,6 +41,7 @@ export function SiteSidebar({ siteLinks, postCount, syncState, categories = [], 
   const resolvedHeadings = articleToc?.headings ?? headings;
   const tocStatus = articleToc?.status ?? "ready";
   const pendingHeadingId = articleToc?.pendingHeadingId || "";
+  const retryHeadings = articleToc?.retryHeadings;
   const needsPostStats = typeof postCount !== "number";
   const bootstrap = useSiteBootstrap({ initialConfig: siteConfig, initialLinks: siteLinks, includePosts: needsPostStats });
   const resolvedLinks = bootstrap.links;
@@ -125,7 +126,9 @@ export function SiteSidebar({ siteLinks, postCount, syncState, categories = [], 
             <nav className="sidebar-toc-list" aria-label="文章目录">
               {resolvedHeadings.length > 0
                 ? resolvedHeadings.map((heading) => <a href={`#${heading.id}`} className={pendingHeadingId === heading.id ? "is-loading" : undefined} aria-busy={pendingHeadingId === heading.id || undefined} onClick={(event) => navigateToHeading(event, heading.id)} style={{ "--toc-level": heading.level } as CSSProperties} key={heading.id}>{heading.label}</a>)
-                : <p className="sidebar-toc-state" role="status">{tocStatus === "loading" ? "正在从 Notion 整理完整目录…" : "目录暂时无法读取，稍后重新打开页面即可继续。"}</p>}
+                : <div className="sidebar-toc-state" role="status">
+                    {tocStatus === "loading" ? "正在从 Notion 整理完整目录…" : <><span>目录暂时无法读取。</span><button type="button" className="sidebar-toc-retry" onClick={retryHeadings}>继续读取</button></>}
+                  </div>}
             </nav>
           </details>
         )}
@@ -186,7 +189,9 @@ export function SiteSidebar({ siteLinks, postCount, syncState, categories = [], 
                 <div className="mobile-menu-disclosure-content mobile-toc-list">
                   {resolvedHeadings.length > 0
                     ? resolvedHeadings.map((heading) => <a href={`#${heading.id}`} className={pendingHeadingId === heading.id ? "is-loading" : undefined} aria-busy={pendingHeadingId === heading.id || undefined} onClick={(event) => navigateToHeading(event, heading.id)} key={heading.id}>{heading.label}</a>)
-                    : <p className="sidebar-toc-state" role="status">{tocStatus === "loading" ? "正在整理目录…" : "目录暂时无法读取，请稍后重新打开页面。"}</p>}
+                    : <div className="sidebar-toc-state" role="status">
+                        {tocStatus === "loading" ? "正在整理目录…" : <><span>目录暂时无法读取。</span><button type="button" className="sidebar-toc-retry" onClick={retryHeadings}>继续读取</button></>}
+                      </div>}
                 </div>
               </details>
             )}

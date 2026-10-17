@@ -49,6 +49,7 @@ const MAX_BLOCK_DEPTH = 12;
 const MAX_INDEX_BLOCKS_PER_POST = 800;
 const MAX_INDEX_CHARS_PER_POST = 120_000;
 const WORD_CLOUD_CACHE_TTL_MS = 10 * 60 * 1000;
+const PUBLIC_POST_METADATA_CACHE_TTL_SECONDS = 15;
 const CONFIG_ROWS_CACHE_TTL_MS = 5 * 60 * 1000;
 const SITE_BOOTSTRAP_CACHE_TTL_MS = 5 * 60 * 1000;
 const SITE_BOOTSTRAP_STALE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -120,10 +121,10 @@ const worker = {
       });
     }
     if (url.pathname === "/api/content/unlock-session" && request.method === "GET") return notionUnlockSession(env, request, url);
-    if (url.pathname === "/api/content/child" && request.method === "POST") return notionChildPage(env, request);
-    if (url.pathname === "/api/content/page-child" && request.method === "POST") return notionSitePageChild(env, request);
-    if (url.pathname === "/api/content/database" && request.method === "POST") return notionChildDatabase(env, request);
-    if (["/_notion/image", "/_notion/media"].includes(url.pathname) && (request.method === "GET" || request.method === "HEAD")) return notionMedia(request, env);
+    if (url.pathname === "/api/content/child" && request.method === "POST") return rateLimitedContentRead(env, request, "child-page", 120, () => notionChildPage(env, request));
+    if (url.pathname === "/api/content/page-child" && request.method === "POST") return rateLimitedContentRead(env, request, "page-child", 120, () => notionSitePageChild(env, request));
+    if (url.pathname === "/api/content/database" && request.method === "POST") return rateLimitedContentRead(env, request, "database", 90, () => notionChildDatabase(env, request));
+    if (["/_notion/image", "/_notion/media"].includes(url.pathname) && (request.method === "GET" || request.method === "HEAD")) return rateLimitedContentRead(env, request, "media", 300, () => notionMedia(request, env));
     if (url.pathname.startsWith("/api/content/post/") && (request.method === "GET" || request.method === "POST")) {
       const slug = decodeRouteSegment(url.pathname.slice("/api/content/post/".length));
       return request.method === "GET"
@@ -508,14 +509,11 @@ async function sitePagePayloadForRender(env: Env, slug: string, request: Request
   return { ...payload, config, status: response.status };
 }
 
-async function siteBootstrapCacheKey(env: Env): Promise<string> {
-  const rows = await queryConfigRows(env).catch(() => []);
-  return `${configuredContentDataSourceId(env, rows)}:${env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID}`;
+function siteBootstrapCacheKey(env: Env): string {
+  return env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID;
 }
 
-async function querySiteBootstrap(env: Env): Promise<HomePayload> {
-  const configRows = await queryConfigRows(env).catch(() => []);
-  const sourceId = configuredContentDataSourceId(env, configRows);
+async function querySiteBootstrap(env: Env, configRows: NotionConfigPage[], sourceId: string): Promise<HomePayload> {
   const [pages, contentPages] = await Promise.all([
     queryPosts(env, undefined, 100, sourceId),
     querySiteLinks(env, sourceId),
@@ -532,15 +530,19 @@ async function querySiteBootstrap(env: Env): Promise<HomePayload> {
   };
 }
 
-async function getSiteBootstrap(env: Env): Promise<HomePayload> {
+async function getSiteBootstrap(env: Env, resolved?: { configRows: NotionConfigPage[]; sourceId: string }): Promise<HomePayload> {
   if (!env.NOTION_TOKEN) throw new Error("Notion connection is not configured");
-  const key = await siteBootstrapCacheKey(env);
+  const { configRows, sourceId } = resolved || await (async () => {
+    const rows = await queryConfigRows(env).catch(() => []);
+    return { configRows: rows, sourceId: configuredContentDataSourceId(env, rows) };
+  })();
+  const key = siteBootstrapCacheKey(env);
   const now = Date.now();
   const cached = siteBootstrapCache.get(key);
   if (cached?.payload && cached.freshUntil > now) return cached.payload;
   if (cached?.pending) return cached.pending;
 
-  const pending = querySiteBootstrap(env)
+  const pending = querySiteBootstrap(env, configRows, sourceId)
     .then((payload) => {
       siteBootstrapCache.set(key, {
         payload,
@@ -773,11 +775,7 @@ async function siteBootstrapEdgeKey(env: Env, request: Request): Promise<Request
   url.host = canonical.host;
   url.pathname = "/__blog-cache/site-bootstrap";
   url.search = "";
-  url.searchParams.set("schema", "6");
-  const resolvedDataSourceId = env.NOTION_TOKEN
-    ? await resolveContentDataSourceId(env).catch(() => env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID)
-    : env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID;
-  url.searchParams.set("data", resolvedDataSourceId);
+  url.searchParams.set("schema", "7");
   url.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
   return new Request(url.toString(), { method: "GET" });
 }
@@ -844,10 +842,12 @@ async function notionNavigation(env: Env): Promise<Response> {
 
 async function notionWordCloud(env: Env, ctx?: ExecutionContext): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const config = await queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig());
+  const [config, livePosts] = await Promise.all([
+    queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig()),
+    cachedPublicPostMetadata(env, ctx),
+  ]);
   if (!config.wordCloudEnabled) return error(404, "Word cloud is disabled");
-  const livePages = (await queryPosts(env)).filter((page) => !plain(page.properties?.password));
-  const revision = livePages.map((page) => `${page.id}:${page.last_edited_time || ""}`).sort().join("|");
+  const revision = livePosts.map((page) => `${page.id}:${page.lastEditedTime}`).sort().join("|");
   const cacheKey = `${await contentIndexSourceKey(env)}:${revision}`;
   const cached = wordCloudCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
@@ -856,7 +856,7 @@ async function notionWordCloud(env: Env, ctx?: ExecutionContext): Promise<Respon
 
   try {
     const corpus = await getPublicCorpus(env, ctx);
-    const allowed = new Set(livePages.map((page) => normalizeNotionId(page.id) || page.id));
+    const allowed = new Set(livePosts.map((page) => normalizeNotionId(page.id) || page.id));
     const documents = corpus.documents.filter((doc) => allowed.has(normalizeNotionId(doc.id) || doc.id));
     const payload: WordCloudPayload = {
       words: buildWordCloud(documents.map(({ id, title, body }) => ({ id, title, body }))),
@@ -871,14 +871,17 @@ async function notionWordCloud(env: Env, ctx?: ExecutionContext): Promise<Respon
 
 async function notionSearch(env: Env, url: URL, ctx?: ExecutionContext): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const config = await queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig());
-  if (!config.searchEnabled) return error(404, "Search is disabled");
   const query = normalizeSearchText(url.searchParams.get("q") || "");
-  if (!query) return Response.json({ matches: [], partial: false, source: "index" }, { headers: { ...jsonHeaders, "cache-control": "public, max-age=60" } });
+  if (!query) return Response.json({ matches: [], partial: false, source: "index" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   if (query.length > 100) return error(400, "Search query is too long");
+  const [config, livePosts] = await Promise.all([
+    queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig()),
+    cachedPublicPostMetadata(env, ctx),
+  ]);
+  if (!config.searchEnabled) return error(404, "Search is disabled");
   try {
-    const [corpus, livePages] = await Promise.all([getPublicCorpus(env, ctx), queryPosts(env)]);
-    const allowed = new Set(livePages.filter((page) => !plain(page.properties?.password)).map((page) => normalizeNotionId(page.id) || page.id));
+    const [corpus] = await Promise.all([getPublicCorpus(env, ctx)]);
+    const allowed = new Set(livePosts.map((page) => normalizeNotionId(page.id) || page.id));
     const matches = corpus.documents
       .filter((document) => allowed.has(normalizeNotionId(document.id) || document.id))
       .filter((document) => normalizeSearchText([
@@ -891,6 +894,54 @@ async function notionSearch(env: Env, url: URL, ctx?: ExecutionContext): Promise
       .map((document) => document.id);
     return Response.json({ matches, partial: corpus.partial, source: corpus.source }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }
+}
+
+type PublicPostMetadata = { id: string; lastEditedTime: string };
+
+/**
+ * Cross-isolate, short-lived projection used only to filter public search and
+ * word-cloud results. It contains no page properties or body text. Protected
+ * article reads continue to resolve their current Notion password directly.
+ */
+async function cachedPublicPostMetadata(env: Env, ctx?: ExecutionContext): Promise<PublicPostMetadata[]> {
+  const cache = defaultWorkerCache();
+  const keyUrl = new URL("https://blogoncf-cache.invalid/__blog-cache/public-post-metadata");
+  keyUrl.searchParams.set("schema", "1");
+  keyUrl.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
+  keyUrl.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || "configured-in-notion");
+  const cacheKey = new Request(keyUrl.toString(), { method: "GET" });
+  const readCached = async (): Promise<PublicPostMetadata[] | undefined> => {
+    const response = await cache?.match(cacheKey).catch(() => undefined);
+    if (!response) return undefined;
+    const payload = await response.json().catch(() => undefined) as { posts?: unknown } | undefined;
+    return Array.isArray(payload?.posts) ? payload.posts.filter((post): post is PublicPostMetadata =>
+      Boolean(post && typeof post === "object" && typeof (post as PublicPostMetadata).id === "string" && typeof (post as PublicPostMetadata).lastEditedTime === "string")) : undefined;
+  };
+  const cached = await readCached();
+  if (cached) return cached;
+
+  const response = await coalescedResponse(`public-post-metadata:${cacheKey.url}`, async () => {
+    const coalescedCache = await readCached();
+    if (coalescedCache) return Response.json({ posts: coalescedCache });
+    const configRows = await queryConfigRows(env);
+    const sourceId = configuredContentDataSourceId(env, configRows);
+    const pages = await queryPosts(env, undefined, 100, sourceId);
+    const posts = pages.flatMap((page) => {
+      if (plain(page.properties?.password)) return [];
+      const id = normalizeNotionId(page.id) || page.id;
+      return typeof id === "string" && id ? [{ id, lastEditedTime: typeof page.last_edited_time === "string" ? page.last_edited_time : "" }] : [];
+    });
+    const metadataResponse = Response.json({ posts }, {
+      headers: { ...jsonHeaders, "cache-control": `public, max-age=${PUBLIC_POST_METADATA_CACHE_TTL_SECONDS}` },
+    });
+    if (cache && ctx) ctx.waitUntil(cache.put(cacheKey, metadataResponse.clone()).catch((reason) => {
+      console.warn(reason instanceof Error ? reason.message : "Public metadata cache write failed");
+    }));
+    return metadataResponse;
+  });
+  const payload = await response.json().catch(() => ({})) as { posts?: unknown };
+  return Array.isArray(payload.posts) ? payload.posts.filter((post): post is PublicPostMetadata =>
+    Boolean(post && typeof post === "object" && typeof (post as PublicPostMetadata).id === "string" && typeof (post as PublicPostMetadata).lastEditedTime === "string")) : [];
 }
 
 async function notionExternalRss(env: Env, url: URL, resolvedPage?: any): Promise<Response> {
@@ -1244,6 +1295,17 @@ async function checkExpensiveRequest(env: Env, request: Request, route: string, 
     status: result.available ? 429 : 502,
     headers: { ...jsonHeaders, "cache-control": "no-store", "retry-after": String(result.retryAfter) },
   });
+}
+
+async function rateLimitedContentRead(
+  env: Env,
+  request: Request,
+  route: string,
+  limit: number,
+  load: () => Promise<Response>,
+): Promise<Response> {
+  const limited = await checkExpensiveRequest(env, request, route, limit, 60_000);
+  return limited || load();
 }
 
 async function notionChildDatabase(env: Env, request: Request): Promise<Response> {
