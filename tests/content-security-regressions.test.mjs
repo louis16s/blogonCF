@@ -10,6 +10,37 @@ const member = "66666666-6666-4666-8666-666666666666";
 const rich = (text) => ({ rich_text: [{ plain_text: text }] });
 const paragraph = (id, text) => ({ id, type: "paragraph", has_children: false, paragraph: { rich_text: [{ plain_text: text }] } });
 
+for (const [path, feature] of [["/api/content/search?q=fixture", "SEARCH_ENABLED"], ["/api/content/word-cloud", "WORD_CLOUD_ENABLED"]]) {
+  test(`${feature} skips upstream content when disabled and maps upstream failures to JSON`, async () => {
+    const previousFetch = globalThis.fetch;
+    let disabled = true;
+    let contentCalls = 0;
+    globalThis.fetch = async (input) => {
+      if (String(input).includes("/data_sources/feature-config/query")) return Response.json({ results: disabled ? [{ properties: {
+        "启用": { checkbox: true }, "配置名": { title: [{ plain_text: feature }] }, "配置值": rich("false"),
+      } }] : [] });
+      contentCalls++;
+      return Response.json({ message: "upstream unavailable" }, { status: 403 });
+    };
+    const env = { NOTION_TOKEN: "synthetic-test-token", NOTION_CONFIG_DATA_SOURCE_ID: "feature-config", NOTION_DATA_SOURCE_ID: "feature-content", DB: {
+      prepare() { return { bind() { return this; }, async first() { return { request_count: 1 }; }, async all() { return { results: [] }; } }; },
+    } };
+    const ctx = { waitUntil() {}, passThroughOnException() {} };
+    try {
+      let worker = (await import(`../dist/server/index.js?feature=${Math.random()}`)).default;
+      let response = await worker.fetch(new Request(`http://localhost${path}`), env, ctx);
+      assert.equal(response.status, 404);
+      assert.equal(contentCalls, 0);
+      disabled = false;
+      worker = (await import(`../dist/server/index.js?failure=${Math.random()}`)).default;
+      response = await worker.fetch(new Request(`http://localhost${path}`), env, ctx);
+      assert.equal(response.status, 502);
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      assert.equal(typeof (await response.json()).error, "string");
+    } finally { globalThis.fetch = previousFetch; }
+  });
+}
+
 async function fixture(run, password = "fixture-password") {
   const originalFetch = globalThis.fetch;
   const page = { id: root, object: "page", last_edited_time: "2026-10-13T00:00:00Z", properties: {

@@ -213,6 +213,10 @@ test("homepage edge hits do not read Notion config before checking the cache", a
     assert.equal(second.status, 200);
     assert.equal(second.headers.get("x-blog-cache"), "hit");
     assert.equal(upstreamCalls, warmedCalls, "an edge hit should avoid Notion config lookup as well as content queries");
+    const switched = await nextWorker.fetch(new Request("https://blog.example/api/content/posts"), { ...env, NOTION_DATA_SOURCE_ID: "other-source" }, makeContext());
+    assert.equal(switched.status, 200);
+    assert.equal(switched.headers.get("x-blog-cache"), "miss", "switching the content source must not reuse another source's homepage snapshot");
+    assert.ok(upstreamCalls > warmedCalls);
   } finally {
     globalThis.caches = previousCaches;
     globalThis.fetch = previousFetch;

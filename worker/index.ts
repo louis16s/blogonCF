@@ -510,7 +510,7 @@ async function sitePagePayloadForRender(env: Env, slug: string, request: Request
 }
 
 function siteBootstrapCacheKey(env: Env): string {
-  return env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID;
+  return JSON.stringify([env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID, env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID]);
 }
 
 async function querySiteBootstrap(env: Env, configRows: NotionConfigPage[], sourceId: string): Promise<HomePayload> {
@@ -530,19 +530,16 @@ async function querySiteBootstrap(env: Env, configRows: NotionConfigPage[], sour
   };
 }
 
-async function getSiteBootstrap(env: Env, resolved?: { configRows: NotionConfigPage[]; sourceId: string }): Promise<HomePayload> {
+async function getSiteBootstrap(env: Env): Promise<HomePayload> {
   if (!env.NOTION_TOKEN) throw new Error("Notion connection is not configured");
-  const { configRows, sourceId } = resolved || await (async () => {
-    const rows = await queryConfigRows(env).catch(() => []);
-    return { configRows: rows, sourceId: configuredContentDataSourceId(env, rows) };
-  })();
   const key = siteBootstrapCacheKey(env);
   const now = Date.now();
   const cached = siteBootstrapCache.get(key);
   if (cached?.payload && cached.freshUntil > now) return cached.payload;
   if (cached?.pending) return cached.pending;
 
-  const pending = querySiteBootstrap(env, configRows, sourceId)
+  const pending = queryConfigRows(env).catch(() => []).then((rows) =>
+    querySiteBootstrap(env, rows, configuredContentDataSourceId(env, rows)))
     .then((payload) => {
       siteBootstrapCache.set(key, {
         payload,
@@ -776,6 +773,7 @@ async function siteBootstrapEdgeKey(env: Env, request: Request): Promise<Request
   url.pathname = "/__blog-cache/site-bootstrap";
   url.search = "";
   url.searchParams.set("schema", "7");
+  url.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
   url.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
   return new Request(url.toString(), { method: "GET" });
 }
@@ -842,19 +840,17 @@ async function notionNavigation(env: Env): Promise<Response> {
 
 async function notionWordCloud(env: Env, ctx?: ExecutionContext): Promise<Response> {
   if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
-  const [config, livePosts] = await Promise.all([
-    queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig()),
-    cachedPublicPostMetadata(env, ctx),
-  ]);
-  if (!config.wordCloudEnabled) return error(404, "Word cloud is disabled");
-  const revision = livePosts.map((page) => `${page.id}:${page.lastEditedTime}`).sort().join("|");
-  const cacheKey = `${await contentIndexSourceKey(env)}:${revision}`;
-  const cached = wordCloudCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return Response.json(cached.payload, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
-  }
-
   try {
+    const config = await queryPublicSiteConfig(env);
+    if (!config.wordCloudEnabled) return error(404, "Word cloud is disabled");
+    const livePosts = await cachedPublicPostMetadata(env, ctx);
+    const revision = livePosts.map((page) => `${page.id}:${page.lastEditedTime}`).sort().join("|");
+    const cacheKey = `${await contentIndexSourceKey(env)}:${revision}`;
+    const cached = wordCloudCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return Response.json(cached.payload, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
+    }
+
     const corpus = await getPublicCorpus(env, ctx);
     const allowed = new Set(livePosts.map((page) => normalizeNotionId(page.id) || page.id));
     const documents = corpus.documents.filter((doc) => allowed.has(normalizeNotionId(doc.id) || doc.id));
@@ -874,13 +870,10 @@ async function notionSearch(env: Env, url: URL, ctx?: ExecutionContext): Promise
   const query = normalizeSearchText(url.searchParams.get("q") || "");
   if (!query) return Response.json({ matches: [], partial: false, source: "index" }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   if (query.length > 100) return error(400, "Search query is too long");
-  const [config, livePosts] = await Promise.all([
-    queryPublicSiteConfig(env).catch(() => createDefaultSiteConfig()),
-    cachedPublicPostMetadata(env, ctx),
-  ]);
-  if (!config.searchEnabled) return error(404, "Search is disabled");
   try {
-    const [corpus] = await Promise.all([getPublicCorpus(env, ctx)]);
+    const config = await queryPublicSiteConfig(env);
+    if (!config.searchEnabled) return error(404, "Search is disabled");
+    const [livePosts, corpus] = await Promise.all([cachedPublicPostMetadata(env, ctx), getPublicCorpus(env, ctx)]);
     const allowed = new Set(livePosts.map((page) => normalizeNotionId(page.id) || page.id));
     const matches = corpus.documents
       .filter((document) => allowed.has(normalizeNotionId(document.id) || document.id))

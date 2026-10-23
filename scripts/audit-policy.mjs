@@ -12,7 +12,7 @@ export const auditExceptions = new Map([
     // pnpm 9 reports exact versioned paths but omits finding.dev; only these
     // two known developer-tool chains qualify under that older report schema.
     legacyAllowedPaths: new Set([
-      ". > eslint-config-next@16.3.8 > @next/eslint-plugin-next@16.3.8 > fast-glob@3.3.1 > micromatch@4.0.8 > braces@3.0.3",
+      ". > eslint-config-next@16.4.1 > @next/eslint-plugin-next@16.4.1 > fast-glob@3.3.1 > micromatch@4.0.8 > braces@3.0.3",
       ". > vinext@0.0.50 > vite-plugin-commonjs@0.10.4 > vite-plugin-dynamic-import@1.6.0 > fast-glob@3.3.3 > micromatch@4.0.8 > braces@3.0.3",
     ]),
   }],

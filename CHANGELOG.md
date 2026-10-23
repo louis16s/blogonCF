@@ -2,6 +2,23 @@
 
 All notable changes to blogonCF are documented here. Versions follow Semantic Versioning.
 
+## [1.1.4] - 2026-10-23
+
+### Fixed
+
+- Search and word-cloud feature switches now stop content reads before metadata or corpus work starts.
+- Upstream configuration and metadata failures return structured, uncached API errors instead of escaping the request handler.
+- Homepage memory-cache hits skip configuration resolution; memory and edge snapshots include the configured content source in their keys.
+- Excluded transient Playwright output from lint traversal to prevent cleanup races.
+
+### Security
+
+- Upgraded Next.js and its ESLint configuration to 16.4.1, Vite to 8.2.4, and KaTeX to 0.18.2 for published security fixes.
+
+### Verification
+
+- Added runtime regressions for disabled features, metadata failures, and homepage cache isolation across content sources.
+
 ## [1.1.3] - 2026-10-17
 
 ### Improved
