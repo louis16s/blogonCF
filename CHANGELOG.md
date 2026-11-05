@@ -2,6 +2,11 @@
 
 All notable changes to blogonCF are documented here. Versions follow Semantic Versioning.
 
+## [1.1.5] - 2026-11-05
+
+- Reuse the Chinese word segmenter and normalized search text while cached public documents remain in memory.
+- Update the development toolchain's undici dependency to address security advisories.
+
 ## [1.1.4] - 2026-10-23
 
 ### Fixed

@@ -60,6 +60,7 @@ const jsonHeaders = { "content-type": "application/json; charset=utf-8", "x-cont
 const publicContentHeaders = { ...jsonHeaders, "cache-control": "public, max-age=300, stale-while-revalidate=86400" };
 const wordCloudCache = new Map<string, { expiresAt: number; payload: WordCloudPayload }>();
 const publicCorpusCache = new Map<string, { expiresAt: number; corpus?: PublicCorpus; pending?: Promise<PublicCorpus> }>();
+const searchTextCache = new WeakMap<SearchDocument, string>();
 const siteBootstrapCache = new Map<string, { freshUntil: number; staleUntil: number; payload?: HomePayload; pending?: Promise<HomePayload> }>();
 const headingIndexCache = new Map<string, { expiresAt: number; headings?: HeadingSummary[]; pending?: Promise<HeadingSummary[]> }>();
 const headingJobCache = new Map<string, HeadingIndexJob>();
@@ -877,13 +878,14 @@ async function notionSearch(env: Env, url: URL, ctx?: ExecutionContext): Promise
     const allowed = new Set(livePosts.map((page) => normalizeNotionId(page.id) || page.id));
     const matches = corpus.documents
       .filter((document) => allowed.has(normalizeNotionId(document.id) || document.id))
-      .filter((document) => normalizeSearchText([
-        document.title,
-        document.summary,
-        document.category,
-        ...document.tags,
-        document.searchBody,
-      ].join("\n")).includes(query))
+      .filter((document) => {
+        let text = searchTextCache.get(document);
+        if (text === undefined) {
+          text = normalizeSearchText([document.title, document.summary, document.category, ...document.tags, document.searchBody].join("\n"));
+          searchTextCache.set(document, text);
+        }
+        return text.includes(query);
+      })
       .map((document) => document.id);
     return Response.json({ matches, partial: corpus.partial, source: corpus.source }, { headers: { ...jsonHeaders, "cache-control": "no-store" } });
   } catch (reason) { return notionError(reason); }

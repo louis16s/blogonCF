@@ -6,6 +6,7 @@ const STOP_WORDS = new Set([
 const LATIN_WORD = /^[a-z\d][a-z\d.+#-]*$/i;
 const HAN = /[\p{Script=Han}]/u;
 const FALLBACK_WORDS = /[\p{Script=Han}]{2,8}|[a-z\d][a-z\d.+#-]{1,}/giu;
+let wordSegmenter;
 
 export function normalizeSearchText(value) {
   return String(value || "").normalize("NFKC").trim().toLocaleLowerCase("zh-CN");
@@ -24,8 +25,8 @@ function segmentWords(value) {
   const text = String(value || "");
   if (!text.trim()) return [];
   if (typeof Intl.Segmenter === "function") {
-    const segmenter = new Intl.Segmenter("zh-CN", { granularity: "word" });
-    return Array.from(segmenter.segment(text), (part) => part.isWordLike ? normalizeWord(part.segment) : "").filter(Boolean);
+    wordSegmenter ||= new Intl.Segmenter("zh-CN", { granularity: "word" });
+    return Array.from(wordSegmenter.segment(text), (part) => part.isWordLike ? normalizeWord(part.segment) : "").filter(Boolean);
   }
   return Array.from(text.matchAll(FALLBACK_WORDS), (match) => normalizeWord(match[0])).filter(Boolean);
 }

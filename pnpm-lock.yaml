@@ -15,7 +15,7 @@ overrides:
   postcss: ^8.5.23
   sharp: ^0.35.5
   source-map-js: ^1.2.2
-  undici: ^7.29.1
+  undici: ^7.30.1
   ws: ^8.21.0
   webpack: ^5.112.0
 
@@ -91,7 +91,7 @@ importers:
         specifier: 8.2.4
         version: 8.2.4(@types/node@22.19.19)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.1)
       webpack:
-        specifier: 5.112.0
+        specifier: ^5.112.0
         version: 5.112.0(esbuild@0.28.1)
       wrangler:
         specifier: 4.127.1
@@ -3285,8 +3285,8 @@ packages:
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
-  undici@7.30.0:
-    resolution: {integrity: sha512-dkrQXeHSaoamnItlYbmzG0wFYrM0ZwDxCIg0A7aKjTyyhh9svRzCNFEzV+Vm05/yehjCzjDZ31KXfGEjYSztDQ==}
+  undici@7.30.1:
+    resolution: {integrity: sha512-03KrMbjIFDWQR5RNPrSw3bd1r12JpyFQl9/yxjUbJtqkjmllqC5lFjZh6ujeuJCKr8EOQvRW872Oy/az+nLYxg==}
     engines: {node: '>=20.18.1'}
 
   unenv@2.0.0-rc.24:
@@ -5848,7 +5848,7 @@ snapshots:
     dependencies:
       '@cspotcode/source-map-support': 0.8.1
       sharp: 0.35.5(@types/node@22.19.19)
-      undici: 7.30.0
+      undici: 7.30.1
       workerd: 1.20260828.1
       ws: 8.21.0
       youch: 4.1.0-beta.10
@@ -6471,7 +6471,7 @@ snapshots:
 
   undici-types@6.21.0: {}
 
-  undici@7.30.0: {}
+  undici@7.30.1: {}
 
   unenv@2.0.0-rc.24:
     dependencies:
