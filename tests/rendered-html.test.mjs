@@ -379,7 +379,7 @@ test("every generated word uses the same Unicode normalization as article search
   assert.equal(normalizeSearchText("  ＡＩ  "), "ai");
 });
 
-test("rangefinder intro matches the 07cd9ba sequence, lasts at least five seconds, and remains motion-safe", async () => {
+test("rangefinder intro stays home-only, lasts at least five seconds, and remains motion-safe", async () => {
   const [layout, home, intro, css, asset, favicon] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -406,6 +406,8 @@ test("rangefinder intro matches the 07cd9ba sequence, lasts at least five second
   assert.match(intro, /intro-progress/);
   assert.doesNotMatch(intro, /intro-camera-rig|intro-lens-aperture|intro-aperture-blade|intro-shutter/);
   assert.match(css, /@keyframes intro-camera-journey/);
+  assert.match(css, /@keyframes intro-exposure/);
+  assert.doesNotMatch(css, /scale\(16\)/);
   assert.match(css, /@keyframes intro-caption-journey/);
   assert.match(css, /@keyframes intro-progress/);
   assert.match(css, /html\[data-intro="playing"\] \.site-intro \{ display: grid; \}/);

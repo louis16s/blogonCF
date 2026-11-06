@@ -90,7 +90,8 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .site-intro::before { content: ""; position: absolute; inset: 0; z-index: -1; opacity: .38; background: radial-gradient(circle at 50% 48%, #fff 0 34%, #f7f7f7 72%, #efefef 100%); }
 .intro-stage { position: relative; width: min(76vw, 760px); aspect-ratio: 3 / 2; }
 .intro-camera { width: 100%; height: 100%; display: block; object-fit: contain; transform-origin: 53% 55%; will-change: transform, opacity; animation: intro-camera-journey 5.35s var(--ease-out) both; }
-.intro-lens-flash { position: absolute; top: 55%; left: 53%; width: clamp(78px, 12vw, 122px); aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, rgba(255, 255, 255, .95) 0 5%, rgba(187, 210, 233, .55) 16%, rgba(20, 20, 24, .12) 44%, transparent 70%); transform: translate(-50%, -50%) scale(.25); opacity: 0; mix-blend-mode: screen; animation: intro-lens-pulse 5.35s var(--ease-soft) both; }
+.intro-lens-flash { position: absolute; top: 55%; left: 53%; width: clamp(54px, 9vw, 90px); aspect-ratio: 1; border-radius: 50%; background: radial-gradient(ellipse at 35% 30%, rgba(208, 222, 235, .35), transparent 60%); transform: translate(-50%, -50%); opacity: 0; pointer-events: none; mix-blend-mode: screen; animation: intro-lens-pulse 5.35s ease-in-out both; }
+.intro-stage::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: #111; opacity: 0; animation: intro-exposure 5.35s linear both; }
 .intro-caption { position: absolute; left: 50%; bottom: 2%; display: grid; gap: 4px; width: max-content; text-align: center; transform: translateX(-50%); animation: intro-caption-journey 5.35s var(--ease-soft) both; }
 .intro-caption span { color: #929292; font-size: 9px; font-weight: 650; letter-spacing: .18em; }
 .intro-caption strong { font-family: "Snell Roundhand", "Segoe Script", "Brush Script MT", cursive; font-size: 24px; font-weight: 580; letter-spacing: .035em; }
@@ -120,21 +121,19 @@ html[data-intro="playing"] .site-intro { display: grid; }
 }
 
 @keyframes intro-camera-journey {
-  0% { opacity: 0; transform: translate3d(-74vw, 12px, 0) scale(.7) rotate(-4deg); }
-  10% { opacity: 1; }
-  30% { opacity: 1; transform: translate3d(0, 0, 0) scale(1) rotate(0); }
-  46% { transform: translate3d(0, 0, 0) scale(.97); }
-  61% { transform: translate3d(0, 0, 0) scale(1.025); }
-  78% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
-  100% { opacity: 0; transform: translate3d(0, 0, 0) scale(16); }
+  0% { opacity: 0; transform: translate3d(-7%, 8px, 0) scale(.98); }
+  24% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+  70% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+  72% { transform: translate3d(0, 1px, 0) scale(.998); }
+  75%, 84% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+  100% { opacity: 0; transform: translate3d(0, -3px, 0) scale(1.015); }
 }
 @keyframes intro-lens-pulse {
-  0%, 54% { opacity: 0; transform: translate(-50%, -50%) scale(.25); }
-  64% { opacity: .18; transform: translate(-50%, -50%) scale(.72); }
-  74% { opacity: 1; transform: translate(-50%, -50%) scale(1.15); }
-  84% { opacity: .1; transform: translate(-50%, -50%) scale(2.1); }
-  100% { opacity: 0; transform: translate(-50%, -50%) scale(9); }
+  0%, 30% { opacity: 0; }
+  52% { opacity: .6; }
+  70%, 100% { opacity: 0; }
 }
+@keyframes intro-exposure { 0%, 71%, 74%, 100% { opacity: 0; } 72% { opacity: .12; } }
 @keyframes intro-caption-journey { 0%, 22% { opacity: 0; transform: translate(-50%, 7px); } 36%, 76% { opacity: 1; transform: translate(-50%, 0); } 90%, 100% { opacity: 0; transform: translate(-50%, -4px); } }
 @keyframes intro-progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 @keyframes intro-curtain { 0%, 82% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
