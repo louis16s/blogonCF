@@ -2,6 +2,11 @@
 
 All notable changes to blogonCF are documented here. Versions follow Semantic Versioning.
 
+## [1.1.8] - 2026-11-06
+
+- Restored the v1.1.5 homepage introduction animation.
+- Display Notion-uploaded link icons through a stable, restricted same-origin image endpoint, alongside existing emoji support.
+
 ## [1.1.7] - 2026-11-06
 
 - Restored a visible, stepped aperture animation inside the rangefinder lens, aligned with the camera movement.

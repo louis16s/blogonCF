@@ -19,6 +19,7 @@ export type SiteLink = {
   href: string;
   summary: string;
   icon?: string;
+  iconImage?: string;
   external: boolean;
   kind: "rss" | "tool" | "nav";
 };

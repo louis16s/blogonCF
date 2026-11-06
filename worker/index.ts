@@ -98,6 +98,7 @@ const worker = {
       return withHead(request, await cachedConfigAsset(request, env, ctx, () => notionSiteIcon(env, request)));
     }
     if (url.pathname.startsWith("/_notion/config-image/") && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedConfigAsset(request, env, ctx, () => notionConfigImage(env, url)));
+    if (url.pathname.startsWith("/_notion/link-icon/") && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await cachedConfigAsset(request, env, ctx, () => notionLinkIcon(env, url)));
     if (url.pathname === "/api/content/posts" && (request.method === "GET" || request.method === "HEAD")) return withHead(request, await notionPosts(env, request, ctx));
     if (url.pathname === "/api/content/navigation" && request.method === "GET") {
       return cachedPublicApi(request, env, ctx, "navigation", 300, () => notionNavigation(env));
@@ -316,6 +317,23 @@ async function notionConfigImageByKey(env: Env, key: string, rows?: NotionConfig
   const page = (rows || await queryConfigRows(env)).find((row) => row.properties?.["启用"]?.checkbox === true && configPageKey(row) === key);
   const rawUrl = configPageFileUrl(page);
   if (!rawUrl) return null;
+  return fetchNotionPublicImage(rawUrl);
+}
+
+async function notionLinkIcon(env: Env, requestUrl: URL): Promise<Response> {
+  if (!env.NOTION_TOKEN) return error(503, "Notion connection is not configured");
+  const id = normalizeNotionId(requestUrl.pathname.slice("/_notion/link-icon/".length));
+  if (!id) return error(404, "Icon not found");
+  try {
+    const [pages, rows] = await Promise.all([querySiteLinks(env), queryConfigRows(env)]);
+    const page = [...pages, ...rows.filter(isConfigLinkPage)].find((item) => normalizeNotionId(item.id) === id && (isConfigLinkPage(item) || (item.properties?.type?.select?.name === "Link" && item.properties?.status?.select?.name === "Published")));
+    const rawUrl = page?.icon?.type === "file" ? page.icon.file?.url : "";
+    return await fetchNotionPublicImage(rawUrl) || error(404, "Icon not found");
+  } catch (reason) { return notionError(reason); }
+}
+
+async function fetchNotionPublicImage(rawUrl: string): Promise<Response | null> {
+  if (!rawUrl) return null;
   let source: URL;
   try { source = new URL(rawUrl); }
   catch { return null; }
@@ -340,6 +358,7 @@ async function notionConfigImageByKey(env: Env, key: string, rows?: NotionConfig
     "content-type": contentType,
     "cache-control": "public, max-age=300, stale-while-revalidate=86400",
     "x-content-type-options": "nosniff",
+    "content-security-policy": "default-src 'none'; sandbox",
   } });
 }
 
@@ -644,7 +663,7 @@ async function cachedPublicApi(
   keyUrl.search = "";
   if (namespace === "search") keyUrl.searchParams.set("q", query);
   if (namespace.startsWith("rss-feeds:") && slug) keyUrl.searchParams.set("slug", slug);
-  keyUrl.searchParams.set("schema", "2");
+  keyUrl.searchParams.set("schema", "3");
   keyUrl.searchParams.set("cache", namespace);
   if (pageVersion) keyUrl.searchParams.set("version", pageVersion);
   const resolvedDataSourceId = env.NOTION_TOKEN
@@ -773,7 +792,7 @@ async function siteBootstrapEdgeKey(env: Env, request: Request): Promise<Request
   url.host = canonical.host;
   url.pathname = "/__blog-cache/site-bootstrap";
   url.search = "";
-  url.searchParams.set("schema", "7");
+  url.searchParams.set("schema", "8");
   url.searchParams.set("data", env.NOTION_DATA_SOURCE_ID || DEFAULT_DATA_SOURCE_ID);
   url.searchParams.set("config", env.NOTION_CONFIG_DATA_SOURCE_ID || DEFAULT_CONFIG_DATA_SOURCE_ID);
   return new Request(url.toString(), { method: "GET" });
@@ -1858,6 +1877,7 @@ function toSiteLink(page: any) {
     href,
     summary: configLink ? plain(properties["备注"]) : plain(properties.summary),
     icon: notionDisplayEmoji(page),
+    ...(page.icon?.type === "file" && normalizeNotionId(page.id) ? { iconImage: `/_notion/link-icon/${normalizeNotionId(page.id)}?v=${Math.max(0, Date.parse(page.last_edited_time || "") || 0).toString(36)}` } : {}),
     external,
     kind: rss ? "rss" as const : isInternalPage ? "nav" as const : "tool" as const,
   };

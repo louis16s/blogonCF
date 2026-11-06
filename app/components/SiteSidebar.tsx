@@ -113,7 +113,7 @@ export function SiteSidebar({ siteLinks, postCount, syncState, categories = [], 
             <div className="sidebar-tool-list">
               {toolLinks.map((link) => (
                 <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id} title={link.summary || link.title}>
-                  <span className="tool-link-label">{link.icon ? <span aria-hidden>{link.icon}</span> : null}<span>{link.title}</span></span><ArrowSquareOut aria-hidden size={13} />
+                  <span className="tool-link-label">{link.iconImage ? <img className="tool-link-icon" src={link.iconImage} alt="" loading="lazy" /> : link.icon ? <span aria-hidden>{link.icon}</span> : null}<span>{link.title}</span></span><ArrowSquareOut aria-hidden size={13} />
                 </a>
               ))}
             </div>
@@ -178,7 +178,7 @@ export function SiteSidebar({ siteLinks, postCount, syncState, categories = [], 
                 <summary><span>{SITE_LABELS.tools}</span><small>{toolLinks.length}</small><CaretDown className="section-caret" aria-hidden size={13} /></summary>
                 <div className="mobile-menu-disclosure-content">
                   {toolLinks.map((link) => (
-                    <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id}>{link.title}{link.external && <small>外部</small>}</a>
+                    <a href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noreferrer" : undefined} key={link.id}><span className="tool-link-label">{link.iconImage ? <img className="tool-link-icon" src={link.iconImage} alt="" loading="lazy" /> : link.icon ? <span aria-hidden>{link.icon}</span> : null}<span>{link.title}</span></span>{link.external && <small>外部</small>}</a>
                   ))}
                 </div>
               </details>

@@ -379,7 +379,7 @@ test("every generated word uses the same Unicode normalization as article search
   assert.equal(normalizeSearchText("  ＡＩ  "), "ai");
 });
 
-test("rangefinder intro stays home-only, lasts at least five seconds, and remains motion-safe", async () => {
+test("rangefinder intro matches the 07cd9ba sequence, lasts at least five seconds, and remains motion-safe", async () => {
   const [layout, home, intro, css, asset, favicon] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -404,11 +404,8 @@ test("rangefinder intro stays home-only, lasts at least five seconds, and remain
   assert.doesNotMatch(intro, /FRAME 01/);
   assert.match(intro, /正在对焦生活/);
   assert.match(intro, /intro-progress/);
-  assert.match(intro, /className="intro-iris"/);
-  assert.match(intro, /attributeName="points"/);
+  assert.doesNotMatch(intro, /intro-camera-rig|intro-lens-aperture|intro-aperture-blade|intro-shutter/);
   assert.match(css, /@keyframes intro-camera-journey/);
-  assert.match(css, /@keyframes intro-exposure/);
-  assert.doesNotMatch(css, /scale\(16\)/);
   assert.match(css, /@keyframes intro-caption-journey/);
   assert.match(css, /@keyframes intro-progress/);
   assert.match(css, /html\[data-intro="playing"\] \.site-intro \{ display: grid; \}/);
@@ -1367,6 +1364,40 @@ test("content endpoint maps only filtered metadata while keeping browser respons
     const head = await worker.fetch(new Request("http://localhost/api/content/posts", { method: "HEAD" }), env, context);
     assert.equal(head.status, 200);
     assert.equal(await head.text(), "");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("published link file icons use a stable, restricted same-origin image endpoint", async () => {
+  const worker = await loadWorker();
+  const originalFetch = globalThis.fetch;
+  const pageId = "28fad771-48f4-4081-8180-cb057dcb27fe";
+  const page = { id: pageId, last_edited_time: "2026-11-06T00:00:00.000Z", icon: { type: "file", file: { url: "https://prod-files-secure.s3.us-west-2.amazonaws.com/icons/palette.svg?temporary=1" } }, properties: {
+    type: { select: { name: "Link" } }, status: { select: { name: "Published" } }, title: { title: [{ plain_text: "色卡" }] }, slug: { rich_text: [{ plain_text: "https://example.com" }] }, summary: { rich_text: [] },
+  } };
+  let imageRequests = 0;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("/data_sources/icon-config/query")) return Response.json({ results: [] });
+    if (url.includes("/data_sources/icon-content/query")) return Response.json({ results: [page] });
+    if (url.startsWith("https://prod-files-secure.s3.us-west-2.amazonaws.com/")) { imageRequests++; return new Response("<svg xmlns='http://www.w3.org/2000/svg'/>", { headers: { "content-type": "image/svg+xml" } }); }
+    throw new Error(`Unexpected upstream ${url}`);
+  };
+  try {
+    const env = { ASSETS: assets, NOTION_TOKEN: "test-token", NOTION_DATA_SOURCE_ID: "icon-content", NOTION_CONFIG_DATA_SOURCE_ID: "icon-config" };
+    const navigation = await worker.fetch(new Request("http://localhost/api/content/navigation"), env, context);
+    const link = (await navigation.json()).links[0];
+    assert.match(link.iconImage, new RegExp(`^/_notion/link-icon/${pageId}\\?v=`));
+    assert.doesNotMatch(link.iconImage, /temporary/);
+    const image = await worker.fetch(new Request(`http://localhost${link.iconImage}`), env, context);
+    assert.equal(image.status, 200);
+    assert.match(image.headers.get("content-type"), /image\/svg\+xml/);
+    assert.match(image.headers.get("content-security-policy"), /sandbox/);
+    page.properties.status.select.name = "Draft";
+    assert.equal((await worker.fetch(new Request(`http://localhost${link.iconImage}`), env, context)).status, 404);
+    page.properties.status.select.name = "Published";
+    page.icon.file.url = "https://evil.example/palette.svg";
+    assert.equal((await worker.fetch(new Request(`http://localhost${link.iconImage}`), env, context)).status, 404);
+    assert.equal(imageRequests, 1);
   } finally { globalThis.fetch = originalFetch; }
 });
 
