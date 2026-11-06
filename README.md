@@ -231,6 +231,8 @@ pnpm dev
 
 ## 数据与性能架构
 
+城市识别使用 [GeoNames](https://www.geonames.org/) 的 `cities15000` 地名数据（[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)；快照 2026-11-05），提取首都、一级行政中心和人口不少于 25 万的城市及其部分别名。简繁字形映射来自 [OpenCC](https://github.com/BYVoid/OpenCC)（Apache-2.0，见 `licenses/OpenCC-Apache-2.0.txt`），仅用于生成地名别名。匹配可能有同名误识和遗漏；只读取公开文章标题与正文。更新时下载并解压 GeoNames 的 `cities15000.zip` 和 OpenCC 的 `TSCharacters.txt`，运行 `node scripts/update-city-data.mjs /path/to/cities15000.txt /path/to/TSCharacters.txt`。
+
 - 首页由 Worker 并行读取文章、菜单和公共配置后直接 SSR，不等待浏览器二次拼装。
 - 静态资源采用 Assets 优先路由，哈希文件使用一年不可变缓存；关闭独立的 Workers Caching（该模式连缓存命中的静态资源也计入请求用量）。应用内部的 Cache API 保留：它能减少 Notion/D1 读取和 CPU，但不能免除动态入站请求额度。参见 [Cloudflare 官方计费说明](https://developers.cloudflare.com/workers/platform/pricing/)。
 - 正文分段在 Worker 内按 Notion 版本复用缓存；每次访问检查当前发布状态和密码。正文、目录、搜索、词云及媒体对浏览器使用 `no-store`，避免设置密码后继续复用旧响应。文章入口保留摄影过渡动画，通过一次文档导航打开文章。

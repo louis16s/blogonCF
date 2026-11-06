@@ -2,6 +2,12 @@
 
 All notable changes to blogonCF are documented here. Versions follow Semantic Versioning.
 
+## [1.2.0] - 2026-11-06
+
+- Added a city list extracted from published article titles and bodies using an attributed GeoNames snapshot, with related-article links and simplified/traditional aliases.
+- Let pile and drift words fall and settle with staggered motion, while respecting reduced-motion settings.
+- Share one segmentation pass between city recognition and word frequency analysis.
+
 ## [1.1.9] - 2026-11-06
 
 - Tightened the pile and drift word-cloud layouts across desktop, tablet, and mobile without adding a layout dependency.

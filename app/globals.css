@@ -258,12 +258,9 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .word-cloud-canvas button[data-tone="5"] { --cloud-color: var(--ink); }
 .word-cloud-canvas button:hover, .word-cloud-canvas button:focus-visible, .word-cloud-canvas button.active { z-index: 1; color: var(--bg); background: var(--ink); opacity: 1; outline: none; transform: rotate(0) scale(1.06); }
 .word-cloud-canvas.mode-pile, .word-cloud-canvas.mode-drift { align-content: center; gap: 3px 8px; padding: 24px clamp(16px, 3vw, 32px); }
-.word-cloud-canvas.mode-pile button, .word-cloud-canvas.mode-drift button { padding: 2px 3px; }
-.word-cloud-canvas.mode-pile button { transform: none; }
+.word-cloud-canvas.mode-pile button, .word-cloud-canvas.mode-drift button { padding: 2px 3px; margin: -1px -2px; translate: var(--settle-x) var(--settle-y); transform: rotate(var(--cloud-tilt)); animation: cloud-word-fall .9s calc(var(--cloud-order) * 22ms) cubic-bezier(.2, .65, .25, 1) backwards; }
 .word-cloud-canvas.mode-pile button:hover, .word-cloud-canvas.mode-pile button:focus-visible, .word-cloud-canvas.mode-pile button.active { transform: scale(1.04); }
 .word-cloud-canvas.mode-drift { gap: 5px 12px; }
-.word-cloud-canvas.mode-drift button:nth-child(3n) { translate: 0 2px; }
-.word-cloud-canvas.mode-drift button:nth-child(4n) { translate: 0 -2px; }
 .word-cloud-canvas.mode-rows { align-content: center; gap: 8px 15px; }
 .word-cloud-canvas.mode-rows button { transform: none; }
 .word-cloud-canvas.mode-rows button:hover, .word-cloud-canvas.mode-rows button:focus-visible, .word-cloud-canvas.mode-rows button.active { transform: scale(1.04); }
@@ -277,6 +274,12 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .word-cloud-canvas.mode-constellation .word-cloud-state, .word-cloud-canvas.mode-rank .word-cloud-state { grid-column: 1 / -1; align-self: center; }
 .word-cloud-canvas.mode-rank button { width: 100%; min-height: 36px; align-items: center; justify-content: space-between; padding: 7px 10px; background: linear-gradient(90deg, color-mix(in srgb, var(--cloud-color) 14%, transparent) var(--cloud-strength), transparent var(--cloud-strength)); border-bottom: 1px solid var(--line); border-radius: 5px; font-size: 13px; opacity: 1; transform: none; }
 .word-cloud-canvas.mode-rank button:hover, .word-cloud-canvas.mode-rank button:focus-visible, .word-cloud-canvas.mode-rank button.active { color: var(--bg); background: var(--ink); transform: translateX(2px); }
+.word-cloud-canvas.mode-cities { display: block; padding-block: 20px; }
+.word-cloud-cities { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 12px; padding: 0; margin: 0; list-style: none; }
+.word-cloud-cities li { min-width: 0; }
+.word-cloud-canvas .word-cloud-cities button { width: 100%; min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; font-size: 14px; color: var(--ink); background: var(--surface-soft); opacity: 1; transform: none; animation: none; }
+.word-cloud-canvas .word-cloud-cities button:hover, .word-cloud-canvas .word-cloud-cities button:focus-visible, .word-cloud-canvas .word-cloud-cities button[aria-pressed="true"] { color: var(--bg); background: var(--ink); }
+.word-cloud-canvas .word-cloud-cities button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .word-cloud-state { width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 13px; text-align: center; }
 .word-cloud-state .cloud-retry { min-height: 36px; padding: 0 11px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; font-size: 12px; transform: none; }
 .cloud-loader { width: 9px; height: 9px; background: var(--green); border-radius: 50%; animation: notion-live-pulse 1.4s ease-in-out infinite; }
@@ -290,6 +293,7 @@ html[data-intro="playing"] .site-intro { display: grid; }
 @keyframes cloud-overlay-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes cloud-dialog-in { from { opacity: 0; transform: translateY(12px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes cloud-word-in { from { opacity: 0; transform: translateY(7px) rotate(0); } to { opacity: 1; } }
+@keyframes cloud-word-fall { 0% { opacity: 0; transform: translate3d(var(--fall-offset), -150px, 0) rotate(var(--fall-rotation)); } 18% { opacity: 1; } 65% { opacity: 1; transform: translate3d(0, 5px, 0) rotate(var(--cloud-tilt)); } 82% { opacity: 1; transform: translate3d(0, -3px, 0) rotate(var(--cloud-tilt)); } 100% { opacity: 1; transform: translate3d(0, 0, 0) rotate(var(--cloud-tilt)); } }
 
 @media (max-width: 900px) {
   .search-skeleton { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }

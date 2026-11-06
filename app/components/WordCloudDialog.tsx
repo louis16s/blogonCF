@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { ArrowDown, ArrowsOutSimple, ChartBar, DotsNine, Rows, StarFour, X } from "@phosphor-icons/react";
+import { ArrowDown, ArrowsOutSimple, ChartBar, DotsNine, MapPin, Rows, StarFour, X } from "@phosphor-icons/react";
 import type { Post } from "../data/types";
 
 type CloudWord = {
@@ -17,9 +17,12 @@ type CloudWord = {
 
 type CloudPayload = {
   words?: CloudWord[];
+  cities?: CityWord[];
   sourceCount?: number;
   partial?: boolean;
 };
+
+type CityWord = { word: string; count: number; postIds: string[] };
 
 let cachedCloudPayload: CloudPayload | null = null;
 let pendingCloudRequest: Promise<CloudPayload> | null = null;
@@ -38,11 +41,12 @@ function loadCloudPayload(signal: AbortSignal): Promise<CloudPayload> {
   return pendingCloudRequest;
 }
 
-type CloudMode = "pile" | "drift" | "rows" | "cascade" | "constellation" | "rank";
+type CloudMode = "pile" | "drift" | "rows" | "cascade" | "constellation" | "rank" | "cities";
 
 const modes: Array<{ id: CloudMode; label: string; icon: typeof DotsNine }> = [
   { id: "pile", label: "堆叠", icon: DotsNine },
   { id: "drift", label: "散落", icon: ArrowsOutSimple },
+  { id: "cities", label: "城市", icon: MapPin },
   { id: "rows", label: "规整", icon: Rows },
   { id: "cascade", label: "瀑布", icon: ArrowDown },
   { id: "constellation", label: "星群", icon: StarFour },
@@ -51,6 +55,7 @@ const modes: Array<{ id: CloudMode; label: string; icon: typeof DotsNine }> = [
 
 export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts: Post[]; onClose: () => void }) {
   const [words, setWords] = useState<CloudWord[]>([]);
+  const [cities, setCities] = useState<CityWord[]>([]);
   const [sourceCount, setSourceCount] = useState(0);
   const [partial, setPartial] = useState(false);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -77,6 +82,7 @@ export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts
     loadCloudPayload(controller.signal)
       .then((payload) => {
         setWords(Array.isArray(payload.words) ? payload.words : []);
+        setCities(Array.isArray(payload.cities) ? payload.cities : []);
         setSourceCount(Number(payload.sourceCount) || 0);
         setPartial(Boolean(payload.partial));
         setStatus("ready");
@@ -86,7 +92,7 @@ export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts
   }, [open, status]);
 
   const postsById = useMemo(() => new Map(posts.map((post) => [post.id, post])), [posts]);
-  const selected = words.find((item) => item.word === selectedWord);
+  const selected = (mode === "cities" ? cities : words).find((item) => item.word === selectedWord);
   const relatedPosts = (selected?.postIds || []).map((id) => postsById.get(id)).filter((post): post is Post => Boolean(post));
 
   if (!open) return null;
@@ -105,7 +111,7 @@ export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts
 
         <div className="word-cloud-controls" role="group" aria-label="词云排列方式">
           {modes.map(({ id, label, icon: Icon }) => (
-            <button key={id} type="button" className={mode === id ? "active" : ""} onClick={() => setMode(id)} aria-pressed={mode === id}>
+            <button key={id} type="button" className={mode === id ? "active" : ""} onClick={() => { setMode(id); setSelectedWord(""); }} aria-pressed={mode === id}>
               <Icon aria-hidden size={16} />{label}
             </button>
           ))}
@@ -120,15 +126,18 @@ export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts
         <div className={`word-cloud-canvas mode-${mode}`} aria-live="polite">
           {status === "loading" && <div className="word-cloud-state"><span className="cloud-loader" />正在翻阅公开文章的标题和正文…</div>}
           {status === "error" && <div className="word-cloud-state">词云暂时没有生成出来。<button type="button" className="cloud-retry" onClick={() => setStatus("loading")}>再试一次</button></div>}
-          {status === "ready" && words.length === 0 && <div className="word-cloud-state">正文里暂时没有足够重复的词。</div>}
-          {status === "ready" && words.map((item, index) => (
+          {status === "ready" && mode === "cities" && (cities.length ? <ul className="word-cloud-cities" aria-label="文章中识别到的城市">
+            {cities.map((city) => <li key={city.word}><button type="button" onClick={() => setSelectedWord((current) => current === city.word ? "" : city.word)} aria-pressed={selectedWord === city.word}><span>{city.word}</span><small>{city.count}</small></button></li>)}
+          </ul> : <div className="word-cloud-state">暂时没有识别到城市。</div>)}
+          {status === "ready" && mode !== "cities" && words.length === 0 && <div className="word-cloud-state">正文里暂时没有足够重复的词。</div>}
+          {status === "ready" && mode !== "cities" && words.map((item, index) => (
             <button
               type="button"
-              key={item.word}
+              key={`${mode}:${item.word}`}
               className={selectedWord === item.word ? "active" : ""}
               data-level={item.level}
               data-tone={item.tone}
-              style={{ "--cloud-tilt": `${Math.max(-2, Math.min(2, item.tilt))}deg`, "--cloud-order": index, "--cloud-step": index % 6, "--cloud-strength": `${item.level * 18}%` } as CSSProperties}
+              style={{ "--cloud-tilt": `${Math.max(-6, Math.min(6, item.tilt * 1.5))}deg`, "--cloud-order": index, "--cloud-step": index % 6, "--cloud-strength": `${item.level * 18}%`, "--fall-offset": `${(index % 7 - 3) * 15}px`, "--fall-rotation": `${(index % 7 - 3) * 7}deg`, "--settle-x": `${(index % 3 - 1) * 3}px`, "--settle-y": `${(index % 5 - 2) * 2}px` } as CSSProperties}
               onClick={() => setSelectedWord((current) => current === item.word ? "" : item.word)}
               aria-label={`${item.word}，出现 ${item.count} 次，涉及 ${item.postIds.length} 篇文章`}
               aria-pressed={selectedWord === item.word}
@@ -147,7 +156,7 @@ export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts
                 {relatedPosts.length === 0 && <span>相关文章正在同步，请稍后再打开。</span>}
               </div>
             </>
-          ) : <p>点一个词，可以看看它出现在哪些文章里。</p>}
+          ) : <p>{mode === "cities" ? "从公开正文识别地名，可能有遗漏或同名误识。" : "点一个词，可以看看它出现在哪些文章里。"}</p>}
         </footer>
       </section>
     </div>,

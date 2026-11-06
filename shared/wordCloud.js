@@ -21,14 +21,23 @@ function normalizeWord(value) {
   return HAN.test(word) && word.length >= 2 && word.length <= 10 ? word : "";
 }
 
-function segmentWords(value) {
+export function segmentWords(value, observeWord) {
   const text = String(value || "");
   if (!text.trim()) return [];
   if (typeof Intl.Segmenter === "function") {
     wordSegmenter ||= new Intl.Segmenter("zh-CN", { granularity: "word" });
-    return Array.from(wordSegmenter.segment(text), (part) => part.isWordLike ? normalizeWord(part.segment) : "").filter(Boolean);
+    return Array.from(wordSegmenter.segment(text), (part) => {
+      if (!part.isWordLike) return "";
+      const word = normalizeWord(part.segment);
+      if (word) observeWord?.(part.segment, word);
+      return word;
+    }).filter(Boolean);
   }
-  return Array.from(text.matchAll(FALLBACK_WORDS), (match) => normalizeWord(match[0])).filter(Boolean);
+  return Array.from(text.matchAll(FALLBACK_WORDS), (match) => {
+    const word = normalizeWord(match[0]);
+    if (word) observeWord?.(match[0], word);
+    return word;
+  }).filter(Boolean);
 }
 
 function stableHash(value) {
@@ -46,14 +55,17 @@ function stableHash(value) {
  *
  * @param {Array<{id?: string, title?: string, body?: string}>} documents
  * @param {number} [limit]
+ * @param {Set<string>} [excludedWords]
+ * @param {(raw: string, normalized: string, id: string) => void} [observeWord]
  * @returns {Array<{word: string, count: number, level: number, tone: number, tilt: number, postIds: string[]}>}
  */
-export function buildWordCloud(documents, limit = 56) {
+export function buildWordCloud(documents, limit = 56, excludedWords = new Set(), observeWord) {
   const frequencies = new Map();
 
   for (const document of documents || []) {
     const documentId = String(document.id || "");
-    for (const word of segmentWords(`${document.title || ""} ${document.body || ""}`)) {
+    for (const word of segmentWords(`${document.title || ""} ${document.body || ""}`, (raw, normalized) => observeWord?.(raw, normalized, documentId))) {
+      if (excludedWords.has(word)) continue;
       const current = frequencies.get(word) || { count: 0, postIds: new Set() };
       current.count += 1;
       if (documentId) current.postIds.add(documentId);
@@ -62,7 +74,7 @@ export function buildWordCloud(documents, limit = 56) {
   }
 
   const ranked = Array.from(frequencies, ([word, value]) => ({ word, count: value.count, postIds: Array.from(value.postIds) }))
-    .filter((item) => item.count >= 2)
+    .filter((item) => item.count >= 2 && !excludedWords.has(item.word))
     .sort((a, b) => b.count - a.count || b.postIds.length - a.postIds.length || a.word.localeCompare(b.word, "zh-CN"))
     .slice(0, Math.max(0, limit));
   if (!ranked.length) return [];

@@ -146,6 +146,7 @@ test("search and word cloud exclude a formerly public document still present in 
     const cloud = await (await fetch("/api/content/word-cloud")).json();
     assert.equal(cloud.sourceCount, 0);
     assert.deepEqual(cloud.words, []);
+    assert.deepEqual(cloud.cities, []);
   } finally { globalThis.fetch = previousFetch; }
 });
 

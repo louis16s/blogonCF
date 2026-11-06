@@ -12,6 +12,7 @@ import {
 import { clearArticlePayload, storeArticlePayload, type ArticlePayload } from "../server/article-context";
 import { clearHomePayload, storeHomePayload, type HomePayload } from "../server/home-context";
 import { buildWordCloud, normalizeSearchText } from "../shared/wordCloud.js";
+import { createCityCollector } from "../shared/cities.js";
 import { createDefaultSiteConfig, type SiteConfig } from "../shared/site-config";
 import { decodeRouteSegment } from "../shared/url";
 import { externalLinkPreview, extractExternalUrls, fetchExternalFeed, isSafeExternalUrl, signPreviewUrl, type ExternalFeed } from "./external-content";
@@ -69,7 +70,7 @@ const configRowsCache = new Map<string, { expiresAt: number; rows?: NotionConfig
 const publicResponseLoads = new Map<string, Promise<Response>>();
 const publishedPageLookups = new Map<string, Promise<any | null>>();
 
-type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; sourceCount: number; partial: boolean; source: "d1" | "notion" };
+type WordCloudPayload = { words: ReturnType<typeof buildWordCloud>; cities: ReturnType<ReturnType<typeof createCityCollector>["getCities"]>; sourceCount: number; partial: boolean; source: "d1" | "notion" };
 type SearchDocument = ReturnType<typeof toPost> & { body: string; searchBody: string };
 type PublicCorpus = { documents: SearchDocument[]; partial: boolean; source: "d1" | "notion" };
 type WorkerCacheStorage = CacheStorage & { default?: Cache };
@@ -874,8 +875,11 @@ async function notionWordCloud(env: Env, ctx?: ExecutionContext): Promise<Respon
     const corpus = await getPublicCorpus(env, ctx);
     const allowed = new Set(livePosts.map((page) => normalizeNotionId(page.id) || page.id));
     const documents = corpus.documents.filter((doc) => allowed.has(normalizeNotionId(doc.id) || doc.id));
+    const cityResult = createCityCollector();
+    const words = buildWordCloud(documents, 56, cityResult.matchedWords, cityResult.observe);
     const payload: WordCloudPayload = {
-      words: buildWordCloud(documents.map(({ id, title, body }) => ({ id, title, body }))),
+      words,
+      cities: cityResult.getCities(),
       sourceCount: documents.length,
       partial: corpus.partial,
       source: corpus.source,
