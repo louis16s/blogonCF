@@ -404,7 +404,8 @@ test("rangefinder intro stays home-only, lasts at least five seconds, and remain
   assert.doesNotMatch(intro, /FRAME 01/);
   assert.match(intro, /正在对焦生活/);
   assert.match(intro, /intro-progress/);
-  assert.doesNotMatch(intro, /intro-camera-rig|intro-lens-aperture|intro-aperture-blade|intro-shutter/);
+  assert.match(intro, /className="intro-iris"/);
+  assert.match(intro, /attributeName="points"/);
   assert.match(css, /@keyframes intro-camera-journey/);
   assert.match(css, /@keyframes intro-exposure/);
   assert.doesNotMatch(css, /scale\(16\)/);

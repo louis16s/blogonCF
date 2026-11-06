@@ -2,6 +2,10 @@
 
 All notable changes to blogonCF are documented here. Versions follow Semantic Versioning.
 
+## [1.1.7] - 2026-11-06
+
+- Restored a visible, stepped aperture animation inside the rangefinder lens, aligned with the camera movement.
+
 ## [1.1.6] - 2026-11-06
 
 - Refined the home-page rangefinder intro with restrained camera movement, a subtle lens reflection and exposure, and a gentle transition into the site.

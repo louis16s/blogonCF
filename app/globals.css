@@ -89,7 +89,9 @@ button, select { color: inherit; }
 html[data-intro="playing"] .site-intro { display: grid; }
 .site-intro::before { content: ""; position: absolute; inset: 0; z-index: -1; opacity: .38; background: radial-gradient(circle at 50% 48%, #fff 0 34%, #f7f7f7 72%, #efefef 100%); }
 .intro-stage { position: relative; width: min(76vw, 760px); aspect-ratio: 3 / 2; }
-.intro-camera { width: 100%; height: 100%; display: block; object-fit: contain; transform-origin: 53% 55%; will-change: transform, opacity; animation: intro-camera-journey 5.35s var(--ease-out) both; }
+.intro-camera-rig { position: absolute; inset: 0; transform-origin: 53% 55%; will-change: transform, opacity; animation: intro-camera-journey 5.35s var(--ease-out) both; }
+.intro-camera { width: 100%; height: 100%; display: block; object-fit: contain; }
+.intro-iris { position: absolute; left: 53.2%; top: 54.6%; width: 16%; aspect-ratio: 1; transform: translate(-50%, -50%); pointer-events: none; opacity: 0; animation: intro-iris-visibility 5.35s linear both; }
 .intro-lens-flash { position: absolute; top: 55%; left: 53%; width: clamp(54px, 9vw, 90px); aspect-ratio: 1; border-radius: 50%; background: radial-gradient(ellipse at 35% 30%, rgba(208, 222, 235, .35), transparent 60%); transform: translate(-50%, -50%); opacity: 0; pointer-events: none; mix-blend-mode: screen; animation: intro-lens-pulse 5.35s ease-in-out both; }
 .intro-stage::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: #111; opacity: 0; animation: intro-exposure 5.35s linear both; }
 .intro-caption { position: absolute; left: 50%; bottom: 2%; display: grid; gap: 4px; width: max-content; text-align: center; transform: translateX(-50%); animation: intro-caption-journey 5.35s var(--ease-soft) both; }
@@ -134,6 +136,7 @@ html[data-intro="playing"] .site-intro { display: grid; }
   70%, 100% { opacity: 0; }
 }
 @keyframes intro-exposure { 0%, 71%, 74%, 100% { opacity: 0; } 72% { opacity: .12; } }
+@keyframes intro-iris-visibility { 0%, 23% { opacity: 0; } 31%, 78% { opacity: .92; } 88%, 100% { opacity: 0; } }
 @keyframes intro-caption-journey { 0%, 22% { opacity: 0; transform: translate(-50%, 7px); } 36%, 76% { opacity: 1; transform: translate(-50%, 0); } 90%, 100% { opacity: 0; transform: translate(-50%, -4px); } }
 @keyframes intro-progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 @keyframes intro-curtain { 0%, 82% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
