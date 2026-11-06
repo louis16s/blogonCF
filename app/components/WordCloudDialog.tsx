@@ -170,7 +170,7 @@ export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts
           {status === "loading" && <div className="word-cloud-state"><span className="cloud-loader" />正在翻阅公开文章的标题和正文…</div>}
           {status === "error" && <div className="word-cloud-state">词云暂时没有生成出来。<button type="button" className="cloud-retry" onClick={() => setStatus("loading")}>再试一次</button></div>}
           {status === "ready" && mode === "cities" && (cities.length ? <ul className="word-cloud-cities" aria-label="文章中识别到的城市">
-            {cities.map((city) => <li key={city.word}><button type="button" onClick={() => setSelectedWord((current) => current === city.word ? "" : city.word)} aria-pressed={selectedWord === city.word}><span>{city.word}</span><small>{city.count}</small></button></li>)}
+            {cities.map((city, index) => <li key={city.word}><button type="button" data-tone={index % 6} onClick={() => setSelectedWord((current) => current === city.word ? "" : city.word)} aria-pressed={selectedWord === city.word}><span>{city.word}</span><small>{city.count}</small></button></li>)}
           </ul> : <div className="word-cloud-state">暂时没有识别到城市。</div>)}
           {status === "ready" && mode !== "cities" && words.length === 0 && <div className="word-cloud-state">正文里暂时没有足够重复的词。</div>}
           {status === "ready" && (mode === "pile" || mode === "drift") && words.length > 0 && <FallingWords key={mode} words={words} mode={mode} selectedWord={selectedWord} onSelect={(word) => setSelectedWord((current) => current === word ? "" : word)} />}

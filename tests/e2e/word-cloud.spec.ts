@@ -6,7 +6,7 @@ test("compact word layouts stay usable and fit the viewport", async ({ page }) =
     word: ["摄影", "旁轴相机", "旅行", "设计", "louis16s", "生活"][i % 6] + i,
     count: 40 - i, level: Math.max(1, 5 - Math.floor(i / 8)), tone: i % 6, tilt: i % 9 - 4, postIds: ["fixture"],
   }));
-  await page.route("**/api/content/word-cloud", (route) => route.fulfill({ json: { words, cities: [{ word: "东京", count: 3, postIds: ["fixture"] }], sourceCount: 1 } }));
+  await page.route("**/api/content/word-cloud", (route) => route.fulfill({ json: { words, cities: [{ word: "东京", count: 3, postIds: ["fixture"] }, { word: "大阪", count: 2, postIds: ["fixture"] }], sourceCount: 1 } }));
   await page.goto("/#word-cloud", { waitUntil: "domcontentloaded" });
   const dialog = page.getByRole("dialog", { name: "词云" });
   await expect(dialog).toBeVisible();
@@ -35,6 +35,14 @@ test("compact word layouts stay usable and fit the viewport", async ({ page }) =
     }
   }
   await dialog.getByRole("button", { name: "城市" }).click();
+  const cityButtons = dialog.getByRole("list", { name: "文章中识别到的城市" }).getByRole("button");
+  await expect(cityButtons.nth(0)).toHaveAttribute("data-tone", "0");
+  await expect(cityButtons.nth(1)).toHaveAttribute("data-tone", "1");
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+    const colors = await cityButtons.evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).color));
+    expect(colors[0]).not.toBe(colors[1]);
+  }
   const city = dialog.getByRole("list", { name: "文章中识别到的城市" }).getByRole("button", { name: /东京/ });
   await city.click();
   await expect(city).toHaveAttribute("aria-pressed", "true");

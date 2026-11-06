@@ -281,7 +281,7 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .word-cloud-canvas.mode-cities { display: block; padding-block: 20px; }
 .word-cloud-cities { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 12px; padding: 0; margin: 0; list-style: none; }
 .word-cloud-cities li { min-width: 0; }
-.word-cloud-canvas .word-cloud-cities button { width: 100%; min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; font-size: 14px; color: var(--ink); background: var(--surface-soft); opacity: 1; transform: none; animation: none; }
+.word-cloud-canvas .word-cloud-cities button { width: 100%; min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; font-size: 14px; color: color-mix(in srgb, var(--cloud-color) 80%, var(--ink)); background: color-mix(in srgb, var(--cloud-color) 8%, var(--surface)); opacity: 1; transform: none; animation: none; }
 .word-cloud-canvas .word-cloud-cities button:hover, .word-cloud-canvas .word-cloud-cities button:focus-visible, .word-cloud-canvas .word-cloud-cities button[aria-pressed="true"] { color: var(--bg); background: var(--ink); }
 .word-cloud-canvas .word-cloud-cities button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .word-cloud-state { width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 13px; text-align: center; }

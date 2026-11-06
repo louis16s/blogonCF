@@ -2,6 +2,10 @@
 
 All notable changes to blogonCF are documented here. Versions follow Semantic Versioning.
 
+## [1.2.2] - 2026-11-06
+
+- Applied the word-cloud color palette to the city list in light and dark themes.
+
 ## [1.2.1] - 2026-11-06
 
 - Give pile and drift separate, measured gravity-style layouts with limited overlap and responsive, accessible scrolling.
