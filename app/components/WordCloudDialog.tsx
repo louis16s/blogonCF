@@ -128,7 +128,7 @@ export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts
               className={selectedWord === item.word ? "active" : ""}
               data-level={item.level}
               data-tone={item.tone}
-              style={{ "--cloud-tilt": `${item.tilt}deg`, "--cloud-order": index, "--cloud-step": index % 6, "--cloud-strength": `${item.level * 18}%` } as CSSProperties}
+              style={{ "--cloud-tilt": `${Math.max(-2, Math.min(2, item.tilt))}deg`, "--cloud-order": index, "--cloud-step": index % 6, "--cloud-strength": `${item.level * 18}%` } as CSSProperties}
               onClick={() => setSelectedWord((current) => current === item.word ? "" : item.word)}
               aria-label={`${item.word}，出现 ${item.count} 次，涉及 ${item.postIds.length} 篇文章`}
               aria-pressed={selectedWord === item.word}

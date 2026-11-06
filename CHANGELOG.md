@@ -2,6 +2,11 @@
 
 All notable changes to blogonCF are documented here. Versions follow Semantic Versioning.
 
+## [1.1.9] - 2026-11-06
+
+- Tightened the pile and drift word-cloud layouts across desktop, tablet, and mobile without adding a layout dependency.
+- Improved readability of smaller words and added responsive interaction coverage for both layouts.
+
 ## [1.1.8] - 2026-11-06
 
 - Restored the v1.1.5 homepage introduction animation.
