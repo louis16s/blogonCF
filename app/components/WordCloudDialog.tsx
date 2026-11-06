@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { ArrowDown, ArrowsOutSimple, ChartBar, DotsNine, MapPin, Rows, StarFour, X } from "@phosphor-icons/react";
 import type { Post } from "../data/types";
+import { layoutFallingWords } from "../../shared/wordCloudLayout.js";
 
 type CloudWord = {
   word: string;
@@ -52,6 +53,48 @@ const modes: Array<{ id: CloudMode; label: string; icon: typeof DotsNine }> = [
   { id: "constellation", label: "星群", icon: StarFour },
   { id: "rank", label: "频率榜", icon: ChartBar },
 ];
+
+function FallingWords({ words, mode, selectedWord, onSelect }: { words: CloudWord[]; mode: "pile" | "drift"; selectedWord: string; onSelect: (word: string) => void }) {
+  const field = useRef<HTMLDivElement>(null);
+  const [layout, setLayout] = useState<{ height: number; positions: Array<{ left: number; top: number }> }>();
+
+  useLayoutEffect(() => {
+    const container = field.current;
+    if (!container) return;
+    let lastWidth = 0;
+    let frame = 0;
+    const arrange = () => {
+      const width = Math.floor(container.clientWidth);
+      if (!width || width === lastWidth) return;
+      lastWidth = width;
+      const sizes = Array.from(container.querySelectorAll<HTMLButtonElement>("button[data-level]"), (button) => ({ width: button.offsetWidth, height: button.offsetHeight }));
+      setLayout(layoutFallingWords(sizes, width, mode));
+    };
+    arrange();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(arrange);
+    });
+    observer?.observe(container);
+    const onResize = () => arrange();
+    if (!observer) window.addEventListener("resize", onResize);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", onResize); cancelAnimationFrame(frame); };
+  }, [words, mode]);
+
+  return <div ref={field} className={`word-cloud-field ${layout ? "is-positioned" : ""}`} style={{ height: layout?.height || 240 }}>
+    {words.map((item, index) => <button
+      key={item.word}
+      type="button"
+      className={selectedWord === item.word ? "active" : ""}
+      data-level={item.level}
+      data-tone={item.tone}
+      style={{ left: layout?.positions[index]?.left || 0, top: layout?.positions[index]?.top || 0, "--cloud-tilt": `${Math.max(-6, Math.min(6, item.tilt * 1.5))}deg`, "--cloud-order": index, "--fall-offset": `${(index % 7 - 3) * 15}px`, "--fall-distance": `${-(layout?.positions[index]?.top || 0) - 60}px`, "--fall-rotation": `${(index % 7 - 3) * 7}deg` } as CSSProperties}
+      onClick={() => onSelect(item.word)}
+      aria-label={`${item.word}，出现 ${item.count} 次，涉及 ${item.postIds.length} 篇文章`}
+      aria-pressed={selectedWord === item.word}
+    >{item.word}<small>{item.count}</small></button>)}
+  </div>;
+}
 
 export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts: Post[]; onClose: () => void }) {
   const [words, setWords] = useState<CloudWord[]>([]);
@@ -130,7 +173,8 @@ export function WordCloudDialog({ open, posts, onClose }: { open: boolean; posts
             {cities.map((city) => <li key={city.word}><button type="button" onClick={() => setSelectedWord((current) => current === city.word ? "" : city.word)} aria-pressed={selectedWord === city.word}><span>{city.word}</span><small>{city.count}</small></button></li>)}
           </ul> : <div className="word-cloud-state">暂时没有识别到城市。</div>)}
           {status === "ready" && mode !== "cities" && words.length === 0 && <div className="word-cloud-state">正文里暂时没有足够重复的词。</div>}
-          {status === "ready" && mode !== "cities" && words.map((item, index) => (
+          {status === "ready" && (mode === "pile" || mode === "drift") && words.length > 0 && <FallingWords key={mode} words={words} mode={mode} selectedWord={selectedWord} onSelect={(word) => setSelectedWord((current) => current === word ? "" : word)} />}
+          {status === "ready" && mode !== "cities" && mode !== "pile" && mode !== "drift" && words.map((item, index) => (
             <button
               type="button"
               key={`${mode}:${item.word}`}

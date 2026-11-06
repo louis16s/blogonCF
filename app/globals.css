@@ -258,9 +258,13 @@ html[data-intro="playing"] .site-intro { display: grid; }
 .word-cloud-canvas button[data-tone="5"] { --cloud-color: var(--ink); }
 .word-cloud-canvas button:hover, .word-cloud-canvas button:focus-visible, .word-cloud-canvas button.active { z-index: 1; color: var(--bg); background: var(--ink); opacity: 1; outline: none; transform: rotate(0) scale(1.06); }
 .word-cloud-canvas.mode-pile, .word-cloud-canvas.mode-drift { align-content: center; gap: 3px 8px; padding: 24px clamp(16px, 3vw, 32px); }
-.word-cloud-canvas.mode-pile button, .word-cloud-canvas.mode-drift button { padding: 2px 3px; margin: -1px -2px; translate: var(--settle-x) var(--settle-y); transform: rotate(var(--cloud-tilt)); animation: cloud-word-fall .9s calc(var(--cloud-order) * 22ms) cubic-bezier(.2, .65, .25, 1) backwards; }
+.word-cloud-field { position: relative; flex: 0 0 100%; width: 100%; min-width: 0; }
+.word-cloud-field button { position: absolute; width: max-content; visibility: hidden; }
+.word-cloud-field.is-positioned button { visibility: visible; }
+.word-cloud-canvas.mode-pile { align-content: safe flex-end; }
+.word-cloud-canvas.mode-pile button, .word-cloud-canvas.mode-drift button { padding: 2px 3px; transform: rotate(var(--cloud-tilt)); animation: cloud-word-fall .9s calc(var(--cloud-order) * 22ms) cubic-bezier(.2, .65, .25, 1) backwards; }
 .word-cloud-canvas.mode-pile button:hover, .word-cloud-canvas.mode-pile button:focus-visible, .word-cloud-canvas.mode-pile button.active { transform: scale(1.04); }
-.word-cloud-canvas.mode-drift { gap: 5px 12px; }
+.word-cloud-canvas.mode-drift { align-content: safe center; gap: 5px 12px; }
 .word-cloud-canvas.mode-rows { align-content: center; gap: 8px 15px; }
 .word-cloud-canvas.mode-rows button { transform: none; }
 .word-cloud-canvas.mode-rows button:hover, .word-cloud-canvas.mode-rows button:focus-visible, .word-cloud-canvas.mode-rows button.active { transform: scale(1.04); }
@@ -293,7 +297,7 @@ html[data-intro="playing"] .site-intro { display: grid; }
 @keyframes cloud-overlay-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes cloud-dialog-in { from { opacity: 0; transform: translateY(12px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes cloud-word-in { from { opacity: 0; transform: translateY(7px) rotate(0); } to { opacity: 1; } }
-@keyframes cloud-word-fall { 0% { opacity: 0; transform: translate3d(var(--fall-offset), -150px, 0) rotate(var(--fall-rotation)); } 18% { opacity: 1; } 65% { opacity: 1; transform: translate3d(0, 5px, 0) rotate(var(--cloud-tilt)); } 82% { opacity: 1; transform: translate3d(0, -3px, 0) rotate(var(--cloud-tilt)); } 100% { opacity: 1; transform: translate3d(0, 0, 0) rotate(var(--cloud-tilt)); } }
+@keyframes cloud-word-fall { 0% { opacity: 0; transform: translate3d(var(--fall-offset), var(--fall-distance, -150px), 0) rotate(var(--fall-rotation)); } 18% { opacity: 1; } 65% { opacity: 1; transform: translate3d(0, 5px, 0) rotate(var(--cloud-tilt)); } 82% { opacity: 1; transform: translate3d(0, -3px, 0) rotate(var(--cloud-tilt)); } 100% { opacity: 1; transform: translate3d(0, 0, 0) rotate(var(--cloud-tilt)); } }
 
 @media (max-width: 900px) {
   .search-skeleton { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }

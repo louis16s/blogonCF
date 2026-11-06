@@ -11,8 +11,8 @@ test("compact word layouts stay usable and fit the viewport", async ({ page }) =
   const dialog = page.getByRole("dialog", { name: "词云" });
   await expect(dialog).toBeVisible();
   const canvas = dialog.locator(".word-cloud-canvas");
-  for (const width of [375, 768, 1440]) {
-    await page.setViewportSize({ width, height: 900 });
+  for (const [width, height] of [[375, 900], [667, 375], [768, 900], [1440, 900]]) {
+    await page.setViewportSize({ width, height });
     for (const mode of ["堆叠", "散落"]) {
       await dialog.getByRole("button", { name: mode }).click();
       await expect(canvas.locator("button[data-level]")).toHaveCount(words.length);
@@ -27,6 +27,11 @@ test("compact word layouts stay usable and fit the viewport", async ({ page }) =
       await expect(word).toHaveAttribute("aria-pressed", "true");
       await expect(dialog.getByText("相关文章正在同步，请稍后再打开。")).toBeVisible();
       await word.click();
+      const upperWord = canvas.locator("button[data-level]").last();
+      await upperWord.scrollIntoViewIfNeeded();
+      await upperWord.click();
+      await expect(upperWord).toHaveAttribute("aria-pressed", "true");
+      await upperWord.click();
     }
   }
   await dialog.getByRole("button", { name: "城市" }).click();

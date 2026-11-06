@@ -2,6 +2,10 @@
 
 All notable changes to blogonCF are documented here. Versions follow Semantic Versioning.
 
+## [1.2.1] - 2026-11-06
+
+- Give pile and drift separate, measured gravity-style layouts with limited overlap and responsive, accessible scrolling.
+
 ## [1.2.0] - 2026-11-06
 
 - Added a city list extracted from published article titles and bodies using an attributed GeoNames snapshot, with related-article links and simplified/traditional aliases.
