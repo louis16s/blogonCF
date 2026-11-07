@@ -297,7 +297,7 @@ html[data-intro="playing"] .site-intro { display: grid; }
 @keyframes cloud-overlay-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes cloud-dialog-in { from { opacity: 0; transform: translateY(12px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes cloud-word-in { from { opacity: 0; transform: translateY(7px) rotate(0); } to { opacity: 1; } }
-@keyframes cloud-word-fall { 0% { opacity: 0; transform: translate3d(var(--fall-offset), var(--fall-distance, -150px), 0) rotate(var(--fall-rotation)); } 18% { opacity: 1; } 65% { opacity: 1; transform: translate3d(0, 5px, 0) rotate(var(--cloud-tilt)); } 82% { opacity: 1; transform: translate3d(0, -3px, 0) rotate(var(--cloud-tilt)); } 100% { opacity: 1; transform: translate3d(0, 0, 0) rotate(var(--cloud-tilt)); } }
+@keyframes cloud-word-fall { 0% { opacity: 0; transform: translate3d(var(--fall-offset), var(--fall-distance, -150px), 0) rotate(var(--fall-rotation)); } 18% { opacity: 1; } 100% { opacity: 1; transform: translate3d(0, 0, 0) rotate(var(--cloud-tilt)); } }
 
 @media (max-width: 900px) {
   .search-skeleton { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }

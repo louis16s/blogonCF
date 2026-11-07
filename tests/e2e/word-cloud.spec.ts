@@ -51,6 +51,16 @@ test("compact word layouts stay usable and fit the viewport", async ({ page }) =
   for (const mode of ["堆叠", "散落"]) {
     await dialog.getByRole("button", { name: mode }).click();
     await expect(canvas.locator("button[data-level]").first()).toHaveCSS("animation-name", "cloud-word-fall");
+    const positions = await canvas.locator("button[data-level]").first().evaluate((button) => {
+      const animation = button.getAnimations().find((item) => item instanceof CSSAnimation && item.animationName === "cloud-word-fall")!;
+      animation.pause();
+      return [0.4, 0.6, 0.75, 0.9, 1].map((fraction) => {
+        animation.currentTime = fraction * 900;
+        return new DOMMatrixReadOnly(getComputedStyle(button).transform).m42;
+      });
+    });
+    for (let i = 1; i < positions.length; i++) expect(positions[i]).toBeGreaterThanOrEqual(positions[i - 1] - 0.01);
+    expect(Math.abs(positions.at(-1)!)).toBeLessThan(0.01);
   }
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(canvas.locator("button[data-level]").first()).toHaveCSS("animation-name", "none");

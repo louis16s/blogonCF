@@ -2,6 +2,10 @@
 
 All notable changes to blogonCF are documented here. Versions follow Semantic Versioning.
 
+## [1.2.3] - 2026-11-07
+
+- Smooth the final landing motion of pile and drift word clouds.
+
 ## [1.2.2] - 2026-11-06
 
 - Applied the word-cloud color palette to the city list in light and dark themes.
